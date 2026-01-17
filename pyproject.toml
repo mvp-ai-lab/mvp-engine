@@ -1,0 +1,49 @@
+[tool.black]
+line-length = 120
+
+[build-system]
+requires = ["setuptools>=42", "wheel", "setuptools_scm[tomli]>=6.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mvp_engine"
+version = "0.0.1"
+authors = [{name = "MVP-Lab"}]
+description = "A simple, unified multimodal models training engine. Lean, flexible, and built for hacking, and hacking at scale."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "addict",
+    "datasets",
+    "transformers",
+    "accelerate",
+    "torch",
+    "torchvision",
+    "pyyaml",
+    "wandb",
+    "hydra-core",
+    "omegaconf",
+    "webdataset"
+]
+
+[project.optional-dependencies]
+
+[tool.setuptools.packages.find]
+where = ["mvp_engine"]
+include = ["*"]
+exclude = [
+    "test"
+]
+
+[tool.wheel]
+exclude = [
+    "test"
+]
+
+[project.urls]
+Homepage = "https://github.com/mvp-ai-lab/mvp-engine"
+Repository = "https://github.com/mvp-ai-lab/mvp-engine"
+
+[tool.isort]
+known_third_party = ["wandb"]
