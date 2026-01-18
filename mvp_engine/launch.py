@@ -41,14 +41,20 @@ if __name__ == "__main__":
 
     recipe_dir = config_path.parent.parent
     if recipe_dir.exists() and recipe_dir.is_dir():
-        import importlib.util
-        for py_file in recipe_dir.glob("**/*.py"):
+        # Add recipe_dir's parent to sys.path so relative imports work
+        recipe_parent = str(recipe_dir.parent)
+        if recipe_parent not in sys.path:
+            sys.path.insert(0, recipe_parent)
+        
+        recipe_name = recipe_dir.name
+        import importlib
+        for py_file in sorted(recipe_dir.glob("**/*.py")):
             if py_file.name.startswith("_"):
                 continue
-            spec = importlib.util.spec_from_file_location(py_file.stem, py_file)
-            if spec and spec.loader:
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
+            # Build the full module name relative to recipe_parent
+            relative_path = py_file.relative_to(recipe_dir.parent)
+            module_name = str(relative_path.with_suffix("")).replace("/", ".")
+            importlib.import_module(module_name)
 
     sys.argv = [
         sys.argv[0],
@@ -63,4 +69,18 @@ if __name__ == "__main__":
             "hydra/job_logging=disabled",
         ]
     )
-    main()
+    try:
+        main()
+    except Exception as e:
+        from mvp_engine.utils.log import simple_info
+
+        simple_info(f"Exception occurred: {e}")
+        raise e
+    finally:
+        try:
+            import torch.distributed as dist
+            if dist.is_initialized():
+                dist.destroy_process_group()
+        except Exception:
+            pass
+

@@ -1,11 +1,13 @@
 import os
 from copy import deepcopy
+from functools import partial
 from pathlib import Path
 from typing import Dict, Union
 
 import numpy as np
 import torch
 from omegaconf import OmegaConf
+from pandas import read_parquet
 from torch.optim.lr_scheduler import LinearLR, PolynomialLR, SequentialLR
 from webdataset import WebLoader
 
@@ -32,9 +34,14 @@ class TomatoViTEngine(Engine):
 
     def prepare_dataloader(self, workflow="train"):
         if workflow == "train":
-            dataset = WebDatasetBuilder(self.config.data.dataset_url).build(
+            labels = {}
+            for parquet_file in Path(self.config.data.label_path).rglob("*.parquet"):
+                df = read_parquet(parquet_file)
+                labels.update(df.set_index('key')['label'].to_dict())
+
+            dataset = WebDatasetBuilder(self.config.data.data_path).build(
                 batch_size=self.config.data.batch_size,
-                make_sample_func=make_sample,
+                make_sample_func=partial(make_sample, labels=labels, resize=tuple(self.config.data.resize)),
                 shuffle_buffer=self.config.data.shuffle_buffer,
             )
             dataloader = (
@@ -47,11 +54,16 @@ class TomatoViTEngine(Engine):
             )
             return dataloader
         else:
-            raise NotImplementedError(f"Workflow {workflow} not implemented.")
+            logger.warning(f"Skip dataloader preparation for workflow: {workflow}")
 
     def prepare_model(self):
         # 0. Main model
         model = TomatoViTModel.from_pretrained(self.config.model.pretrained)
+        logger.info(f" - Model name: {model.__class__.__name__}")
+
+        if self.config.model.ibot.mask_ratio <= 0:
+            # remove the mask embedding
+            model.mask_embedding = None
 
         # 1. Teacher model
         self.teacher_model = deepcopy(model).to(self.device)
@@ -95,41 +107,41 @@ class TomatoViTEngine(Engine):
 
         # 3. Freeze modules
         if self.config.model.freeze_rgb_backbone:
-            for param in self.model.embeddings.parameters():
+            for param in model.embeddings.parameters():
                 param.requires_grad = False
-            for param in self.model.layernorm_pre.parameters():
+            for param in model.layernorm_pre.parameters():
                 param.requires_grad = False
-            for param in self.model.video_rope.parameters():
+            for param in model.video_rope.parameters():
                 param.requires_grad = False
-            for param in self.model.encoder.layers.parameters():
+            for param in model.encoder.layers.parameters():
                 param.requires_grad = False
-            for name, param in self.model.encoder.mixture_layers.named_parameters():
+            for name, param in model.encoder.mixture_layers.named_parameters():
                 if "_a." in name:
                     param.requires_grad = False
 
         if self.config.model.freeze_depth_backbone:
-            for param in self.model.embeddings_depth.parameters():
+            for param in model.embeddings_depth.parameters():
                 param.requires_grad = False
-            for param in self.model.layernorm_pre_depth.parameters():
+            for param in model.layernorm_pre_depth.parameters():
                 param.requires_grad = False
-            for param in self.model.video_rope.parameters():
+            for param in model.video_rope.parameters():
                 param.requires_grad = False
-            for param in self.model.encoder.layers_depth.parameters():
+            for param in model.encoder.layers_depth.parameters():
                 param.requires_grad = False
-            for name, param in self.model.encoder.mixture_layers.named_parameters():
+            for name, param in model.encoder.mixture_layers.named_parameters():
                 if "_b." in name:
                     param.requires_grad = False
 
         if self.config.model.freeze_rgb_pooling:
-            for param in self.model.layernorm_post.parameters():
+            for param in model.layernorm_post.parameters():
                 param.requires_grad = False
-            for param in self.model.head.parameters():
+            for param in model.head.parameters():
                 param.requires_grad = False
 
         if self.config.model.freeze_depth_pooling:
-            for param in self.model.layernorm_post_depth.parameters():
+            for param in model.layernorm_post_depth.parameters():
                 param.requires_grad = False
-            for param in self.model.head_depth.parameters():
+            for param in model.head_depth.parameters():
                 param.requires_grad = False
 
         if self.config.model.freeze_rgb_head:
@@ -169,7 +181,15 @@ class TomatoViTEngine(Engine):
                 f"Parallel type {self.config.parallel.type} not implemented."
             )
 
-        # 5. Compile model
+        # 5. Calculate model size in B
+        model_size = sum(p.numel() for p in ddp_model.parameters())
+        logger.info(f" - Model size: {model_size / 1e9:.4f} B")
+        trainable_size = sum(
+            p.numel() for p in ddp_model.parameters() if p.requires_grad
+        )
+        logger.info(f" - Trainable model size: {trainable_size / 1e9:.4f} B")
+
+        # 6. Compile model
         ddp_model = torch.compile(ddp_model, backend=self.config.optim.compile_backend, mode=self.config.optim.compile_mode)
         self.teacher_model = torch.compile(
             self.teacher_model, backend=self.config.optim.compile_backend, mode=self.config.optim.compile_mode
@@ -193,7 +213,7 @@ class TomatoViTEngine(Engine):
             self.optimizer, start_factor=1e-10, end_factor=1.0, total_iters=warmup_steps
         )
         scheduler_main = PolynomialLR(
-            self.optimizer, total_iters=self.cfg.loop.total_steps - warmup_steps, power=2
+            self.optimizer, total_iters=self.config.loop.total_steps - warmup_steps, power=2
         )
         return SequentialLR(
             self.optimizer, [scheduler_warmup, scheduler_main], milestones=[warmup_steps]
@@ -290,15 +310,31 @@ class TomatoViTEngine(Engine):
 
     def train_pre_step(self, data: Dict) -> Dict:
         """Preprocess the input data before training step."""
+        batch = {}
+
+        images, depths, labels, _ = data
+        images = images.to(self.device, non_blocking=True)
+        depths = depths.to(self.device, non_blocking=True)
+        labels = labels.to(self.device, non_blocking=True)
+
+        # Normalize images
+        images = images / 255.0
+        images = (images - torch.tensor(self.config.data.image_mean, device=self.device).view(1, 3, 1, 1))
+        images = images / torch.tensor(self.config.data.image_std, device=self.device).view(1, 3, 1, 1)
+        batch["images"] = images
+
+        # Scale depths
+        depths = depths * (1.0 / 1000.0)
+        depths = depths.clamp(0, 10) / 10.0  # Normalize depth to [0, 1]
+        batch["depths"] = depths
 
         # Prepare head labels for Partial FC
-        head_label = data["labels"].long().to(self.device)
+        head_label = labels.long().to(self.device)
         label_select = self.config.model.partial_fc.label_select
         random_diff = self.config.model.partial_fc.random_diff
         head_label = head_label[:, label_select : label_select + random_diff]
-        data["labels"] = head_label
-
-        return data
+        batch["labels"] = head_label
+        return batch
 
     def train_one_step(self, data: Dict) -> Dict:
         """Execute the model forward to get outputs.
@@ -316,21 +352,31 @@ class TomatoViTEngine(Engine):
             dtype=self.dtype,
             enabled=self.dtype != torch.float32,
         ):
-            outputs = self.model(data)
+            outputs = self.model(
+                pixel_values=data["images"],
+                pixel_values_depth=data["depths"],
+                mask_ratio=self.config.model.ibot.mask_ratio,
+            )
+            with torch.no_grad():
+                teacher_outputs = self.teacher_model(
+                    pixel_values=data["images"],
+                    pixel_values_depth=data["depths"],
+                    mask_ratio=0
+                )
 
         embeddings_rgb = outputs["pooler_output"].float()
         embeddings_depth = outputs["pooler_output_depth"].float()
 
         random_diff = self.config.model.partial_fc.random_diff
-        loss_mlcd_rgb = self.head(embeddings_rgb, data["labels"], random_diff)
+        loss_mlcd_rgb = self.rgb_head(embeddings_rgb, data["labels"], random_diff)
         loss_mlcd_depth = self.depth_head(embeddings_depth, data["labels"], random_diff)
 
         loss_ibot = self.ibot_loss(
-            outputs["last_hidden_state"],
-            outputs["last_hidden_state_depth"],
-            student_mask=data["mask"],
+            student_patch=outputs["last_hidden_state"],
+            teacher_patch=teacher_outputs["last_hidden_state"],
+            student_mask=outputs["mask"],
             step=self.step,
-        )
+        ) if self.config.model.ibot.mask_ratio > 0 else torch.tensor(0.0, device=self.device)
 
         total_loss = (
             loss_mlcd_rgb * self.config.model.partial_fc.rgb_lam

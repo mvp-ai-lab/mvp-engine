@@ -4,7 +4,11 @@ project:
   name: "tomatovit"
 data:
   dataset_type: "webdataset"
-  dataset_url: "./data/potato_v1"
+  data_path: "./data/potato_v1/data"
+  label_path: "./data/potato_v1/labels"
+  resize: [224, 224]
+  image_mean: [0.48145466, 0.4578275, 0.40821073]
+  image_std: [0.26862954, 0.26130258, 0.27577711]
   batch_size: 96
   num_workers: 2
   shuffle_buffer: 5000
@@ -12,7 +16,7 @@ model:
   name: "TomatoViT"
   pretrained: ./pretrained/tomato_vit_l
   partial_fc:
-    num_classes: 10000
+    num_classes: 100000
     sample_rate: 0.1
     margin: 0.3
     label_select: 0
@@ -33,6 +37,7 @@ model:
     center_momentum: 0.9
     lam: 0
     mim_start_step: 0
+    mask_ratio: 0
 optim:
   lr: 0.00001
   weight_decay: 0.05

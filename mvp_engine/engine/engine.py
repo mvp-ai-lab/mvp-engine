@@ -13,7 +13,11 @@ from addict import Dict
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 
-from mvp_engine.utils.distributed.utils import broadcast_from_main, is_main_process
+from mvp_engine.utils.distributed.utils import (
+    broadcast_from_main,
+    get_rank,
+    is_main_process,
+)
 from mvp_engine.utils.log import init_logger, logger
 from mvp_engine.utils.log.backend import FileBackend, TerminalBackend
 from mvp_engine.utils.misc import Timer, get_device, get_git_info
@@ -86,7 +90,8 @@ class Engine(ABC):
 
     @property
     def device(self) -> torch.device:
-        return get_device()
+        rank = get_rank()
+        return get_device(index=rank)
 
     @property
     def device_type(self) -> str:
@@ -254,7 +259,7 @@ class Engine(ABC):
             force: If True, save regardless of save_interval.
         """
         save_interval = OmegaConf.select(
-            self.config, "loop.checkpoint.save_interval", default=1000
+            self.config, "loop.checkpoint.interval", default=1000
         )
         if not force and (self.step % save_interval != 0):
             return
@@ -318,9 +323,10 @@ class Engine(ABC):
                 cur_checkpoint_dir / "engine.pt",
             )
         else:
-            raise NotImplementedError(
-                f"Unsupported parallel backend: {parallel_backend}"
-            )
+            if is_main_process():
+                raise NotImplementedError(
+                    f"Unsupported parallel backend: {parallel_backend}"
+                )
 
         torch.distributed.barrier()
 
@@ -430,12 +436,12 @@ class Engine(ABC):
                 else f"{self.model.__class__.__name__} / "
             )
             + (
-                f"{self.optimizer.optimizer.__class__.__name__} / "
+                f"{self.optimizer.__class__.__name__} / "
                 if hasattr(self, "optimizer") and self.optimizer is not None
                 else ""
             )
             + (
-                f"{self.scheduler.scheduler.__class__.__name__} / "
+                f"{self.scheduler.__class__.__name__} / "
                 if hasattr(self, "scheduler") and self.scheduler is not None
                 else ""
             )
@@ -549,7 +555,7 @@ class Engine(ABC):
 
             # Log training metrics with timing info
             timing_logs = {
-                "eta": self.timer.eta,
+                "eta": self.timer.eta_string,
                 "time/batch": self.timer.batch_time,
                 "time/throughput": self.timer.throughput,
             }

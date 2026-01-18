@@ -4,8 +4,12 @@ import torch
 import torch.nn.functional as F
 from torch import distributed
 
-from mvp_engine.utils.misc import get_device
+from mvp_engine.utils.distributed.utils import get_rank
+from mvp_engine.utils.misc import get_device as _get_device
 
+
+def get_device():
+    return _get_device(get_rank())
 
 class AllGatherFunc(torch.autograd.Function):
     """AllGather op with gradient backward"""
