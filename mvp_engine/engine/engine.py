@@ -554,13 +554,19 @@ class Engine(ABC):
             self.timer.tick()
 
             # Log training metrics with timing info
-            timing_logs = {
+            other_logs = {
                 "eta": self.timer.eta_string,
                 "time/batch": self.timer.batch_time,
                 "time/throughput": self.timer.throughput,
             }
+
+            # Log LR
+            current_lrs = self.scheduler.get_last_lr()
+            for i, lr in enumerate(current_lrs):
+                other_logs[f"lr/group_{i}"] = lr
+
             logger.log_metrics(
-                {**outputs["logs"], **timing_logs},
+                {**outputs["logs"], **other_logs},
                 step=self.step,
             )
 
