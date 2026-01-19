@@ -2,7 +2,7 @@ import os
 from copy import deepcopy
 from functools import partial
 from pathlib import Path
-from typing import Dict, Union
+from typing import Dict, List, Union
 
 import numpy as np
 import torch
@@ -16,7 +16,8 @@ from mvp_engine.engine import ENGINE_REGISTRY, Engine
 from mvp_engine.utils.distributed.utils import get_rank, is_main_process
 from mvp_engine.utils.log import logger
 
-from ..dataset.preprocess import make_sample
+from ..dataset.dali import dali_wrapper
+from ..dataset.preprocess import collate_fn, make_sample
 from ..model.ibot import iBOTLoss
 from ..model.partial_fc import PartialFC
 from ..model.tomato_vit import TomatoViTModel
@@ -41,18 +42,23 @@ class TomatoViTEngine(Engine):
 
             dataset = WebDatasetBuilder(self.config.data.data_path).build(
                 batch_size=self.config.data.batch_size,
-                make_sample_func=partial(make_sample, labels=labels, resize=tuple(self.config.data.resize)),
+                make_sample_fn=partial(make_sample, labels=labels),
                 shuffle_buffer=self.config.data.shuffle_buffer,
+                collate_fn=collate_fn
             )
             dataloader = (
                 WebLoader(
                     dataset, batch_size=None, num_workers=self.config.data.num_workers
                 )
-                .unbatched()
-                .shuffle(self.config.data.shuffle_buffer)
-                .batched(dataset.batch_size)
             )
-            return dataloader
+
+            dali_dataloader = dali_wrapper(
+                wds_iterator=dataloader,
+                batch_size=self.config.data.batch_size,
+                resize=tuple(self.config.data.resize) if self.config.data.resize else None,
+                device_id=get_rank()
+            )
+            return dali_dataloader
         else:
             logger.warning(f"Skip dataloader preparation for workflow: {workflow}")
 
@@ -308,17 +314,18 @@ class TomatoViTEngine(Engine):
 
         return super().run_train()
 
-    def train_pre_step(self, data: Dict) -> Dict:
+    def train_pre_step(self, data: List) -> Dict:
         """Preprocess the input data before training step."""
         batch = {}
 
-        images, depths, labels, _ = data
-        images = images.to(self.device, non_blocking=True)
-        depths = depths.to(self.device, non_blocking=True)
+        data = data[0]
+        images, depths, labels = data["images"], data["depths"], data["labels"]
+        images = torch.permute(images, (0, 3, 1, 2))
+        depths = torch.permute(depths, (0, 3, 1, 2))
         labels = labels.to(self.device, non_blocking=True)
 
         # Normalize images
-        images = images / 255.0
+        images = images.float() / 255.0
         images = (images - torch.tensor(self.config.data.image_mean, device=self.device).view(1, 3, 1, 1))
         images = images / torch.tensor(self.config.data.image_std, device=self.device).view(1, 3, 1, 1)
         batch["images"] = images

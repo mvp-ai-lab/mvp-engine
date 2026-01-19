@@ -81,7 +81,7 @@ class WebDatasetBuilder:
         self.shard_paths = []
         self.shard_paths.extend([str(p) for p in Path(dataset_path).rglob("*.tar")])
 
-    def build(self, batch_size: int = 1, shuffle_buffer: int = 3000, make_sample_func=None):
+    def build(self, batch_size: int = 1, shuffle_buffer: int = 3000, make_sample_fn=None, collate_fn=None):
         """Build a WebDataset pipeline for the requested stage.
 
         Args:
@@ -105,7 +105,7 @@ class WebDatasetBuilder:
             worker_seed=webdataset_db.pipeline[0].worker_seed,
             deterministic=webdataset_db.pipeline[0].deterministic,
         )
-        webdataset_db = webdataset_db.shuffle(shuffle_buffer).decode().map(make_sample_func).batched(batch_size)
+        webdataset_db = webdataset_db.shuffle(shuffle_buffer).decode().map(make_sample_fn).batched(batch_size, collation_fn=collate_fn)
         webdataset_db.batch_size = batch_size
 
         return webdataset_db
