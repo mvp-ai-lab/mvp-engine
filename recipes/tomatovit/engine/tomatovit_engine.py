@@ -169,6 +169,7 @@ class TomatoViTEngine(Engine):
             center_momentum=self.config.model.ibot.center_momentum,
             lam=self.config.model.ibot.lam,
             mim_start_step=self.config.model.ibot.mim_start_step,
+            warmup_steps=self.config.model.ibot.warmup_steps,
         ).to(self.device)
 
         # 5. DDP wrap
@@ -200,6 +201,16 @@ class TomatoViTEngine(Engine):
         self.teacher_model = torch.compile(
             self.teacher_model, backend=self.config.optim.compile_backend, mode=self.config.optim.compile_mode
         )
+
+        # 7. Load from a checkpoint if specified
+        self.model = ddp_model
+        load_from_cfg = OmegaConf.select(self.config, "model.load_from", default=None)
+        if load_from_cfg and load_from_cfg.path:
+            self.load(
+                ckpt_path=load_from_cfg.path,
+                only_model=load_from_cfg.only_model,
+                reset_teacher=load_from_cfg.reset_teacher,
+            )
 
         return ddp_model
 
@@ -271,16 +282,27 @@ class TomatoViTEngine(Engine):
 
         torch.distributed.barrier()
 
-    def load(self, ckpt_path: Union[str, os.PathLike]) -> None:
+    def load(self, ckpt_path: Union[str, os.PathLike], only_model: bool = False, reset_teacher: bool = True) -> None:
         """Load training checkpoint from disk.
 
         Args:
             ckpt_path: Path to checkpoint directory.
         """
-        super().load(ckpt_path)
+
+        parallel_backend = OmegaConf.select(self.config, "parallel.type", default=None)
+        if only_model:
+            if parallel_backend == "ddp":
+                misalign = self.model.module.load_state_dict(
+                    torch.load(Path(ckpt_path) / "model.pt", map_location="cpu"), strict=False
+                )
+                if misalign.missing_keys or misalign.unexpected_keys:
+                    logger.warning(
+                        f"Model load_state_dict had misaligned keys: Missing keys: {misalign.missing_keys} Unexpected keys: {misalign.unexpected_keys}"
+                    )
+        else:
+            super().load(ckpt_path)
 
         ckpt_path = Path(ckpt_path)
-        parallel_backend = OmegaConf.select(self.config, "parallel.type", default=None)
         if parallel_backend == "ddp":
             teacher_model_path = ckpt_path / "teacher_model.pt"
             ibot_loss_path = ckpt_path / "ibot_loss.pt"
@@ -288,19 +310,31 @@ class TomatoViTEngine(Engine):
             depth_head_path = ckpt_path / f"depth_head_rank{rank}.pt"
             rgb_head_path = ckpt_path / f"rgb_head_rank{rank}.pt"
 
-            for model_path, model, model_name in [
+            to_be_loaded = [
                 (teacher_model_path, self.teacher_model, "Teacher Model"),
-                (ibot_loss_path, self.ibot_loss, "iBOT Loss"),
                 (depth_head_path, self.depth_head, "Depth Head"),
                 (rgb_head_path, self.rgb_head, "RGB Head"),
-            ]:
+            ]
+            if not only_model:
+                to_be_loaded.append(
+                    (ibot_loss_path, self.ibot_loss, "iBOT Loss")
+                )
+            for model_path, model, model_name in to_be_loaded:
                 if model_path.exists():
                     state_dict = torch.load(
                         model_path, map_location="cpu"
                     )
-                    model.load_state_dict(state_dict)
+                    misalign = model.load_state_dict(state_dict, strict=False)
+                    if misalign.missing_keys or misalign.unexpected_keys:
+                        logger.warning(
+                            f"{model_name} load_state_dict had misaligned keys: Missing keys: {misalign.missing_keys} Unexpected keys: {misalign.unexpected_keys}"
+                        )
                 else:
                     logger.warning(f"{model_name} checkpoint not found at {model_path}.")
+            if reset_teacher:
+                # Reset teacher parameters to student parameters
+                for param_q, param_k in zip(self.model.module.parameters(), self.teacher_model.parameters()):
+                    param_k.data.copy_(param_q.detach().data)
         else:
             raise NotImplementedError(
                 f"Unsupported parallel backend: {parallel_backend}"
@@ -362,8 +396,16 @@ class TomatoViTEngine(Engine):
             outputs = self.model(
                 pixel_values=data["images"],
                 pixel_values_depth=data["depths"],
-                mask_ratio=self.config.model.ibot.mask_ratio,
+                mask_ratio=0,
             )
+            if self.config.model.ibot.mask_ratio > 0:
+                masked_outputs = self.model(
+                    pixel_values=data["images"],
+                    pixel_values_depth=data["depths"],
+                    mask_ratio=self.config.model.ibot.mask_ratio,
+                )
+            else:
+                masked_outputs = outputs
             with torch.no_grad():
                 teacher_outputs = self.teacher_model(
                     pixel_values=data["images"],
@@ -378,10 +420,10 @@ class TomatoViTEngine(Engine):
         loss_mlcd_rgb = self.rgb_head(embeddings_rgb, data["labels"], random_diff)
         loss_mlcd_depth = self.depth_head(embeddings_depth, data["labels"], random_diff)
 
-        loss_ibot = self.ibot_loss(
-            student_patch=outputs["last_hidden_state"],
+        loss_ibot, loss_ibot_log = self.ibot_loss(
+            student_patch=masked_outputs["last_hidden_state"],
             teacher_patch=teacher_outputs["last_hidden_state"],
-            student_mask=outputs["mask"],
+            student_mask=masked_outputs["mask"],
             step=self.step,
         ) if self.config.model.ibot.mask_ratio > 0 else torch.tensor(0.0, device=self.device)
 
@@ -397,7 +439,7 @@ class TomatoViTEngine(Engine):
                 "train/loss": total_loss.item(),
                 "train/loss_mlcd_rgb": loss_mlcd_rgb.item(),
                 "train/loss_mlcd_depth": loss_mlcd_depth.item(),
-                "train/loss_ibot": loss_ibot.item(),
+                "train/loss_ibot": loss_ibot_log.item(),
             },
         }
 
