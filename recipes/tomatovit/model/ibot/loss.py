@@ -17,6 +17,7 @@ class iBOTLoss(nn.Module):
         center_momentum=0.9,
         lam=1.0,
         mim_start_step=0,
+        warmup_steps=0,
     ):
         super().__init__()
         self.student_temp = student_temp
@@ -47,57 +48,62 @@ class iBOTLoss(nn.Module):
                 )
             )
         )
+        self.lam_schedule = np.concatenate(
+            (
+                np.linspace(0, 1, warmup_steps),
+                np.ones(nsteps - warmup_steps),
+            )
+        )
 
-    def forward(
-        self, student_patch, teacher_patch, student_mask, step
-    ):
+    def forward(self, student_patch, teacher_patch, student_mask, step):
         """
         Cross-entropy between softmax outputs of the teacher and student networks.
         Only computes patch-level MIM loss on masked positions.
-        
+
         Args:
             student_patch: [B, N, D] - student patch embeddings
             teacher_patch: [B, N, D] - teacher patch embeddings
             student_mask: [B, M] - indices of masked positions
             step: current training step for temperature scheduling
-            
+
         Returns:
             dict with 'patch' and 'loss' keys
         """
         B, N, D = student_patch.shape
-        
+
         # Gather masked positions: [B, M, D]
         mask_idx = student_mask.unsqueeze(-1).expand(-1, -1, D)  # [B, M, D]
         student_masked = torch.gather(student_patch, dim=1, index=mask_idx)  # [B, M, D]
         teacher_masked = torch.gather(teacher_patch, dim=1, index=mask_idx)  # [B, M, D]
-        
+
         # Student: scale by temperature
         student_masked = student_masked / self.student_temp
-        
+
         # Teacher: centering and sharpening
         temp = self.teacher_temp_schedule[step]
         teacher_masked = F.softmax((teacher_masked - self.center) / temp, dim=-1)
         teacher_masked = teacher_masked.detach()
-        
+
         # Cross-entropy loss on masked positions
         loss = torch.sum(
             -teacher_masked * F.log_softmax(student_masked, dim=-1),
             dim=-1,
         )  # [B, M]
         loss = loss.mean()
-        
-        total_loss = loss * self.lam
+
+        total_loss_ori = loss * self.lam
+        total_loss = total_loss_ori * self.lam_schedule[step]
         self.update_center(teacher_patch)
-        return total_loss
+        return total_loss, total_loss_ori
 
     @torch.no_grad()
     def update_center(self, teacher_patch):
         """
         Update center used for teacher output.
         """
-        patch_center = torch.sum(teacher_patch.mean(1), dim=0, keepdim=True)
+        patch_center = teacher_patch.mean(dim=[0, 1], keepdim=True)  # [1, 1, D]
         dist.all_reduce(patch_center)
-        patch_center = patch_center / (len(teacher_patch) * dist.get_world_size())
+        patch_center = patch_center / dist.get_world_size()
         self.center = self.center * self.center_momentum + patch_center * (
             1 - self.center_momentum
         )
