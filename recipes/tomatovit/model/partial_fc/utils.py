@@ -1,6 +1,8 @@
+import sys
+
 import torch
 import torch.distributed as dist
-import sys
+
 
 def merge_partial_fc(ckpt_path, save=False):
     all_weights = []
@@ -10,7 +12,7 @@ def merge_partial_fc(ckpt_path, save=False):
         partial_ckpt_path = ckpt_path / f"rgb_head_rank{rank}.pt"
         if partial_ckpt_path.is_file():
             state_dict = torch.load(partial_ckpt_path, map_location="cpu")
-            weight_part = state_dict['weight']
+            weight_part = state_dict["weight"]
             all_weights.append(weight_part)
         else:
             break
@@ -60,7 +62,7 @@ def repartition_fc(ckpt_path, world_size, rank):
         # send split weight
         for r in range(world_size):
             l_n, s_idx = get_split_info(r, total_classes, world_size)
-            target_slice = full_weight[s_idx: s_idx + l_n].contiguous()
+            target_slice = full_weight[s_idx : s_idx + l_n].contiguous()
 
             if r == 0:
                 local_weight = target_slice.clone()

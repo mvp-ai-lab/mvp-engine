@@ -13,7 +13,7 @@ from webdataset import WebLoader
 
 from mvp_engine.dataset.webdataset import WebDatasetBuilder
 from mvp_engine.engine import ENGINE_REGISTRY, Engine
-from mvp_engine.utils.distributed.utils import get_rank, is_main_process, get_world_size
+from mvp_engine.utils.distributed.utils import get_rank, get_world_size, is_main_process
 from mvp_engine.utils.log import logger
 
 from ..dataset.dali import dali_wrapper
@@ -39,25 +39,21 @@ class TomatoViTEngine(Engine):
             labels = {}
             for parquet_file in Path(self.config.data.label_path).rglob("*.parquet"):
                 df = read_parquet(parquet_file)
-                labels.update(df.set_index('key')['label'].to_dict())
+                labels.update(df.set_index("key")["label"].to_dict())
 
             dataset = WebDatasetBuilder(self.config.data.data_path).build(
                 batch_size=self.config.data.batch_size,
                 make_sample_fn=partial(make_sample, labels=labels),
                 shuffle_buffer=self.config.data.shuffle_buffer,
-                collate_fn=collate_fn
+                collate_fn=collate_fn,
             )
-            dataloader = (
-                WebLoader(
-                    dataset, batch_size=None, num_workers=self.config.data.num_workers
-                )
-            )
+            dataloader = WebLoader(dataset, batch_size=None, num_workers=self.config.data.num_workers)
 
             dali_dataloader = dali_wrapper(
                 wds_iterator=dataloader,
                 batch_size=self.config.data.batch_size,
                 resize=tuple(self.config.data.resize) if self.config.data.resize else None,
-                device_id=get_rank()
+                device_id=get_rank(),
             )
             return dali_dataloader
         else:
@@ -154,7 +150,7 @@ class TomatoViTEngine(Engine):
         if self.config.model.freeze_rgb_head:
             for param in self.rgb_head.parameters():
                 param.requires_grad = False
-        
+
         if self.config.model.freeze_depth_head:
             for param in self.depth_head.parameters():
                 param.requires_grad = False
@@ -177,28 +173,22 @@ class TomatoViTEngine(Engine):
         if self.config.parallel.type == "ddp":
             ddp_model = torch.nn.parallel.DistributedDataParallel(
                 model.to(self.device),
-                device_ids=[self.device.index]
-                if self.device.type == "cuda"
-                else None,
-                output_device=self.device.index
-                if self.device.type == "cuda"
-                else None,
+                device_ids=[self.device.index] if self.device.type == "cuda" else None,
+                output_device=self.device.index if self.device.type == "cuda" else None,
             )
         else:
-            raise NotImplementedError(
-                f"Parallel type {self.config.parallel.type} not implemented."
-            )
+            raise NotImplementedError(f"Parallel type {self.config.parallel.type} not implemented.")
 
         # 5. Calculate model size in B
         model_size = sum(p.numel() for p in ddp_model.parameters())
         logger.info(f" - Model size: {model_size / 1e9:.4f} B")
-        trainable_size = sum(
-            p.numel() for p in ddp_model.parameters() if p.requires_grad
-        )
+        trainable_size = sum(p.numel() for p in ddp_model.parameters() if p.requires_grad)
         logger.info(f" - Trainable model size: {trainable_size / 1e9:.4f} B")
 
         # 6. Compile model
-        ddp_model = torch.compile(ddp_model, backend=self.config.optim.compile_backend, mode=self.config.optim.compile_mode)
+        ddp_model = torch.compile(
+            ddp_model, backend=self.config.optim.compile_backend, mode=self.config.optim.compile_mode
+        )
         self.teacher_model = torch.compile(
             self.teacher_model, backend=self.config.optim.compile_backend, mode=self.config.optim.compile_mode
         )
@@ -227,15 +217,9 @@ class TomatoViTEngine(Engine):
 
     def prepare_scheduler(self):
         warmup_steps = int(self.config.loop.total_steps * self.config.optim.warmup_ratio)
-        scheduler_warmup = LinearLR(
-            self.optimizer, start_factor=1e-10, end_factor=1.0, total_iters=warmup_steps
-        )
-        scheduler_main = PolynomialLR(
-            self.optimizer, total_iters=self.config.loop.total_steps - warmup_steps, power=2
-        )
-        return SequentialLR(
-            self.optimizer, [scheduler_warmup, scheduler_main], milestones=[warmup_steps]
-        )
+        scheduler_warmup = LinearLR(self.optimizer, start_factor=1e-10, end_factor=1.0, total_iters=warmup_steps)
+        scheduler_main = PolynomialLR(self.optimizer, total_iters=self.config.loop.total_steps - warmup_steps, power=2)
+        return SequentialLR(self.optimizer, [scheduler_warmup, scheduler_main], milestones=[warmup_steps])
 
     def save(self, force: bool = False) -> None:
         """Save training checkpoint to disk.
@@ -243,9 +227,7 @@ class TomatoViTEngine(Engine):
         Args:
             force: If True, save regardless of save_interval.
         """
-        save_interval = OmegaConf.select(
-            self.config, "loop.checkpoint.interval", default=1000
-        )
+        save_interval = OmegaConf.select(self.config, "loop.checkpoint.interval", default=1000)
         if not force and (self.step % save_interval != 0):
             return
 
@@ -277,9 +259,7 @@ class TomatoViTEngine(Engine):
                 cur_checkpoint_dir / f"rgb_head_rank{rank}.pt",
             )
         else:
-            raise NotImplementedError(
-                f"Unsupported parallel backend: {parallel_backend}"
-            )
+            raise NotImplementedError(f"Unsupported parallel backend: {parallel_backend}")
 
         torch.distributed.barrier()
 
@@ -318,14 +298,10 @@ class TomatoViTEngine(Engine):
                 (rgb_head_path, self.rgb_head, "RGB Head"),
             ]
             if not only_model:
-                to_be_loaded.append(
-                    (ibot_loss_path, self.ibot_loss, "iBOT Loss")
-                )
+                to_be_loaded.append((ibot_loss_path, self.ibot_loss, "iBOT Loss"))
             for model_path, model, model_name in to_be_loaded:
                 if model_path.exists():
-                    state_dict = torch.load(
-                        model_path, map_location="cpu"
-                    )
+                    state_dict = torch.load(model_path, map_location="cpu")
                     misalign = model.load_state_dict(state_dict, strict=False)
                     if misalign.missing_keys or misalign.unexpected_keys:
                         logger.warning(
@@ -342,9 +318,7 @@ class TomatoViTEngine(Engine):
                 for param_q, param_k in zip(self.model.module.parameters(), self.teacher_model.parameters()):
                     param_k.data.copy_(param_q.detach().data)
         else:
-            raise NotImplementedError(
-                f"Unsupported parallel backend: {parallel_backend}"
-            )
+            raise NotImplementedError(f"Unsupported parallel backend: {parallel_backend}")
 
     def run_train(self):
         self.teacher_model.eval()
@@ -366,7 +340,7 @@ class TomatoViTEngine(Engine):
 
         # Normalize images
         images = images.float() / 255.0
-        images = (images - torch.tensor(self.config.data.image_mean, device=self.device).view(1, 3, 1, 1))
+        images = images - torch.tensor(self.config.data.image_mean, device=self.device).view(1, 3, 1, 1)
         images = images / torch.tensor(self.config.data.image_std, device=self.device).view(1, 3, 1, 1)
         batch["images"] = images
 
@@ -414,9 +388,7 @@ class TomatoViTEngine(Engine):
                 masked_outputs = outputs
             with torch.no_grad():
                 teacher_outputs = self.teacher_model(
-                    pixel_values=data["images"],
-                    pixel_values_depth=data["depths"],
-                    mask_ratio=0
+                    pixel_values=data["images"], pixel_values_depth=data["depths"], mask_ratio=0
                 )
 
         embeddings_rgb = outputs["pooler_output"].float()
@@ -426,12 +398,16 @@ class TomatoViTEngine(Engine):
         loss_mlcd_rgb = self.rgb_head(embeddings_rgb, data["labels"], random_diff)
         loss_mlcd_depth = self.depth_head(embeddings_depth, data["labels"], random_diff)
 
-        loss_ibot, loss_ibot_log = self.ibot_loss(
-            student_patch=masked_outputs["last_hidden_state"],
-            teacher_patch=teacher_outputs["last_hidden_state"],
-            student_mask=masked_outputs["mask"],
-            step=self.step,
-        ) if self.config.model.ibot.mask_ratio > 0 else torch.tensor(0.0, device=self.device)
+        loss_ibot, loss_ibot_log = (
+            self.ibot_loss(
+                student_patch=masked_outputs["last_hidden_state"],
+                teacher_patch=teacher_outputs["last_hidden_state"],
+                student_mask=masked_outputs["mask"],
+                step=self.step,
+            )
+            if self.config.model.ibot.mask_ratio > 0
+            else torch.tensor(0.0, device=self.device)
+        )
 
         total_loss = (
             loss_mlcd_rgb * self.config.model.partial_fc.rgb_lam
