@@ -13,13 +13,14 @@ from webdataset import WebLoader
 
 from mvp_engine.dataset.webdataset import WebDatasetBuilder
 from mvp_engine.engine import ENGINE_REGISTRY, Engine
-from mvp_engine.utils.distributed.utils import get_rank, is_main_process
+from mvp_engine.utils.distributed.utils import get_rank, is_main_process, get_world_size
 from mvp_engine.utils.log import logger
 
 from ..dataset.dali import dali_wrapper
 from ..dataset.preprocess import collate_fn, make_sample
 from ..model.ibot import iBOTLoss
 from ..model.partial_fc import PartialFC
+from ..model.partial_fc.utils import repartition_fc
 from ..model.tomato_vit import TomatoViTModel
 
 
@@ -307,6 +308,7 @@ class TomatoViTEngine(Engine):
             teacher_model_path = ckpt_path / "teacher_model.pt"
             ibot_loss_path = ckpt_path / "ibot_loss.pt"
             rank = get_rank()
+            world_size = get_world_size()
             depth_head_path = ckpt_path / f"depth_head_rank{rank}.pt"
             rgb_head_path = ckpt_path / f"rgb_head_rank{rank}.pt"
 
@@ -331,6 +333,10 @@ class TomatoViTEngine(Engine):
                         )
                 else:
                     logger.warning(f"{model_name} checkpoint not found at {model_path}.")
+
+            partial_fc_dict = repartition_fc(ckpt_path, world_size, rank)
+            self.rgb_head.load_state_dict(partial_fc_dict, strict=False)
+
             if reset_teacher:
                 # Reset teacher parameters to student parameters
                 for param_q, param_k in zip(self.model.module.parameters(), self.teacher_model.parameters()):
