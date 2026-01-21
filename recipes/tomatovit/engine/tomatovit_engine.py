@@ -290,7 +290,7 @@ class TomatoViTEngine(Engine):
             rank = get_rank()
             world_size = get_world_size()
             depth_head_path = ckpt_path / f"depth_head_rank{rank}.pt"
-            rgb_head_path = ckpt_path / f"rgb_head_rank{rank}.pt"
+            # rgb_head_path = ckpt_path / f"rgb_head_rank{rank}.pt"
 
             to_be_loaded = [
                 (teacher_model_path, self.teacher_model, "Teacher Model"),

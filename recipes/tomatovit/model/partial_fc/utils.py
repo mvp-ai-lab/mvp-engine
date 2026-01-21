@@ -3,6 +3,8 @@ import sys
 import torch
 import torch.distributed as dist
 
+from mvp_engine.utils.log import logger
+
 
 def merge_partial_fc(ckpt_path, save=False):
     all_weights = []
@@ -16,6 +18,9 @@ def merge_partial_fc(ckpt_path, save=False):
             all_weights.append(weight_part)
         else:
             break
+    if not all_weights:
+        raise FileNotFoundError(f"No partial FC checkpoint files found in directory: {ckpt_path}")
+
     full_weight = torch.cat(all_weights, dim=0)
 
     if save:
@@ -53,11 +58,9 @@ def repartition_fc(ckpt_path, world_size, rank):
             return merged_state_dict
 
         total_classes, dims = full_weight.shape
-        num_per_rank = total_classes // world_size
-        remainder = total_classes % world_size
-
         meta = torch.tensor([total_classes, dims], dtype=torch.long)
-        dist.broadcast(meta, src=0)
+        cpu_group = dist.new_group(backend="gloo")
+        dist.broadcast(meta, src=0, group=cpu_group)
 
         # send split weight
         for r in range(world_size):
@@ -67,17 +70,19 @@ def repartition_fc(ckpt_path, world_size, rank):
             if r == 0:
                 local_weight = target_slice.clone()
             else:
-                print(f"Rank 0: send partial_fc [{s_idx}:{s_idx + l_n}] to Rank {r}...")
-                dist.send(tensor=target_slice, dst=r)
+                logger.info(f"Rank 0: send partial_fc [{s_idx}:{s_idx + l_n}] to Rank {r}...")
+                dist.send(tensor=target_slice, dst=r, group=cpu_group)
 
         del full_weight
     else:
         meta = torch.zeros(2, dtype=torch.long)
-        dist.broadcast(meta, src=0)
+        cpu_group = dist.new_group(backend="gloo")
+        dist.broadcast(meta, src=0, group=cpu_group)
         total_classes, dims = meta.tolist()
 
         l_n, _ = get_split_info(rank, total_classes, world_size)
         local_weight = torch.empty((l_n, dims), dtype=torch.float32)
-        dist.recv(tensor=local_weight, src=0)
+        dist.recv(tensor=local_weight, src=0, group=cpu_group)
 
+    dist.destroy_process_group(cpu_group)
     return {"weight": local_weight}
