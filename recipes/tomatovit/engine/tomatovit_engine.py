@@ -295,7 +295,6 @@ class TomatoViTEngine(Engine):
             to_be_loaded = [
                 (teacher_model_path, self.teacher_model, "Teacher Model"),
                 (depth_head_path, self.depth_head, "Depth Head"),
-                (rgb_head_path, self.rgb_head, "RGB Head"),
             ]
             if not only_model:
                 to_be_loaded.append((ibot_loss_path, self.ibot_loss, "iBOT Loss"))
