@@ -1,7 +1,18 @@
 from pathlib import Path
 from typing import Mapping, Optional, Union
 
-import wandb
+try:
+    import wandb
+
+    _WANDB_AVAILABLE = True
+except ImportError:
+    from mvp_engine.utils.log import simple_info
+
+    simple_info(f"Wandb is not installed!")
+    _WANDB_AVAILABLE = False
+
+from numbers import Number
+
 from omegaconf import DictConfig, OmegaConf
 
 from mvp_engine.utils.distributed.utils import is_main_process
@@ -29,7 +40,7 @@ class WandbBackend(Backend):
         path: Optional[Path] = None,
     ) -> None:
         self.id = id
-        self.enable = is_main_process()
+        self.enable = is_main_process() and _WANDB_AVAILABLE
 
         if self.enable:
             # init wandb run
@@ -59,29 +70,24 @@ class WandbBackend(Backend):
         if not self.enable or len(metrics) == 0:
             return
 
-        log_dict = dict(metrics)
+        log_dict = {}
         if epoch is not None:
             log_dict["epoch"] = epoch
-        log_dict.pop("eta", None)
 
-        wandb.log(log_dict, step=step)
+        for k, v in metrics.items():
+            if k == "eta":
+                continue
 
-    def info(self, message: str) -> None:
-        """Wandb doesn't have a direct 'message log' UI like a text file,
-        so we use alert or console logging.
-        """
-        if self.enable:
-            print(f"[Wandb-INFO] {message}")
-
-    def warning(self, message: str) -> None:
-        """Log a warning. Using wandb.alert for high visibility."""
-        if self.enable:
-            print(f"[Wandb-WARN] {message}")
-
-    def error(self, message: str) -> None:
-        """Log an error."""
-        if self.enable:
-            print(f"[Wandb-ERROR] {message}")
+            if isinstance(v, Number):
+                log_dict[k] = v
+            # torch.Tensor or np.ndarray to scalar
+            elif hasattr(v, "item"):
+                try:
+                    log_dict[k] = v.item()
+                except (ValueError, RuntimeError):
+                    continue
+        if log_dict:
+            wandb.log(log_dict, step=step)
 
     def destroy(self) -> None:
         """Finish the wandb run."""

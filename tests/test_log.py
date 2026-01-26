@@ -6,7 +6,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
-import wandb
 
 from mvp_engine.utils.log.metric import Metric, MetricAggregator
 
@@ -382,23 +381,12 @@ class TestWandbBackend:
         backend.log_metrics(metrics, step=100, epoch=2)
         backend.destroy()
 
-    @patch("mvp_engine.utils.log.backend.wandb_log.is_main_process", return_value=True)
-    def test_wandb_backend_log_message(self, mock_is_main):
-        """Test WandbBackend log message."""
-        from mvp_engine.utils.log.backend.wandb_log import WandbBackend
-
-        backend = WandbBackend(id="test_run_3", project="test_project")
-        backend.info("test info message")
-        backend.warning("test warning message")
-        backend.error("test error message")
-        backend.destroy()
-
     @patch("mvp_engine.utils.log.backend.wandb_log.is_main_process", return_value=False)
     def test_wandb_backend_disabled_on_non_main_process(self, mock_is_main):
         """Test WandbBackend is disabled on non-main process."""
         from mvp_engine.utils.log.backend.wandb_log import WandbBackend
 
-        backend = WandbBackend(id="test_run_4", project="test_project")
+        backend = WandbBackend(id="test_run_3", project="test_project")
         assert not backend.enable
         backend.log_metrics({"acc": 1.0}, step=1)
         backend.destroy()
