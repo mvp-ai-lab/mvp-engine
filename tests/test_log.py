@@ -359,5 +359,38 @@ class TestTerminalBackend:
         assert not backend.enable
 
 
+class TestWandbBackend:
+    """Test cases for the WandbBackend class."""
+
+    @patch("mvp_engine.utils.log.backend.wandb_log.is_main_process", return_value=True)
+    def test_wandb_backend_init(self, mock_is_main):
+        """Test WandbBackend initialization."""
+        from mvp_engine.utils.log.backend.wandb_log import WandbBackend
+
+        backend = WandbBackend(id="test_run_1", project="test_project")
+        assert backend.enable
+        backend.destroy()
+
+    @patch("mvp_engine.utils.log.backend.wandb_log.is_main_process", return_value=True)
+    def test_wandb_backend_log_metrics(self, mock_is_main):
+        """Test WandbBackend log_metrics."""
+        from mvp_engine.utils.log.backend.wandb_log import WandbBackend
+
+        backend = WandbBackend(id="test_run_2", project="test_project")
+        metrics = {"loss": 0.5, "accuracy": 0.9, "eta": "1h"}
+        backend.log_metrics(metrics, step=100, epoch=2)
+        backend.destroy()
+
+    @patch("mvp_engine.utils.log.backend.wandb_log.is_main_process", return_value=False)
+    def test_wandb_backend_disabled_on_non_main_process(self, mock_is_main):
+        """Test WandbBackend is disabled on non-main process."""
+        from mvp_engine.utils.log.backend.wandb_log import WandbBackend
+
+        backend = WandbBackend(id="test_run_3", project="test_project")
+        assert not backend.enable
+        backend.log_metrics({"acc": 1.0}, step=1)
+        backend.destroy()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
