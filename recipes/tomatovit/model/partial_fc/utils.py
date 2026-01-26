@@ -11,7 +11,7 @@ def merge_partial_fc(ckpt_path, data_type, save=False):
 
     # find all ckpt_path / f"rgb/depth_head_rank{rank}.pt"
     for rank in range(sys.maxsize):
-        partial_ckpt_path = ckpt_path / f"{data_type}_head_rank{rank + 1}.pt"
+        partial_ckpt_path = ckpt_path / f"{data_type}_head_rank{rank}.pt"
         if partial_ckpt_path.is_file():
             state_dict = torch.load(partial_ckpt_path, map_location="cpu")
             weight_part = state_dict["weight"]
@@ -40,13 +40,13 @@ def repartition_fc(ckpt_path, world_size, rank, data_type):
     # if old_world_size == new world_size, skip merge
     count = 0
     for i in range(sys.maxsize):
-        partial_ckpt_path = ckpt_path / f"{data_type}_head_rank{i + 1}.pt"
+        partial_ckpt_path = ckpt_path / f"{data_type}_head_rank{i}.pt"
         if partial_ckpt_path.is_file():
             count += 1
         else:
             break
     if count == world_size:
-        partial_ckpt_path = ckpt_path / f"{data_type}_head_rank{rank + 1}.pt"
+        partial_ckpt_path = ckpt_path / f"{data_type}_head_rank{rank}.pt"
         state_dict = torch.load(partial_ckpt_path, map_location="cpu")
         return state_dict
 
