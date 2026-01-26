@@ -289,12 +289,11 @@ class TomatoViTEngine(Engine):
             ibot_loss_path = ckpt_path / "ibot_loss.pt"
             rank = get_rank()
             world_size = get_world_size()
-            depth_head_path = ckpt_path / f"depth_head_rank{rank}.pt"
+            # depth_head_path = ckpt_path / f"depth_head_rank{rank}.pt"
             # rgb_head_path = ckpt_path / f"rgb_head_rank{rank}.pt"
 
             to_be_loaded = [
                 (teacher_model_path, self.teacher_model, "Teacher Model"),
-                (depth_head_path, self.depth_head, "Depth Head"),
             ]
             if not only_model:
                 to_be_loaded.append((ibot_loss_path, self.ibot_loss, "iBOT Loss"))
@@ -309,8 +308,10 @@ class TomatoViTEngine(Engine):
                 else:
                     logger.warning(f"{model_name} checkpoint not found at {model_path}.")
 
-            partial_fc_dict = repartition_fc(ckpt_path, world_size, rank)
-            self.rgb_head.load_state_dict(partial_fc_dict, strict=False)
+            depth_partial_fc_dict = repartition_fc(ckpt_path, world_size, rank, data_type="depth")
+            self.depth_head.load_state_dict(depth_partial_fc_dict, strict=False)
+            rgb_partial_fc_dict = repartition_fc(ckpt_path, world_size, rank, data_type="rgb")
+            self.rgb_head.load_state_dict(rgb_partial_fc_dict, strict=False)
 
             if reset_teacher:
                 # Reset teacher parameters to student parameters

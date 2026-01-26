@@ -6,12 +6,12 @@ import torch.distributed as dist
 from mvp_engine.utils.log import logger
 
 
-def merge_partial_fc(ckpt_path, save=False):
+def merge_partial_fc(ckpt_path, data_type, save=False):
     all_weights = []
 
-    # find all ckpt_path / f"rgb_head_rank{rank}.pt"
+    # find all ckpt_path / f"rgb/depth_head_rank{rank}.pt"
     for rank in range(sys.maxsize):
-        partial_ckpt_path = ckpt_path / f"rgb_head_rank{rank}.pt"
+        partial_ckpt_path = ckpt_path / f"{data_type}_head_rank{rank}.pt"
         if partial_ckpt_path.is_file():
             state_dict = torch.load(partial_ckpt_path, map_location="cpu")
             weight_part = state_dict["weight"]
@@ -25,11 +25,11 @@ def merge_partial_fc(ckpt_path, save=False):
 
     if save:
         merged_state_dict = {"weight": full_weight}
-        torch.save(merged_state_dict, ckpt_path / f"rgb_head_full.pt")
+        torch.save(merged_state_dict, ckpt_path / f"{data_type}_head_full.pt")
     return full_weight
 
 
-def repartition_fc(ckpt_path, world_size, rank):
+def repartition_fc(ckpt_path, world_size, rank, data_type):
     def get_split_info(r, total_n, ws):
         num_per_rank = total_n // ws
         remainder = total_n % ws
@@ -40,19 +40,19 @@ def repartition_fc(ckpt_path, world_size, rank):
     # if old_world_size == new world_size, skip merge
     count = 0
     for i in range(sys.maxsize):
-        partial_ckpt_path = ckpt_path / f"rgb_head_rank{i}.pt"
+        partial_ckpt_path = ckpt_path / f"{data_type}_head_rank{i}.pt"
         if partial_ckpt_path.is_file():
             count += 1
         else:
             break
     if count == world_size:
-        partial_ckpt_path = ckpt_path / f"rgb_head_rank{rank}.pt"
+        partial_ckpt_path = ckpt_path / f"{data_type}_head_rank{rank}.pt"
         state_dict = torch.load(partial_ckpt_path, map_location="cpu")
         return state_dict
 
     local_weight = None
     if rank == 0:
-        full_weight = merge_partial_fc(ckpt_path)
+        full_weight = merge_partial_fc(ckpt_path, data_type)
         if world_size == 1:
             merged_state_dict = {"weight": full_weight}
             return merged_state_dict
