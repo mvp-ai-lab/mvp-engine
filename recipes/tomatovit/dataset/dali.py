@@ -4,9 +4,7 @@ from nvidia.dali.plugin.pytorch import DALIGenericIterator
 
 
 def dali_wrapper(wds_iterator, batch_size, resize=None, device_id=0):
-    pipe = dali.pipeline.Pipeline(
-        batch_size=batch_size, num_threads=4, device_id=device_id
-    )
+    pipe = dali.pipeline.Pipeline(batch_size=batch_size, num_threads=4, device_id=device_id)
 
     with pipe:
         images, depths, labels = fn.external_source(
@@ -34,7 +32,5 @@ def dali_wrapper(wds_iterator, batch_size, resize=None, device_id=0):
 
         pipe.set_outputs(images, depths, labels)
 
-    dali_loader = DALIGenericIterator(
-        [pipe], output_map=["images", "depths", "labels"], auto_reset=True
-    )
+    dali_loader = DALIGenericIterator([pipe], output_map=["images", "depths", "labels"], auto_reset=True)
     return dali_loader

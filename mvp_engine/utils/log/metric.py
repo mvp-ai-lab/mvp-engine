@@ -53,9 +53,7 @@ class Metric:
             self._buffer.append(value)
         else:
             if not isinstance(value, (int, float, torch.Tensor)):
-                raise TypeError(
-                    f"Metric only supports int, float, str, torch.Tensor or None, got {type(value)}"
-                )
+                raise TypeError(f"Metric only supports int, float, str, torch.Tensor or None, got {type(value)}")
             tensor_val = value if torch.is_tensor(value) else torch.tensor(value)
             if torch.isnan(tensor_val).item() and not self._support_nan:
                 value = self._buffer[-1] if self._buffer else None
@@ -162,9 +160,7 @@ class MetricAggregator:
         self._metrics[name] = {
             "metric": Metric(
                 accumulation_size=accumulation_size,
-                distributed=dist.is_initialized()
-                if distributed is None
-                else distributed,
+                distributed=dist.is_initialized() if distributed is None else distributed,
                 support_nan=support_nan,
                 dist_group=self._dist_group,
             ),
@@ -172,9 +168,7 @@ class MetricAggregator:
             "update_count": 0,
         }
 
-    def update(
-        self, metrics: Dict[str, Optional[Union[int, float, str, torch.Tensor]]]
-    ) -> None:
+    def update(self, metrics: Dict[str, Optional[Union[int, float, str, torch.Tensor]]]) -> None:
         """Update registered metrics with new values.
 
         Args:
@@ -219,9 +213,7 @@ class MetricAggregator:
 
         return collected
 
-    def collect_all(
-        self, accumulate: Literal["mean", "sum"] = "mean"
-    ) -> Dict[str, Union[float, str]]:
+    def collect_all(self, accumulate: Literal["mean", "sum"] = "mean") -> Dict[str, Union[float, str]]:
         """Collect aggregated values for all registered metrics.
 
         Args:

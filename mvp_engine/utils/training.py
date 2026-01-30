@@ -63,12 +63,7 @@ class GradientScaler:
         self._device = device
 
         # Only use actual scaling for fp16 on CUDA
-        self._use_scaler = (
-            enabled
-            and dtype == torch.float16
-            and device == "cuda"
-            and torch.cuda.is_available()
-        )
+        self._use_scaler = enabled and dtype == torch.float16 and device == "cuda" and torch.cuda.is_available()
 
         if self._use_scaler:
             self._scaler = torch.amp.GradScaler(
@@ -175,6 +170,4 @@ def clip_grad_norm_(
     if len(parameters) == 0:
         return torch.tensor(0.0)
 
-    return torch.nn.utils.clip_grad_norm_(
-        parameters, max_norm=max_norm, norm_type=norm_type
-    )
+    return torch.nn.utils.clip_grad_norm_(parameters, max_norm=max_norm, norm_type=norm_type)
