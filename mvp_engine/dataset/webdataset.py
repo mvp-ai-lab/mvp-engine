@@ -41,10 +41,14 @@ class ResampledShards(IterableDataset):
         self.urls = expand_source(urls, max_urls)
         if empty_check:
             if len(self.urls) == 0:
-                raise ValueError("empty_check=True, but no shards found in ResampledShards")
+                raise ValueError(
+                    "empty_check=True, but no shards found in ResampledShards"
+                )
         assert isinstance(self.urls[0], str)
         self.nshards = nshards
-        self.worker_seed = utils.pytorch_worker_seed if worker_seed is None else worker_seed
+        self.worker_seed = (
+            utils.pytorch_worker_seed if worker_seed is None else worker_seed
+        )
         self.deterministic = deterministic
         self.seed = seed
         self.epoch = -1
@@ -81,7 +85,13 @@ class WebDatasetBuilder:
         self.shard_paths = []
         self.shard_paths.extend([str(p) for p in Path(dataset_path).rglob("*.tar")])
 
-    def build(self, batch_size: int = 1, shuffle_buffer: int = 3000, make_sample_fn=None, collate_fn=None):
+    def build(
+        self,
+        batch_size: int = 1,
+        shuffle_buffer: int = 3000,
+        make_sample_fn=None,
+        collate_fn=None,
+    ):
         """Build a WebDataset pipeline for the requested stage.
 
         Args:
@@ -97,7 +107,12 @@ class WebDatasetBuilder:
                 WebDataset library or file I/O operations (for example, when
                 shard files are missing or corrupt).
         """
-        webdataset_db = wd.WebDataset(self.shard_paths, nodesplitter=split_by_node, resampled=True, shardshuffle=False)
+        webdataset_db = wd.WebDataset(
+            self.shard_paths,
+            nodesplitter=split_by_node,
+            resampled=True,
+            shardshuffle=False,
+        )
         webdataset_db.pipeline[0] = ResampledShards(
             urls=webdataset_db.pipeline[0].urls,
             nshards=webdataset_db.pipeline[0].nshards,
@@ -105,7 +120,12 @@ class WebDatasetBuilder:
             worker_seed=webdataset_db.pipeline[0].worker_seed,
             deterministic=webdataset_db.pipeline[0].deterministic,
         )
-        webdataset_db = webdataset_db.shuffle(shuffle_buffer).decode().map(make_sample_fn).batched(batch_size, collation_fn=collate_fn)
+        webdataset_db = (
+            webdataset_db.shuffle(shuffle_buffer)
+            .decode()
+            .map(make_sample_fn)
+            .batched(batch_size, collation_fn=collate_fn)
+        )
         webdataset_db.batch_size = batch_size
 
         return webdataset_db

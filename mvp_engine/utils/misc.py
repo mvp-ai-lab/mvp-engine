@@ -99,7 +99,9 @@ class Timer:
         """
         return self.start()
 
-    def set_progress(self, current_batch: int, total_batches: Optional[int] = None) -> None:
+    def set_progress(
+        self, current_batch: int, total_batches: Optional[int] = None
+    ) -> None:
         """Manually set the current progress.
 
         Useful when resuming from a checkpoint.
@@ -238,25 +240,30 @@ def format_time(seconds: float) -> str:
     minutes, secs = divmod(remainder, 60)
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
+
 def freeze(module: nn.Module):
     module.eval()
     for p in module.parameters():
         p.requires_grad = False
+
 
 def find_optimizable_params(module: nn.Module):
     for p in module.parameters():
         if p.requires_grad:
             yield p
 
+
 def get_device(index: int = 0) -> torch.device:
     if torch.cuda.is_available():
         return torch.device(f"cuda:{index}")
     else:
         try:
-            import torch_npu
+            import torch_npu  # noqa: F401
+
             return torch.device(f"npu:{index}")
         except ImportError:
             return torch.device("cpu")
+
 
 def get_git_info():
     branch = "None"
@@ -285,4 +292,3 @@ def get_git_info():
         pass
 
     return {"branch": branch, "commit_hash": commit_hash}
-

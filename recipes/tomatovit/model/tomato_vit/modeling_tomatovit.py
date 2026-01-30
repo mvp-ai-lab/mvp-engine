@@ -265,7 +265,9 @@ class VideoRotaryEmbedding(nn.Module):
         assert head_dim % 2 == 0, "head_dim must be even for rotary."
         assert head_dim % 16 == 0, "head_dim must be divisible by 16."
         half = head_dim // 2
-        assert half % 16 == 0, "head_dim//2 must also be divisible by 16 to split into 4:6:6."
+        assert half % 16 == 0, (
+            "head_dim//2 must also be divisible by 16 to split into 4:6:6."
+        )
 
         self.head_dim = head_dim
         self.half = half
@@ -277,17 +279,20 @@ class VideoRotaryEmbedding(nn.Module):
 
         self.register_buffer(
             "inv_freq_t",
-            1.0 / (base ** (torch.arange(self.t_size, dtype=torch.float32) / self.t_size)),
+            1.0
+            / (base ** (torch.arange(self.t_size, dtype=torch.float32) / self.t_size)),
             persistent=False,
         )
         self.register_buffer(
             "inv_freq_h",
-            1.0 / (base ** (torch.arange(self.h_size, dtype=torch.float32) / self.h_size)),
+            1.0
+            / (base ** (torch.arange(self.h_size, dtype=torch.float32) / self.h_size)),
             persistent=False,
         )
         self.register_buffer(
             "inv_freq_w",
-            1.0 / (base ** (torch.arange(self.w_size, dtype=torch.float32) / self.w_size)),
+            1.0
+            / (base ** (torch.arange(self.w_size, dtype=torch.float32) / self.w_size)),
             persistent=False,
         )
 
@@ -320,7 +325,9 @@ class MultiheadAttentionPoolingHead(nn.Module):
         super().__init__()
         self.embed_dim = config.hidden_size
         self.probe = nn.Parameter(torch.randn(1, 1, config.hidden_size))
-        self.attention = nn.MultiheadAttention(config.hidden_size, config.num_attention_heads, batch_first=True)
+        self.attention = nn.MultiheadAttention(
+            config.hidden_size, config.num_attention_heads, batch_first=True
+        )
         self.norm = nn.RMSNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.mlp = SiglipMLP(config)
 
@@ -361,14 +368,18 @@ class TomatoViTEmbeddings(nn.Module):
         batch_size, channels, t_frames, height, width = pixel_values.shape
 
         # Merge time into batch for Conv2d
-        x_2d = pixel_values.permute(0, 2, 1, 3, 4).reshape(batch_size * t_frames, channels, height, width)
+        x_2d = pixel_values.permute(0, 2, 1, 3, 4).reshape(
+            batch_size * t_frames, channels, height, width
+        )
 
         # Patch Embed
         embeddings = self.patch_embedding(x_2d)  # (B*T, C, Hp, Wp)
         embeddings = embeddings.flatten(2).transpose(1, 2)  # (B*T, L_frame, C)
 
         # Flatten all patches
-        total_patches = t_frames * (height // self.patch_size) * (width // self.patch_size)
+        total_patches = (
+            t_frames * (height // self.patch_size) * (width // self.patch_size)
+        )
         embeddings = embeddings.reshape(batch_size, total_patches, self.embed_dim)
 
         return embeddings
@@ -410,15 +421,25 @@ class TomatoViTAttention(nn.Module):
         value_states = self.v_proj(hidden_states)
 
         # (B, L, H, D) -> Transpose to (B, H, L, D)
-        query_states = query_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        key_states = key_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        query_states = query_states.view(
+            batch_size, q_len, self.num_heads, self.head_dim
+        ).transpose(1, 2)
+        key_states = key_states.view(
+            batch_size, q_len, self.num_heads, self.head_dim
+        ).transpose(1, 2)
+        value_states = value_states.view(
+            batch_size, q_len, self.num_heads, self.head_dim
+        ).transpose(1, 2)
 
         if rotary_pos_emb is not None:
-            query_states, key_states = apply_rotary_pos_emb(query_states, key_states, rotary_pos_emb)
+            query_states, key_states = apply_rotary_pos_emb(
+                query_states, key_states, rotary_pos_emb
+            )
 
         # Calculate attention scores
-        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) * self.scale
+        attn_weights = (
+            torch.matmul(query_states, key_states.transpose(2, 3)) * self.scale
+        )
 
         if attention_mask is not None:
             if attention_mask.size() != (batch_size, 1, q_len, q_len):
@@ -428,7 +449,9 @@ class TomatoViTAttention(nn.Module):
 
         # FIX: Remove dtype=torch.float32 to stay in original dtype (bf16/fp16)
         attn_weights = nn.functional.softmax(attn_weights, dim=-1)
-        attn_weights = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
+        attn_weights = nn.functional.dropout(
+            attn_weights, p=self.dropout, training=self.training
+        )
 
         attn_output = torch.matmul(attn_weights, value_states)
 
@@ -451,7 +474,9 @@ class TomatoViTFlashAttention2(nn.Module):
         super().__init__()
 
         if not is_flash_attn_2_available():
-            raise ImportError("Flash Attention 2 is not available. Please install it to use TomatoViTFlashAttention2.")
+            raise ImportError(
+                "Flash Attention 2 is not available. Please install it to use TomatoViTFlashAttention2."
+            )
 
         self.config = config
         self.embed_dim = config.hidden_size
@@ -487,9 +512,13 @@ class TomatoViTFlashAttention2(nn.Module):
         value_states = self.v_proj(hidden_states)
 
         # Flash Attention requires (B, L, H, D) format
-        query_states = query_states.view(batch_size, q_len, self.num_heads, self.head_dim)
+        query_states = query_states.view(
+            batch_size, q_len, self.num_heads, self.head_dim
+        )
         key_states = key_states.view(batch_size, q_len, self.num_heads, self.head_dim)
-        value_states = value_states.view(batch_size, q_len, self.num_heads, self.head_dim)
+        value_states = value_states.view(
+            batch_size, q_len, self.num_heads, self.head_dim
+        )
 
         # Apply RoPE if provided
         if rotary_pos_emb is not None:
@@ -497,7 +526,9 @@ class TomatoViTFlashAttention2(nn.Module):
             query_states = query_states.transpose(1, 2)
             key_states = key_states.transpose(1, 2)
             # NOTE: apply_rotary_pos_emb now ensures NO float32 cast happens
-            query_states, key_states = apply_rotary_pos_emb(query_states, key_states, rotary_pos_emb)
+            query_states, key_states = apply_rotary_pos_emb(
+                query_states, key_states, rotary_pos_emb
+            )
             # Transpose back: (B, H, L, D) -> (B, L, H, D)
             query_states = query_states.transpose(1, 2)
             key_states = key_states.transpose(1, 2)
@@ -677,7 +708,9 @@ class TomatoViTEncoderLayer(nn.Module):
         super().__init__()
         self.embed_dim = config.hidden_size
         # Get attention implementation from config, default to "flash_attention_2"
-        attn_implementation = getattr(config, "_attn_implementation", "flash_attention_2")
+        attn_implementation = getattr(
+            config, "_attn_implementation", "flash_attention_2"
+        )
         if attn_implementation not in TOMATOVIT_ATTENTION_CLASSES:
             raise ValueError(
                 f"Unknown attention implementation: {attn_implementation}. "
@@ -711,7 +744,9 @@ class TomatoViTEncoderLayer(nn.Module):
         hidden_states = self.mlp(hidden_states)
         hidden_states = residual + hidden_states
 
-        outputs = (hidden_states, attn_weights) if output_attentions else (hidden_states,)
+        outputs = (
+            (hidden_states, attn_weights) if output_attentions else (hidden_states,)
+        )
         return outputs
 
 
@@ -744,7 +779,9 @@ class TomatoViTMixtureEncoderLayer(nn.Module):
         self.embed_dim = config.hidden_size
 
         # Get attention implementation from config, default to "flash_attention_2"
-        attn_implementation = getattr(config, "_attn_implementation", "flash_attention_2")
+        attn_implementation = getattr(
+            config, "_attn_implementation", "flash_attention_2"
+        )
         if attn_implementation not in TOMATOVIT_MOT_ATTENTION_CLASSES:
             raise ValueError(
                 f"Unknown MoT attention implementation: {attn_implementation}. "
@@ -775,7 +812,9 @@ class TomatoViTMixtureEncoderLayer(nn.Module):
         rotary_pos_emb_a: Optional[torch.Tensor] = None,
         rotary_pos_emb_b: Optional[torch.Tensor] = None,
         output_attentions: bool = False,
-    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+    ) -> Tuple[
+        torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]
+    ]:
         """
         Forward pass for MoT encoder layer.
 
@@ -839,17 +878,23 @@ class TomatoViTEncoder(nn.Module):
         super().__init__()
         self.config = config
 
-        self.mixture_layers = nn.ModuleList([TomatoViTMixtureEncoderLayer(config) for _ in config.mot_layers])
+        self.mixture_layers = nn.ModuleList(
+            [TomatoViTMixtureEncoderLayer(config) for _ in config.mot_layers]
+        )
         # With the help of TomatoViTIdentityEncoderLayer, we can get the correct layers with the layer indices.
         self.layers = nn.ModuleList(
             [
-                TomatoViTEncoderLayer(config) if i not in config.mot_layers else TomatoViTIdentityEncoderLayer(config)
+                TomatoViTEncoderLayer(config)
+                if i not in config.mot_layers
+                else TomatoViTIdentityEncoderLayer(config)
                 for i in range(config.num_hidden_layers)
             ]
         )
         self.layers_depth = nn.ModuleList(
             [
-                TomatoViTEncoderLayer(config) if i not in config.mot_layers else TomatoViTIdentityEncoderLayer(config)
+                TomatoViTEncoderLayer(config)
+                if i not in config.mot_layers
+                else TomatoViTIdentityEncoderLayer(config)
                 for i in range(config.num_hidden_layers)
             ]
         )
@@ -875,11 +920,15 @@ class TomatoViTEncoder(nn.Module):
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
                 if hidden_states_depth is not None:
-                    all_hidden_states_depth = all_hidden_states_depth + (hidden_states_depth,)
+                    all_hidden_states_depth = all_hidden_states_depth + (
+                        hidden_states_depth,
+                    )
 
             if layer_i in self.config.mot_layers:
                 # MoT layer: joint attention between RGB and Depth
-                mixture_layer = self.mixture_layers[self.config.mot_layers.index(layer_i)]
+                mixture_layer = self.mixture_layers[
+                    self.config.mot_layers.index(layer_i)
+                ]
                 mixture_layer_outputs = mixture_layer(
                     hidden_states,
                     hidden_states_depth,
@@ -893,9 +942,13 @@ class TomatoViTEncoder(nn.Module):
                 hidden_states_depth = mixture_layer_outputs[1]
 
                 if output_attentions:
-                    all_self_attentions = all_self_attentions + (mixture_layer_outputs[2],)
+                    all_self_attentions = all_self_attentions + (
+                        mixture_layer_outputs[2],
+                    )
                     if hidden_states_depth is not None:
-                        all_self_attentions_depth = all_self_attentions_depth + (mixture_layer_outputs[3],)
+                        all_self_attentions_depth = all_self_attentions_depth + (
+                            mixture_layer_outputs[3],
+                        )
             else:
                 # Regular layer: separate attention for RGB and Depth
                 layer_outputs = layer(
@@ -920,12 +973,16 @@ class TomatoViTEncoder(nn.Module):
                 if output_attentions:
                     all_self_attentions = all_self_attentions + (layer_outputs[1],)
                     if hidden_states_depth is not None:
-                        all_self_attentions_depth = all_self_attentions_depth + (layer_outputs_depth[1],)
+                        all_self_attentions_depth = all_self_attentions_depth + (
+                            layer_outputs_depth[1],
+                        )
 
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
             if hidden_states_depth is not None:
-                all_hidden_states_depth = all_hidden_states_depth + (hidden_states_depth,)
+                all_hidden_states_depth = all_hidden_states_depth + (
+                    hidden_states_depth,
+                )
 
         if not return_dict:
             return tuple(
@@ -1018,7 +1075,9 @@ class TomatoViTModel(TomatoViTPreTrainedModel):
         self.post_init()
 
     @add_start_docstrings_to_model_forward(TOMATO_VIT_INPUTS_DOCSTRING)
-    @replace_return_docstrings(output_type=BaseModelOutputWithPooling, config_class=TomatoViTConfig)
+    @replace_return_docstrings(
+        output_type=BaseModelOutputWithPooling, config_class=TomatoViTConfig
+    )
     def forward(
         self,
         pixel_values: torch.Tensor,
@@ -1054,16 +1113,26 @@ class TomatoViTModel(TomatoViTPreTrainedModel):
         >>> last_hidden_states = outputs.last_hidden_state
         ```
         """
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        output_attentions = (
+            output_attentions
+            if output_attentions is not None
+            else self.config.output_attentions
         )
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        output_hidden_states = (
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
+        )
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         # Determine video dimensions for RoPE
         # Note: pixel_values passed to embeddings can be 4D only for now
         if pixel_values.dim() != 4:
-            raise NotImplementedError("TomatoViTModel currently expects 4D pixel_values (B,C,H,W).")
+            raise NotImplementedError(
+                "TomatoViTModel currently expects 4D pixel_values (B,C,H,W)."
+            )
         else:
             t_frames = 1
             height = pixel_values.shape[2]
@@ -1080,16 +1149,26 @@ class TomatoViTModel(TomatoViTPreTrainedModel):
         # 2. Mask Handling
         if mask_ratio > 0.0:
             num_masked = int(total_patches * mask_ratio)
-            
+
             # Generate random mask indices for each sample in the batch
-            mask_indices = torch.rand(batch_size, total_patches, device=hidden_states.device).argsort(dim=-1)[:, :num_masked]
+            mask_indices = torch.rand(
+                batch_size, total_patches, device=hidden_states.device
+            ).argsort(dim=-1)[:, :num_masked]
 
             # Apply mask to hidden states
             if mask_rgb:
-                hidden_states[torch.arange(batch_size).unsqueeze(1), mask_indices] = self.mask_embedding.to(hidden_states_depth.device, dtype=hidden_states_depth.dtype)
+                hidden_states[torch.arange(batch_size).unsqueeze(1), mask_indices] = (
+                    self.mask_embedding.to(
+                        hidden_states_depth.device, dtype=hidden_states_depth.dtype
+                    )
+                )
 
             if mask_depth:
-                hidden_states_depth[torch.arange(batch_size).unsqueeze(1), mask_indices] = self.mask_embedding.to(hidden_states_depth.device, dtype=hidden_states_depth.dtype)
+                hidden_states_depth[
+                    torch.arange(batch_size).unsqueeze(1), mask_indices
+                ] = self.mask_embedding.to(
+                    hidden_states_depth.device, dtype=hidden_states_depth.dtype
+                )
         else:
             mask_indices = None
 
@@ -1105,7 +1184,9 @@ class TomatoViTModel(TomatoViTPreTrainedModel):
         freqs_visible = torch.cat([freqs_visible, freqs_visible], dim=-1)
 
         freqs_visible_depth = freqs_full.unsqueeze(0).expand(batch_size, -1, -1)
-        freqs_visible_depth = torch.cat([freqs_visible_depth, freqs_visible_depth], dim=-1)
+        freqs_visible_depth = torch.cat(
+            [freqs_visible_depth, freqs_visible_depth], dim=-1
+        )
 
         # 4. Pre-Norm & Encoder
         hidden_states = self.layernorm_pre(hidden_states)
@@ -1142,7 +1223,11 @@ class TomatoViTModel(TomatoViTPreTrainedModel):
             pooled_output_depth = self.head_depth(sequence_output_depth)
 
         if not return_dict:
-            return (sequence_output, pooled_output) + (sequence_output_depth, pooled_output_depth) + encoder_outputs[2:]
+            return (
+                (sequence_output, pooled_output)
+                + (sequence_output_depth, pooled_output_depth)
+                + encoder_outputs[2:]
+            )
 
         return TomatoViTModelOutputWithPooling(
             last_hidden_state=sequence_output,
@@ -1153,7 +1238,7 @@ class TomatoViTModel(TomatoViTPreTrainedModel):
             pooler_output_depth=pooled_output_depth,
             hidden_states_depth=encoder_outputs.hidden_states_depth,
             attentions_depth=encoder_outputs.attentions_depth,
-            mask=mask_indices
+            mask=mask_indices,
         )
 
 
