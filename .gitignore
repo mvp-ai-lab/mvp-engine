@@ -179,3 +179,4 @@ slurmlogs
 # macOS
 .DS_Store
 .vscode
+.idea

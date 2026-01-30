@@ -16,6 +16,7 @@ def _find_key(sample: dict, prefix: str) -> Optional[str]:
     """
     return next((k for k in sample.keys() if k.startswith(prefix)), None)
 
+
 def _decode_data(
     sample: dict,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -30,16 +31,21 @@ def _decode_data(
     """
     image_key = _find_key(sample, "images.")
     if image_key is None:
-        raise KeyError("No image key found in sample (expected key starting with 'images.')")
+        raise KeyError(
+            "No image key found in sample (expected key starting with 'images.')"
+        )
 
     depth_key = _find_key(sample, "depths.")
     if depth_key is None:
-        raise KeyError("No depth key found in sample (expected key starting with 'depths.')")
+        raise KeyError(
+            "No depth key found in sample (expected key starting with 'depths.')"
+        )
 
     image = np.frombuffer(sample[image_key], dtype=np.uint8)
     depth = np.frombuffer(sample[depth_key], dtype=np.uint8)
 
     return image, depth
+
 
 def make_sample(
     sample: dict,
@@ -69,8 +75,9 @@ def make_sample(
     meta = sample["meta.json"]
     image, depth = _decode_data(sample)
 
-    label = torch.tensor(labels[meta['id']])
+    label = torch.tensor(labels[meta["id"]])
     return image, depth, label
+
 
 def collate_fn(batch):
     images, depths, labels = zip(*batch)

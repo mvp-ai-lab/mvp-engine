@@ -16,7 +16,12 @@ class Backend:
         """
         raise NotImplementedError
 
-    def log_metrics(self, metrics: Mapping[str, Union[float, str]], step: int, epoch: Optional[int] = None) -> None:
+    def log_metrics(
+        self,
+        metrics: Mapping[str, Union[float, str]],
+        step: int,
+        epoch: Optional[int] = None,
+    ) -> None:
         """Log aggregated metric values.
 
         Args:

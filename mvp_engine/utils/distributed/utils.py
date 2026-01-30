@@ -30,24 +30,24 @@ def is_main_process() -> bool:
 
 def broadcast_from_main(obj: Any, group: Optional[dist.ProcessGroup] = None) -> Any:
     """Broadcast an object from the main process to all other processes.
-    
+
     Args:
         obj: The object to broadcast from rank 0.
         group: Optional process group. If None, creates a new gloo group.
-    
+
     Returns:
         The broadcasted object on all ranks.
     """
     if not dist.is_initialized():
         return obj
-    
+
     rank = get_rank()
     world_size = get_world_size()
-    
+
     # Create a new gloo group if none provided
     if group is None:
         group = dist.new_group(backend="gloo", ranks=list(range(world_size)))
-    
+
     if rank == 0:
         tensor = torch.tensor(bytearray(pickle.dumps(obj)), dtype=torch.uint8)
         size = torch.tensor([tensor.numel()], dtype=torch.long)

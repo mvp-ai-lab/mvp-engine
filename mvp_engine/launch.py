@@ -45,9 +45,10 @@ if __name__ == "__main__":
         recipe_parent = str(recipe_dir.parent)
         if recipe_parent not in sys.path:
             sys.path.insert(0, recipe_parent)
-        
+
         recipe_name = recipe_dir.name
         import importlib
+
         for py_file in sorted(recipe_dir.glob("**/*.py")):
             if py_file.name.startswith("_"):
                 continue
@@ -79,8 +80,8 @@ if __name__ == "__main__":
     finally:
         try:
             import torch.distributed as dist
+
             if dist.is_initialized():
                 dist.destroy_process_group()
         except Exception:
             pass
-

@@ -106,7 +106,9 @@ class Engine(ABC):
     @property
     def dtype(self) -> torch.dtype:
         """Compute dtype for mixed precision training."""
-        dtype_str = OmegaConf.select(self.config, "optim.mixed_precision", default="fp32")
+        dtype_str = OmegaConf.select(
+            self.config, "optim.mixed_precision", default="fp32"
+        )
         if dtype_str == "fp32":
             return torch.float32
         elif dtype_str == "fp16":
@@ -233,7 +235,8 @@ class Engine(ABC):
 
         global logger
         logger = init_logger(
-            logger_backends, interval=OmegaConf.select(self.config, "log.interval", default=20)
+            logger_backends,
+            interval=OmegaConf.select(self.config, "log.interval", default=20),
         )
 
     @abstractmethod
@@ -423,7 +426,9 @@ class Engine(ABC):
         logger.info("Initializing Timer...")
         self.timer = Timer(
             total_batches=self.total_steps,
-            window_size=OmegaConf.select(self.config, "log.timer_window_size", default=100),
+            window_size=OmegaConf.select(
+                self.config, "log.timer_window_size", default=100
+            ),
         )
 
     def run_train(self) -> None:
@@ -533,7 +538,9 @@ class Engine(ABC):
             self.scaler.unscale_(self.optimizer)
 
             # Gradient clipping
-            max_grad_norm = OmegaConf.select(self.config, "optim.clip_grad_norm", default=None)
+            max_grad_norm = OmegaConf.select(
+                self.config, "optim.clip_grad_norm", default=None
+            )
             if max_grad_norm is not None:
                 clip_grad_norm_(self.model.parameters(), max_grad_norm)
 
@@ -594,4 +601,6 @@ class Engine(ABC):
     @torch.no_grad()
     def evaluate(self):
         """Evaluate the model on the evaluation dataset."""
-        raise NotImplementedError("The evaluate method must be implemented in subclasses.")
+        raise NotImplementedError(
+            "The evaluate method must be implemented in subclasses."
+        )

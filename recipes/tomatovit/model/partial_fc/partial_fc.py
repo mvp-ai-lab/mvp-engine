@@ -11,6 +11,7 @@ from mvp_engine.utils.misc import get_device as _get_device
 def get_device():
     return _get_device(get_rank())
 
+
 class AllGatherFunc(torch.autograd.Function):
     """AllGather op with gradient backward"""
 
@@ -555,7 +556,9 @@ class PartialFC(torch.nn.Module):
             pass
         """
         with torch.no_grad():
-            positive = torch.unique(labels[index_positive], sorted=True).to(labels.device)
+            positive = torch.unique(labels[index_positive], sorted=True).to(
+                labels.device
+            )
             if self.num_sample - positive.size(0) >= 0:
                 perm = torch.rand(size=[self.num_local]).to(labels.device)
                 perm[positive] = 2.0
@@ -675,7 +678,9 @@ class PartialFC(torch.nn.Module):
         weight_6, labels_6 = self.sample(labels_6, index_positive_6)
         weight_7, labels_7 = self.sample(labels_7, index_positive_7)
 
-        with torch.amp.autocast(str(get_device()), torch.float16 if self.fp16 else torch.float32):
+        with torch.amp.autocast(
+            str(get_device()), torch.float16 if self.fp16 else torch.float32
+        ):
             if self.is_normlize:
                 norm_embeddings = F.normalize(embeddings)
                 norm_weight_activated_0 = F.normalize(weight_0)
