@@ -8,7 +8,7 @@ try:
 except ImportError:
     from mvp_engine.utils.log import simple_info
 
-    simple_info(f"Wandb is not installed!")
+    simple_info("Wandb is not installed!")
     _WANDB_AVAILABLE = False
 
 from numbers import Number
@@ -48,7 +48,9 @@ class WandbBackend(Backend):
                 project=project,
                 entity=entity,
                 name=id,
-                config=OmegaConf.to_container(config, resolve=True) if isinstance(config, DictConfig) else config,
+                config=OmegaConf.to_container(config, resolve=True)
+                if isinstance(config, DictConfig)
+                else config,
                 dir=str(path) if path else None,
                 resume="allow",
             )
@@ -59,7 +61,12 @@ class WandbBackend(Backend):
             conf_dict = OmegaConf.to_container(config, resolve=True)
             wandb.config.update(conf_dict, allow_val_change=True)
 
-    def log_metrics(self, metrics: Mapping[str, Union[float, str]], step: int, epoch: Optional[int] = None) -> None:
+    def log_metrics(
+        self,
+        metrics: Mapping[str, Union[float, str]],
+        step: int,
+        epoch: Optional[int] = None,
+    ) -> None:
         """Log metrics to wandb.
 
         Args:
