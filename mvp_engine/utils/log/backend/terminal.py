@@ -106,9 +106,7 @@ class TerminalBackend(Backend):
         """Tear down backend resources (no-op for terminal backend)."""
         return None
 
-    def _print_with_location(
-        self, message: str, level: str, level_color: str, location: str
-    ) -> None:
+    def _print_with_location(self, message: str, level: str, level_color: str, location: str) -> None:
         """Print message with caller location right-aligned at the end."""
         if self.console is None:
             return None
@@ -122,18 +120,14 @@ class TerminalBackend(Backend):
             main_content = f"[bold]{date_str}[/bold] | [bright_yellow]{self.id}[/bright_yellow] | [{level_color}]{level: <5}[/{level_color}] | [{level_color}]{message}[/{level_color}]"
 
         # Calculate plain text length (without markup)
-        plain_len = (
-            len(date_str) + len(self.id) + len(level) + len(message) + 15
-        )  # separators
+        plain_len = len(date_str) + len(self.id) + len(level) + len(message) + 15  # separators
         location_part = f"[dim cyan]{location}[/dim cyan]"
         location_len = len(location)
 
         # Calculate padding needed
         padding = terminal_width - plain_len - location_len - 1
         if padding > 0:
-            self.console.print(
-                f"{main_content}{' ' * padding}{location_part}", soft_wrap=True
-            )
+            self.console.print(f"{main_content}{' ' * padding}{location_part}", soft_wrap=True)
         else:
             self.console.print(f"{main_content} {location_part}", soft_wrap=True)
 

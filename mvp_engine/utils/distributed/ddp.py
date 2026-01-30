@@ -24,13 +24,9 @@ def prepare_ddp():
     if world_size <= 1:
         return
 
-    simple_info(
-        f"Setup DDP Initialization: [bold]rank {rank}/{world_size}[/bold] on [yellow]{device}[/yellow]..."
-    )
+    simple_info(f"Setup DDP Initialization: [bold]rank {rank}/{world_size}[/bold] on [yellow]{device}[/yellow]...")
 
-    dist.init_process_group(
-        backend="nccl", init_method="env://", world_size=world_size, rank=rank
-    )
+    dist.init_process_group(backend="nccl", init_method="env://", world_size=world_size, rank=rank)
 
     message = f"DDP Initialized [bold]rank {rank}/{world_size}[/bold] on [yellow]{device}[/yellow]"
     simple_info(message)

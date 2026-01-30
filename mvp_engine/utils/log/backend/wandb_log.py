@@ -8,7 +8,7 @@ try:
 except ImportError:
     from mvp_engine.utils.log import simple_info
 
-    simple_info(f"Wandb is not installed!")
+    simple_info("Wandb is not installed!")
     _WANDB_AVAILABLE = False
 
 from numbers import Number

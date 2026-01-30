@@ -56,6 +56,4 @@ def simple_info(message: str) -> None:
 
     console = Console(color_system="auto")
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    console.print(
-        f"[bold]{date_str}[/bold] | [cyan]INFO[/cyan] | {message}", soft_wrap=True
-    )
+    console.print(f"[bold]{date_str}[/bold] | [cyan]INFO[/cyan] | {message}", soft_wrap=True)

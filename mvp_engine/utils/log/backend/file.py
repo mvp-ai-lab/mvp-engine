@@ -82,23 +82,17 @@ class FileBackend(Backend):
     def info(self, message: str) -> None:
         """Write an info-level message to the log file."""
         if self.enable and self.log_file:
-            self.log_file.write(
-                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {self.id} | INFO  | {message}\n"
-            )
+            self.log_file.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {self.id} | INFO  | {message}\n")
             self.log_file.flush()
 
     def warning(self, message: str) -> None:
         """Write a warning message to the log file."""
         if self.enable and self.log_file:
-            self.log_file.write(
-                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {self.id} | WARN  | {message}\n"
-            )
+            self.log_file.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {self.id} | WARN  | {message}\n")
             self.log_file.flush()
 
     def error(self, message: str) -> None:
         """Write an error message to the log file."""
         if self.enable and self.log_file:
-            self.log_file.write(
-                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {self.id} | ERROR | {message}\n"
-            )
+            self.log_file.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {self.id} | ERROR | {message}\n")
             self.log_file.flush()

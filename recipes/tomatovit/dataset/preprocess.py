@@ -31,15 +31,11 @@ def _decode_data(
     """
     image_key = _find_key(sample, "images.")
     if image_key is None:
-        raise KeyError(
-            "No image key found in sample (expected key starting with 'images.')"
-        )
+        raise KeyError("No image key found in sample (expected key starting with 'images.')")
 
     depth_key = _find_key(sample, "depths.")
     if depth_key is None:
-        raise KeyError(
-            "No depth key found in sample (expected key starting with 'depths.')"
-        )
+        raise KeyError("No depth key found in sample (expected key starting with 'depths.')")
 
     image = np.frombuffer(sample[image_key], dtype=np.uint8)
     depth = np.frombuffer(sample[depth_key], dtype=np.uint8)

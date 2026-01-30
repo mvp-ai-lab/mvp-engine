@@ -41,14 +41,10 @@ class ResampledShards(IterableDataset):
         self.urls = expand_source(urls, max_urls)
         if empty_check:
             if len(self.urls) == 0:
-                raise ValueError(
-                    "empty_check=True, but no shards found in ResampledShards"
-                )
+                raise ValueError("empty_check=True, but no shards found in ResampledShards")
         assert isinstance(self.urls[0], str)
         self.nshards = nshards
-        self.worker_seed = (
-            utils.pytorch_worker_seed if worker_seed is None else worker_seed
-        )
+        self.worker_seed = utils.pytorch_worker_seed if worker_seed is None else worker_seed
         self.deterministic = deterministic
         self.seed = seed
         self.epoch = -1

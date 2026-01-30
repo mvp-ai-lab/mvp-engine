@@ -106,9 +106,7 @@ class Engine(ABC):
     @property
     def dtype(self) -> torch.dtype:
         """Compute dtype for mixed precision training."""
-        dtype_str = OmegaConf.select(
-            self.config, "optim.mixed_precision", default="fp32"
-        )
+        dtype_str = OmegaConf.select(self.config, "optim.mixed_precision", default="fp32")
         if dtype_str == "fp32":
             return torch.float32
         elif dtype_str == "fp16":
@@ -168,9 +166,7 @@ class Engine(ABC):
 
             prepare_ddp()
         else:
-            raise NotImplementedError(
-                f"Unsupported parallel backend: {parallel_backend}"
-            )
+            raise NotImplementedError(f"Unsupported parallel backend: {parallel_backend}")
 
     def prepare_config(self, config: DictConfig) -> DictConfig:
         """Augment configuration with runtime values.
@@ -194,9 +190,9 @@ class Engine(ABC):
         config.git_info = f"<{git_info['branch']}> {git_info['commit_hash']}"
 
         # 2. Set run ID
-        local_run_id = f"{
-            OmegaConf.select(config, 'project.name', default='mvp-engine')
-        }_{time.strftime('%Y%m%d%H%M%S', time.localtime())}"
+        local_run_id = f"{OmegaConf.select(config, 'project.name', default='mvp-engine')}_{
+            time.strftime('%Y%m%d%H%M%S', time.localtime())
+        }"
         config.project.run_id = broadcast_from_main(local_run_id)
 
         # 3. Set output directory
@@ -214,15 +210,11 @@ class Engine(ABC):
             logger_backends = [TerminalBackend(id=self.config.project.run_id)]
         else:
             logger_backends = []
-            config_backends = OmegaConf.select(
-                self.config, "log.backends", default=["terminal", "file"]
-            )
+            config_backends = OmegaConf.select(self.config, "log.backends", default=["terminal", "file"])
 
             for backend in config_backends:
                 if backend == "terminal":
-                    logger_backends.append(
-                        TerminalBackend(id=self.config.project.run_id)
-                    )
+                    logger_backends.append(TerminalBackend(id=self.config.project.run_id))
                 elif backend == "file":
                     logger_backends.append(
                         FileBackend(
@@ -261,9 +253,7 @@ class Engine(ABC):
         Args:
             force: If True, save regardless of save_interval.
         """
-        save_interval = OmegaConf.select(
-            self.config, "loop.checkpoint.interval", default=1000
-        )
+        save_interval = OmegaConf.select(self.config, "loop.checkpoint.interval", default=1000)
         if not force and (self.step % save_interval != 0):
             return
         logger.info(f"Saving checkpoint for step {self.step}...")
@@ -276,17 +266,13 @@ class Engine(ABC):
         # Keep only last N checkpoints
         if is_main_process():
             all_checkpoints = os.listdir(str(checkpoints_dir))
-            if len(all_checkpoints) >= OmegaConf.select(
-                self.config, "loop.checkpoint.keep_n", default=5
-            ):
+            if len(all_checkpoints) >= OmegaConf.select(self.config, "loop.checkpoint.keep_n", default=5):
                 checkpoint_paths = sorted(
                     all_checkpoints,
                     key=lambda dir: int(dir.split("_")[-1]),
                 )
                 delete_n = (
-                    len(checkpoint_paths)
-                    - OmegaConf.select(self.config, "loop.checkpoint.keep_n", default=5)
-                    + 1
+                    len(checkpoint_paths) - OmegaConf.select(self.config, "loop.checkpoint.keep_n", default=5) + 1
                 )
                 for delete_path in checkpoint_paths[:delete_n]:
                     shutil.rmtree(checkpoints_dir / delete_path)
@@ -327,9 +313,7 @@ class Engine(ABC):
             )
         else:
             if is_main_process():
-                raise NotImplementedError(
-                    f"Unsupported parallel backend: {parallel_backend}"
-                )
+                raise NotImplementedError(f"Unsupported parallel backend: {parallel_backend}")
 
         torch.distributed.barrier()
 
@@ -343,18 +327,10 @@ class Engine(ABC):
 
         parallel_backend = OmegaConf.select(self.config, "parallel.type", default=None)
         if parallel_backend == "ddp":
-            self.model.module.load_state_dict(
-                torch.load(Path(ckpt_path) / "model.pt", map_location="cpu")
-            )
-            self.optimizer.load_state_dict(
-                torch.load(Path(ckpt_path) / "optimizer.pt", map_location="cpu")
-            )
-            self.scheduler.load_state_dict(
-                torch.load(Path(ckpt_path) / "scheduler.pt", map_location="cpu")
-            )
-            self.scaler.load_state_dict(
-                torch.load(Path(ckpt_path) / "scaler.pt", map_location="cpu")
-            )
+            self.model.module.load_state_dict(torch.load(Path(ckpt_path) / "model.pt", map_location="cpu"))
+            self.optimizer.load_state_dict(torch.load(Path(ckpt_path) / "optimizer.pt", map_location="cpu"))
+            self.scheduler.load_state_dict(torch.load(Path(ckpt_path) / "scheduler.pt", map_location="cpu"))
+            self.scaler.load_state_dict(torch.load(Path(ckpt_path) / "scaler.pt", map_location="cpu"))
             engine_state = torch.load(Path(ckpt_path) / "engine.pt", map_location="cpu")
             self.step = engine_state["step"]
             self.epoch = engine_state["epoch"]
@@ -362,18 +338,14 @@ class Engine(ABC):
             torch.set_rng_state(engine_state["rng_state"])
             torch.cuda.set_rng_state_all(engine_state["cuda_rng_state"])
         else:
-            raise NotImplementedError(
-                f"Unsupported parallel backend: {parallel_backend}"
-            )
+            raise NotImplementedError(f"Unsupported parallel backend: {parallel_backend}")
 
     def accumulate_step(self, skip_increase: bool = False) -> bool:
         """Check if the gradients should be synchronized this step."""
         if not skip_increase:
             self._accumulate_step += 1
 
-        gradient_accumulation_steps = OmegaConf.select(
-            self.config, "optim.gradient_accumulation_steps", default=1
-        )
+        gradient_accumulation_steps = OmegaConf.select(self.config, "optim.gradient_accumulation_steps", default=1)
 
         if self._accumulate_step % gradient_accumulation_steps == 0:
             self._accumulate_step = 0
@@ -426,9 +398,7 @@ class Engine(ABC):
         logger.info("Initializing Timer...")
         self.timer = Timer(
             total_batches=self.total_steps,
-            window_size=OmegaConf.select(
-                self.config, "log.timer_window_size", default=100
-            ),
+            window_size=OmegaConf.select(self.config, "log.timer_window_size", default=100),
         )
 
     def run_train(self) -> None:
@@ -523,9 +493,7 @@ class Engine(ABC):
         is_sync = self.accumulate_step()
 
         # Scale loss for gradient accumulation
-        gradient_accumulation_steps = OmegaConf.select(
-            self.config, "optim.gradient_accumulation_steps", default=1
-        )
+        gradient_accumulation_steps = OmegaConf.select(self.config, "optim.gradient_accumulation_steps", default=1)
         loss = outputs["loss"] / gradient_accumulation_steps
 
         # Backward pass with optional DDP no_sync for accumulation
@@ -538,9 +506,7 @@ class Engine(ABC):
             self.scaler.unscale_(self.optimizer)
 
             # Gradient clipping
-            max_grad_norm = OmegaConf.select(
-                self.config, "optim.clip_grad_norm", default=None
-            )
+            max_grad_norm = OmegaConf.select(self.config, "optim.clip_grad_norm", default=None)
             if max_grad_norm is not None:
                 clip_grad_norm_(self.model.parameters(), max_grad_norm)
 
@@ -601,6 +567,4 @@ class Engine(ABC):
     @torch.no_grad()
     def evaluate(self):
         """Evaluate the model on the evaluation dataset."""
-        raise NotImplementedError(
-            "The evaluate method must be implemented in subclasses."
-        )
+        raise NotImplementedError("The evaluate method must be implemented in subclasses.")

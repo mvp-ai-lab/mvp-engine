@@ -99,9 +99,7 @@ class Timer:
         """
         return self.start()
 
-    def set_progress(
-        self, current_batch: int, total_batches: Optional[int] = None
-    ) -> None:
+    def set_progress(self, current_batch: int, total_batches: Optional[int] = None) -> None:
         """Manually set the current progress.
 
         Useful when resuming from a checkpoint.
@@ -282,11 +280,7 @@ def get_git_info():
     commit_hash = "None"
     try:
         commit_hash = (
-            subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], stderr=subprocess.STDOUT
-            )
-            .decode("utf-8")
-            .strip()
+            subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.STDOUT).decode("utf-8").strip()
         )
     except subprocess.CalledProcessError:
         pass

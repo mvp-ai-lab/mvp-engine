@@ -30,9 +30,7 @@ class iBOTLoss(nn.Module):
         self.teacher_temp_schedule = (
             np.concatenate(
                 (
-                    np.linspace(
-                        warmup_teacher_temp, teacher_temp, warmup_teacher_temp_steps
-                    ),
+                    np.linspace(warmup_teacher_temp, teacher_temp, warmup_teacher_temp_steps),
                     np.ones(nsteps - warmup_teacher_temp_steps) * teacher_temp,
                 )
             )
@@ -40,11 +38,8 @@ class iBOTLoss(nn.Module):
             else np.concatenate(
                 (
                     np.ones(mim_start_step) * warmup_teacher_temp,
-                    np.linspace(
-                        warmup_teacher_temp, teacher_temp, warmup_teacher_temp_steps
-                    ),
-                    np.ones(nsteps - warmup_teacher_temp_steps - mim_start_step)
-                    * teacher_temp,
+                    np.linspace(warmup_teacher_temp, teacher_temp, warmup_teacher_temp_steps),
+                    np.ones(nsteps - warmup_teacher_temp_steps - mim_start_step) * teacher_temp,
                 )
             )
         )
@@ -104,6 +99,4 @@ class iBOTLoss(nn.Module):
         patch_center = teacher_patch.mean(dim=[0, 1], keepdim=True)  # [1, 1, D]
         dist.all_reduce(patch_center)
         patch_center = patch_center / dist.get_world_size()
-        self.center = self.center * self.center_momentum + patch_center * (
-            1 - self.center_momentum
-        )
+        self.center = self.center * self.center_momentum + patch_center * (1 - self.center_momentum)
