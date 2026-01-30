@@ -48,9 +48,7 @@ class WandbBackend(Backend):
                 project=project,
                 entity=entity,
                 name=id,
-                config=OmegaConf.to_container(config, resolve=True)
-                if isinstance(config, DictConfig)
-                else config,
+                config=OmegaConf.to_container(config, resolve=True) if isinstance(config, DictConfig) else config,
                 dir=str(path) if path else None,
                 resume="allow",
             )
