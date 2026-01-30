@@ -175,6 +175,7 @@ checkpoints/
 .vscode
 *.pth
 slurmlogs
+.ruff_cache
 
 # macOS
 .DS_Store
