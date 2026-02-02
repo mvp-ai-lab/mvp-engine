@@ -18,13 +18,15 @@ dependencies = [
     "datasets",
     "transformers",
     "accelerate",
-    "torch",
-    "torchvision",
+    "torch==2.9.1",
+    "torchvision==0.24.1",
     "pyyaml",
     "wandb",
     "hydra-core",
     "omegaconf",
-    "webdataset"
+    "webdataset",
+    "rich",
+    "nvidia-dali-cuda120"
 ]
 
 [project.optional-dependencies]
