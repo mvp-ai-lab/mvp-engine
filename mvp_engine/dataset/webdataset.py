@@ -1,4 +1,3 @@
-import os
 import random
 import sys
 from copy import deepcopy
@@ -20,7 +19,6 @@ class ResampledShards(IterableDataset):
         nshards: int = sys.maxsize,
         seed: int = 0,
         worker_seed: Optional[Callable[[], int]] = None,
-        deterministic: bool = False,
         max_urls: int = int(1e6),
         empty_check: bool = True,
     ) -> None:
@@ -31,7 +29,6 @@ class ResampledShards(IterableDataset):
             nshards (int): The number of shards to yield. Defaults to sys.maxsize.
             seed (int): The seed for random number generation.
             worker_seed (Callable or None): A function to generate worker-specific seeds.
-            deterministic (bool): Whether to use deterministic sampling.
             max_urls (int): Maximum number of URLs to consider.
             empty_check (bool): Whether to check for empty URL list.
 
@@ -46,7 +43,6 @@ class ResampledShards(IterableDataset):
         assert isinstance(self.urls[0], str)
         self.nshards: int = nshards
         self.worker_seed: Callable[[], int] = utils.pytorch_worker_seed if worker_seed is None else worker_seed
-        self.deterministic: bool = deterministic
         self.seed: int = seed
         self.epoch: int = -1
 
@@ -57,10 +53,7 @@ class ResampledShards(IterableDataset):
             dict: A dictionary containing the URL of each shard.
         """
         self.epoch += 1
-        seed = utils.make_seed(self.seed)
-        if os.environ.get("WDS_SHOW_SEED", "0") == "1":
-            print(f"# ResampledShards seed {seed}")
-
+        seed = utils.make_seed(self.seed, self.epoch)
         self.rng = random.Random(seed)
         urls = deepcopy(self.urls)
         self.rng.shuffle(urls)
@@ -164,7 +157,6 @@ class WebDatasetBuilder:
             nshards=webdataset_db.pipeline[0].nshards,
             seed=webdataset_db.pipeline[0].seed,
             worker_seed=webdataset_db.pipeline[0].worker_seed,
-            deterministic=webdataset_db.pipeline[0].deterministic,
         )
 
         if len(self.joint_url_mapping_fns) > 0:
@@ -192,6 +184,8 @@ class WebDatasetBuilder:
                             additional_src = wd.WebDataset(
                                 additional_url,
                                 shardshuffle=False,
+                                nodesplitter=None,
+                                workersplitter=None,
                             )
                             additional_srcs.append(iter(additional_src))
 
@@ -212,6 +206,8 @@ class WebDatasetBuilder:
                             additional_src = wd.WebDataset(
                                 additional_url,
                                 shardshuffle=False,
+                                nodesplitter=None,
+                                workersplitter=None,
                             )
                             additional_srcs.append(iter(additional_src))
 
@@ -222,17 +218,16 @@ class WebDatasetBuilder:
                                 f"additional sample {additional_sample['__key__']}"
                             )
                             sample.update(additional_sample)
-
+                    except Exception as e:
+                        raise e
                     yield sample
 
             webdataset_db = webdataset_db.compose(join_samples)
 
-        webdataset_db = (
-            webdataset_db.shuffle(shuffle_buffer)
-            .decode()
-            .map(make_sample_fn)
-            .batched(batch_size, collation_fn=collate_fn)
-        )
+        if shuffle_buffer > 0:
+            webdataset_db = webdataset_db.shuffle(shuffle_buffer)
+
+        webdataset_db = webdataset_db.decode().map(make_sample_fn).batched(batch_size, collation_fn=collate_fn)
         webdataset_db.batch_size = batch_size
 
         return webdataset_db
