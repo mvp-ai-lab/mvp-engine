@@ -1023,6 +1023,7 @@ class TomatoViTModel(TomatoViTPreTrainedModel):
         self,
         pixel_values: torch.Tensor,
         pixel_values_depth: Optional[torch.Tensor] = None,
+        depth_valid_masks: Optional[torch.Tensor] = None,
         mask_ratio: Optional[float] = 0.0,
         mask_rgb: Optional[bool] = False,
         mask_depth: Optional[bool] = True,
@@ -1050,7 +1051,8 @@ class TomatoViTModel(TomatoViTPreTrainedModel):
         >>> model = TomatoViTModel.from_pretrained("mvp-ai-lab/tomato-vit")
         >>> pixel_values = torch.randn(1, 3, 224, 224)
         >>> pixel_values_depth = torch.randn(1, 1, 224, 224)
-        >>> outputs = model(pixel_values, pixel_values_depth=pixel_values_depth)
+        >>> depth_valid_masks = torch.randn(1, 1, 224, 224)
+        >>> outputs = model(pixel_values, pixel_values_depth=pixel_values_depth, depth_valid_masks=depth_valid_masks)
         >>> last_hidden_states = outputs.last_hidden_state
         ```
         """
@@ -1070,7 +1072,17 @@ class TomatoViTModel(TomatoViTPreTrainedModel):
             width = pixel_values.shape[3]
 
         if pixel_values_depth is not None and pixel_values_depth.shape[1] == 1:
-            pixel_values_depth = pixel_values_depth.repeat(1, 3, 1, 1)
+            if depth_valid_masks is not None:
+                pixel_values_depth = torch.cat(
+                    [
+                        pixel_values_depth,
+                        pixel_values_depth,
+                        depth_valid_masks.to(device=pixel_values_depth.device, dtype=pixel_values_depth.dtype),
+                    ],
+                    dim=1,
+                )
+            else:
+                pixel_values_depth = pixel_values_depth.repeat(1, 3, 1, 1)
 
         # 1. Embeddings
         hidden_states = self.embeddings(pixel_values)
