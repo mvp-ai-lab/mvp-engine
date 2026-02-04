@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebDataset Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+
+        .controls {
+            padding: 30px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 12px 16px;
+            border: 2px solid #dee2e6;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        button {
+            padding: 12px 24px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        button:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .stat-label {
+            color: #6c757d;
+            font-size: 0.85em;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+
+        .stat-value {
+            color: #212529;
+            font-size: 1.5em;
+            font-weight: 700;
+        }
+
+        .navigation {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 15px;
+            padding: 20px;
+            background: #f8f9fa;
+        }
+
+        .nav-info {
+            font-size: 1.1em;
+            font-weight: 600;
+            color: #495057;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .sample-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        .image-container {
+            background: #f8f9fa;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        .image-header {
+            background: #667eea;
+            color: white;
+            padding: 12px 20px;
+            font-weight: 600;
+            font-size: 1.1em;
+        }
+
+        .image-wrapper {
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 300px;
+            background: white;
+        }
+
+        .image-wrapper img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .metadata {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        .metadata h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+        }
+
+        .metadata pre {
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+            border-left: 4px solid #667eea;
+            overflow-x: auto;
+            font-size: 0.9em;
+            line-height: 1.6;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 6px;
+            border-left: 4px solid #f5c6cb;
+            margin-bottom: 20px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #6c757d;
+            font-size: 1.2em;
+        }
+
+        .loading::after {
+            content: '...';
+            animation: dots 1.5s steps(4, end) infinite;
+        }
+
+        @keyframes dots {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60%, 100% { content: '...'; }
+        }
+
+        .no-data {
+            text-align: center;
+            padding: 60px 20px;
+            color: #6c757d;
+        }
+
+        .no-data svg {
+            width: 120px;
+            height: 120px;
+            margin-bottom: 20px;
+            opacity: 0.5;
+        }
+
+        .no-data p {
+            font-size: 1.2em;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 WebDataset Viewer</h1>
+            <p>Visualize and explore WebDataset samples</p>
+        </div>
+
+        <div class="controls">
+            <div class="input-group">
+                <input type="text" id="datasetPath" placeholder="Enter dataset path (e.g., ./data/potato_v1/data)" 
+                       value="./data/potato_v1/data">
+                <button onclick="initDataset()">Load Dataset</button>
+            </div>
+
+            <div class="stats" id="stats" style="display: none;">
+                <div class="stat-card">
+                    <div class="stat-label">Shards</div>
+                    <div class="stat-value" id="numShards">-</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Samples Loaded</div>
+                    <div class="stat-value" id="numSamples">-</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Current Index</div>
+                    <div class="stat-value" id="currentIndex">-</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="navigation" id="navigation" style="display: none;">
+            <button onclick="previousSample()" id="prevBtn">← Previous</button>
+            <span class="nav-info" id="navInfo">Sample 1 of 100</span>
+            <button onclick="nextSample()" id="nextBtn">Next →</button>
+        </div>
+
+        <div class="content">
+            <div id="error" class="error" style="display: none;"></div>
+            <div id="loading" class="loading" style="display: none;">Loading</div>
+            
+            <div id="noData" class="no-data">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                    <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                    <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                </svg>
+                <p>No dataset loaded</p>
+                <p style="font-size: 0.9em; opacity: 0.7;">Enter a dataset path above to get started</p>
+            </div>
+
+            <div id="sampleContainer" style="display: none;">
+                <div class="sample-grid">
+                    <div class="image-container">
+                        <div class="image-header">RGB Image</div>
+                        <div class="image-wrapper" id="imageContainer">
+                            <img id="image" alt="RGB Image">
+                        </div>
+                    </div>
+                    <div class="image-container">
+                        <div class="image-header">Depth Map</div>
+                        <div class="image-wrapper" id="depthContainer">
+                            <img id="depth" alt="Depth Map">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="metadata">
+                    <h3>📋 Sample Metadata</h3>
+                    <pre id="metadata"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentIndex = 0;
+        let totalSamples = 0;
+
+        function showError(message) {
+            document.getElementById('error').textContent = message;
+            document.getElementById('error').style.display = 'block';
+            setTimeout(() => {
+                document.getElementById('error').style.display = 'none';
+            }, 5000);
+        }
+
+        function showLoading(show) {
+            document.getElementById('loading').style.display = show ? 'block' : 'none';
+        }
+
+        async function initDataset() {
+            const datasetPath = document.getElementById('datasetPath').value;
+            
+            if (!datasetPath) {
+                showError('Please enter a dataset path');
+                return;
+            }
+
+            showLoading(true);
+            document.getElementById('noData').style.display = 'none';
+
+            try {
+                const response = await fetch('/api/init', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ dataset_path: datasetPath })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to initialize dataset');
+                }
+
+                totalSamples = data.num_samples;
+                currentIndex = 0;
+
+                document.getElementById('numShards').textContent = data.num_shards;
+                document.getElementById('numSamples').textContent = data.num_samples;
+                document.getElementById('stats').style.display = 'grid';
+                document.getElementById('navigation').style.display = 'flex';
+
+                await loadSample(0);
+            } catch (error) {
+                showError(error.message);
+                showLoading(false);
+            }
+        }
+
+        async function loadSample(index) {
+            showLoading(true);
+
+            try {
+                const response = await fetch(`/api/sample/${index}`);
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to load sample');
+                }
+
+                currentIndex = data.index;
+                totalSamples = data.total;
+
+                // Update images
+                if (data.image) {
+                    document.getElementById('image').src = data.image;
+                    document.getElementById('imageContainer').style.display = 'flex';
+                } else {
+                    document.getElementById('imageContainer').innerHTML = '<p style="color: #999;">No image data</p>';
+                }
+
+                if (data.depth) {
+                    document.getElementById('depth').src = data.depth;
+                    document.getElementById('depthContainer').style.display = 'flex';
+                } else {
+                    document.getElementById('depthContainer').innerHTML = '<p style="color: #999;">No depth data</p>';
+                }
+
+                // Update metadata
+                const metadataObj = {
+                    '__key__': data.key,
+                    'image_key': data.image_key,
+                    'depth_key': data.depth_key,
+                    'all_keys': data.all_keys,
+                    'meta': data.meta
+                };
+                document.getElementById('metadata').textContent = JSON.stringify(metadataObj, null, 2);
+
+                // Update navigation
+                document.getElementById('currentIndex').textContent = data.index + 1;
+                document.getElementById('navInfo').textContent = `Sample ${data.index + 1} of ${data.total}`;
+                document.getElementById('prevBtn').disabled = data.index === 0;
+                document.getElementById('nextBtn').disabled = data.index >= data.total - 1;
+
+                // Show sample container
+                document.getElementById('sampleContainer').style.display = 'block';
+                document.getElementById('noData').style.display = 'none';
+                
+            } catch (error) {
+                showError(error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        function previousSample() {
+            if (currentIndex > 0) {
+                loadSample(currentIndex - 1);
+            }
+        }
+
+        function nextSample() {
+            if (currentIndex < totalSamples - 1) {
+                loadSample(currentIndex + 1);
+            }
+        }
+
+        // Keyboard navigation
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft') {
+                previousSample();
+            } else if (e.key === 'ArrowRight') {
+                nextSample();
+            }
+        });
+    </script>
+</body>
+</html>

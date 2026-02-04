@@ -59,7 +59,12 @@ class WandbBackend(Backend):
             conf_dict = OmegaConf.to_container(config, resolve=True)
             wandb.config.update(conf_dict, allow_val_change=True)
 
-    def log_metrics(self, metrics: Mapping[str, Union[float, str]], step: int, epoch: Optional[int] = None) -> None:
+    def log_metrics(
+        self,
+        metrics: Mapping[str, Union[float, str]],
+        step: int,
+        epoch: Optional[int] = None,
+    ) -> None:
         """Log metrics to wandb.
 
         Args:
