@@ -44,12 +44,12 @@ def parallelize_model(
         backend_kwargs: Backend-specific configuration dictionary.
 
             For DDP:
-                - device_mesh: DeviceMesh for data parallel dimension (auto-set from device_mesh["dp"])
+                - device_mesh: DeviceMesh for data parallel dimension (auto-set from device_mesh["ddp"])
                 - Additional kwargs passed to DistributedDataParallel constructor
 
             For FSDP2:
                 - target_classes: List of module class names to wrap with FSDP2 (default: [])
-                - mesh: DeviceMesh for data parallel dimension (auto-set from device_mesh["dp"])
+                - mesh: DeviceMesh for data parallel dimension (auto-set from device_mesh["fsdp2"])
                 - reshard_after_forward: Resharding strategy (default: None)
                 - mp_policy: Mixed precision policy (default: None)
                 - high_precision_modules / high_precision_mp_policy:
@@ -64,7 +64,7 @@ def parallelize_model(
 
     Example:
         >>> from torch.distributed.device_mesh import init_device_mesh
-        >>> device_mesh = init_device_mesh("cuda", (2,), mesh_dim_names=("dp",))
+        >>> device_mesh = init_device_mesh("cuda", (2,), mesh_dim_names=("ddp",))
         >>> model = MyModel().cuda()
         >>> parallel_model = parallelize_model(model, device_mesh, backend="ddp")
     """
