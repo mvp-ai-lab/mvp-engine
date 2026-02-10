@@ -150,7 +150,7 @@ class Engine(ABC):
 
     @property
     def unwrapped_model(self) -> torch.nn.Module:
-        """Return the underlying model, unwrapping DDP/FSDP if needed."""
+        """Return the underlying model, unwrapping DistributedDataParallel if needed."""
         if isinstance(self.model, DistributedDataParallel):
             return self.model.module
         return self.model
