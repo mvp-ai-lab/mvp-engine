@@ -963,7 +963,12 @@ class TomatoViTPreTrainedModel(PreTrainedModel):
     config_class = TomatoViTConfig
     base_model_prefix = "tomato_vit"
     supports_gradient_checkpointing = True
-    _no_split_modules = ["TomatoViTEncoderLayer"]
+    _no_split_modules = [
+        "TomatoViTEncoderLayer",
+        "TomatoViTMixtureEncoderLayer",
+        "TomatoViTIdentityEncoderLayer",
+        "MultiheadAttentionPoolingHead",
+    ]
     _supports_flash_attn_2 = True
 
     def _init_weights(self, module):

@@ -9,11 +9,13 @@ import torch
 from omegaconf import OmegaConf
 from pandas import read_parquet
 from torch.optim.lr_scheduler import LinearLR, PolynomialLR, SequentialLR
+from transformers.utils.logging import disable_progress_bar
 from webdataset import WebLoader
 
 from mvp_engine.dataset.webdataset import WebDatasetBuilder
+from mvp_engine.distributed.parallelize import parallelize_model
+from mvp_engine.distributed.utils import get_rank, get_world_size, is_main_process
 from mvp_engine.engine import ENGINE_REGISTRY, Engine
-from mvp_engine.utils.distributed.utils import get_rank, get_world_size, is_main_process
 from mvp_engine.utils.log import logger
 
 from ..dataset.dali import dali_wrapper
@@ -33,6 +35,7 @@ class TomatoViTEngine(Engine):
 
     def __init__(self, config):
         super().__init__(config)
+        disable_progress_bar()
 
     def prepare_dataloader(self, workflow="train"):
         if workflow == "train":
@@ -61,7 +64,7 @@ class TomatoViTEngine(Engine):
 
     def prepare_model(self):
         # 0. Main model
-        model = TomatoViTModel.from_pretrained(self.config.model.pretrained)
+        model = TomatoViTModel.from_pretrained(self.config.model.pretrained).to(self.device)
         logger.info(f" - Model name: {model.__class__.__name__}")
 
         if self.config.model.ibot.mask_ratio <= 0:
@@ -160,7 +163,7 @@ class TomatoViTEngine(Engine):
             embedding_size,
             warmup_teacher_temp=self.config.model.ibot.warmup_teacher_temp,
             teacher_temp=self.config.model.ibot.teacher_temp,
-            warmup_teacher_temp_steps=self.config.model.ibot.warmup_teacher_temp_steps,
+            warmup_teacher_steps=self.config.model.ibot.warmup_teacher_steps,
             nsteps=self.total_steps,
             student_temp=self.config.model.ibot.student_temp,
             center_momentum=self.config.model.ibot.center_momentum,
@@ -169,32 +172,45 @@ class TomatoViTEngine(Engine):
             warmup_steps=self.config.model.ibot.warmup_steps,
         ).to(self.device)
 
-        # 5. DDP wrap
-        if self.config.parallel.type == "ddp":
-            ddp_model = torch.nn.parallel.DistributedDataParallel(
-                model.to(self.device),
-                device_ids=[self.device.index] if self.device.type == "cuda" else None,
-                output_device=self.device.index if self.device.type == "cuda" else None,
+        # 5. Parallelize student and teacher
+        if self.config.parallel.type in ["ddp", "fsdp2"]:
+            parallelized_model = parallelize_model(
+                model,
+                device_mesh=self.device_mesh,
+                backend=self.config.parallel.type,
+                backend_kwargs=self.config.parallel.get("backend_kwargs", {}),
             )
+            # For FSDP2, also shard the teacher so each rank's local shard
+            # matches the student's shard, enabling direct EMA updates.
+            if self.config.parallel.type == "fsdp2":
+                backend_kwargs = dict(self.config.parallel.get("backend_kwargs", {}))
+                backend_kwargs.update({"reshard_after_forward": True})
+                parallelized_teacher = parallelize_model(
+                    self.teacher_model,
+                    device_mesh=self.device_mesh,
+                    backend="fsdp2",
+                    backend_kwargs=backend_kwargs,
+                )
+                self.teacher_model = parallelized_teacher
         else:
             raise NotImplementedError(f"Parallel type {self.config.parallel.type} not implemented.")
 
         # 5. Calculate model size in B
-        model_size = sum(p.numel() for p in ddp_model.parameters())
+        model_size = sum(p.numel() for p in parallelized_model.parameters())
         logger.info(f" - Model size: {model_size / 1e9:.4f} B")
-        trainable_size = sum(p.numel() for p in ddp_model.parameters() if p.requires_grad)
+        trainable_size = sum(p.numel() for p in parallelized_model.parameters() if p.requires_grad)
         logger.info(f" - Trainable model size: {trainable_size / 1e9:.4f} B")
 
         # 6. Compile model
-        ddp_model = torch.compile(
-            ddp_model, backend=self.config.optim.compile_backend, mode=self.config.optim.compile_mode
+        parallelized_model = torch.compile(
+            parallelized_model, backend=self.config.optim.compile_backend, mode=self.config.optim.compile_mode
         )
         self.teacher_model = torch.compile(
             self.teacher_model, backend=self.config.optim.compile_backend, mode=self.config.optim.compile_mode
         )
 
         # 7. Load from a checkpoint if specified
-        self.model = ddp_model
+        self.model = parallelized_model
         load_from_cfg = OmegaConf.select(self.config, "model.load_from", default=None)
         if load_from_cfg and load_from_cfg.path:
             self.load(
@@ -203,7 +219,7 @@ class TomatoViTEngine(Engine):
                 reset_teacher=load_from_cfg.reset_teacher,
             )
 
-        return ddp_model
+        return parallelized_model
 
     def prepare_optimizer(self):
         return torch.optim.AdamW(
@@ -315,7 +331,7 @@ class TomatoViTEngine(Engine):
 
             if reset_teacher:
                 # Reset teacher parameters to student parameters
-                for param_q, param_k in zip(self.model.module.parameters(), self.teacher_model.parameters()):
+                for param_q, param_k in zip(self.unwrapped_model.parameters(), self.teacher_model.parameters()):
                     param_k.data.copy_(param_q.detach().data)
         else:
             raise NotImplementedError(f"Unsupported parallel backend: {parallel_backend}")
@@ -406,7 +422,7 @@ class TomatoViTEngine(Engine):
                 step=self.step,
             )
             if self.config.model.ibot.mask_ratio > 0
-            else torch.tensor(0.0, device=self.device)
+            else (torch.tensor(0.0, device=self.device), torch.tensor(0.0, device=self.device))
         )
 
         total_loss = (
@@ -432,5 +448,7 @@ class TomatoViTEngine(Engine):
             # EMA update for the teacher
             with torch.no_grad():
                 m = self.momentum_schedule[self.step]  # momentum parameter
-                for param_q, param_k in zip(self.model.module.parameters(), self.teacher_model.parameters()):
+                for (n_q, param_q), (n_k, param_k) in zip(
+                    self.unwrapped_model.named_parameters(), self.teacher_model.named_parameters()
+                ):
                     param_k.data.mul_(m).add_((1 - m) * param_q.detach().data)
