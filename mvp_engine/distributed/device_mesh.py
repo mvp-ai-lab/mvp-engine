@@ -51,7 +51,7 @@ def initialize_device_mesh(
         else:
             raise ValueError("mesh_dim_names must be provided for multi-dimensional meshes")
 
-    simple_info(f"Device Mesh initializaing: {mesh_dim_names} ({mesh_shape})...")
+    simple_info(f"Device Mesh initializing: {mesh_dim_names} ({mesh_shape})...")
 
     device_mesh = init_device_mesh(
         device_type=device_type,
