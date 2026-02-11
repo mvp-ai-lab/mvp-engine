@@ -304,7 +304,7 @@ class Engine(ABC):
             parallel_save(
                 parallel_backend,
                 self.device_mesh,
-                str(cur_checkpoint_dir),
+                cur_checkpoint_dir,
                 self.model,
                 self.optimizer,
                 scheduler=self.scheduler,

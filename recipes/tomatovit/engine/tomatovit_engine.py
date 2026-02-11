@@ -330,7 +330,7 @@ class TomatoViTEngine(Engine):
                     dcp.save(
                         state_dict,
                         checkpoint_id=str(cur_checkpoint_dir / "teacher"),
-                        process_group=self.device_mesh["fsdp"].get_group(),
+                        process_group=self.device_mesh["fsdp2"].get_group(),
                         storage_writer=writer,
                     )
 
@@ -414,7 +414,7 @@ class TomatoViTEngine(Engine):
                 dcp.load(
                     state_dict,
                     checkpoint_id=str(teacher_model_path),
-                    process_group=self.device_mesh["fsdp"].get_group(),
+                    process_group=self.device_mesh["fsdp2"].get_group(),
                 )
                 set_model_state_dict(self.teacher_model, state_dict["model"])
 
@@ -423,7 +423,7 @@ class TomatoViTEngine(Engine):
             rgb_partial_fc_dict = repartition_fc(ckpt_path, world_size, rank, data_type="rgb")
             self.rgb_head.load_state_dict(rgb_partial_fc_dict, strict=False)
 
-            self.depth_head_optimizer = smart_load_optimizer(
+            smart_load_optimizer(
                 self.depth_head_optimizer,
                 "depth",
                 rank,
@@ -431,7 +431,7 @@ class TomatoViTEngine(Engine):
                 self.config.model.partial_fc.num_classes,
                 ckpt_path,
             )
-            self.rgb_head_optimizer = smart_load_optimizer(
+            smart_load_optimizer(
                 self.rgb_head_optimizer, "rgb", rank, world_size, self.config.model.partial_fc.num_classes, ckpt_path
             )
 
