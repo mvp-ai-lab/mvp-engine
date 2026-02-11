@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from torch import distributed
 
-from mvp_engine.utils.distributed.utils import get_rank
+from mvp_engine.distributed.utils import get_rank
 from mvp_engine.utils.misc import get_device as _get_device
 
 

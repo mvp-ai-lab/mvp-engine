@@ -36,7 +36,7 @@ model:
   ibot:
     teacher_temp: 0.04
     warmup_teacher_temp: 0.04
-    warmup_teacher_temp_steps: 1000
+    warmup_teacher_steps: 1000
     student_temp: 0.1
     center_momentum: 0.9
     lam: 1

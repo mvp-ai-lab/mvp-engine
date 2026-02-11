@@ -9,11 +9,13 @@ import torch
 from omegaconf import OmegaConf
 from pandas import read_parquet
 from torch.optim.lr_scheduler import LinearLR, PolynomialLR, SequentialLR
+from transformers.utils.logging import disable_progress_bar
 from webdataset import WebLoader
 
 from mvp_engine.dataset.webdataset import WebDatasetBuilder
+from mvp_engine.distributed.parallelize import parallelize_model
+from mvp_engine.distributed.utils import get_rank, get_world_size, is_main_process
 from mvp_engine.engine import ENGINE_REGISTRY, Engine
-from mvp_engine.utils.distributed.utils import get_rank, get_world_size, is_main_process
 from mvp_engine.utils.log import logger
 
 from ..dataset.dali import dali_wrapper
@@ -33,6 +35,11 @@ class TomatoViTEngine(Engine):
 
     def __init__(self, config):
         super().__init__(config)
+        disable_progress_bar()
+
+    @property
+    def _use_ibot_loss(self) -> bool:
+        return self.config.model.ibot.lam > 0 and self.config.model.ibot.mask_ratio > 0
 
     def prepare_dataloader(self, workflow="train"):
         if workflow == "train":
@@ -61,7 +68,7 @@ class TomatoViTEngine(Engine):
 
     def prepare_model(self):
         # 0. Main model
-        model = TomatoViTModel.from_pretrained(self.config.model.pretrained)
+        model = TomatoViTModel.from_pretrained(self.config.model.pretrained).to(self.device)
         logger.info(f" - Model name: {model.__class__.__name__}")
 
         if self.config.model.ibot.mask_ratio <= 0:
@@ -69,29 +76,30 @@ class TomatoViTEngine(Engine):
             model.mask_embedding = None
 
         # 1. Teacher model
-        self.teacher_model = deepcopy(model).to(self.device)
-        for param in self.teacher_model.parameters():
-            param.requires_grad = False
+        if self._use_ibot_loss:
+            self.teacher_model = deepcopy(model).to(self.device)
+            for param in self.teacher_model.parameters():
+                param.requires_grad = False
 
-        def cosine_scheduler(base_value, final_value, nsteps, warmup_steps=0, start_warmup_value=0):
-            """Cosine scheduler for momentum or learning rate."""
-            warmup_schedule = np.array([])
-            if warmup_steps > 0:
-                warmup_schedule = np.linspace(start_warmup_value, base_value, warmup_steps)
+            def cosine_scheduler(base_value, final_value, nsteps, warmup_steps=0, start_warmup_value=0):
+                """Cosine scheduler for momentum or learning rate."""
+                warmup_schedule = np.array([])
+                if warmup_steps > 0:
+                    warmup_schedule = np.linspace(start_warmup_value, base_value, warmup_steps)
 
-            iters = np.arange(nsteps - warmup_steps)
-            schedule = final_value + 0.5 * (base_value - final_value) * (1 + np.cos(np.pi * iters / len(iters)))
+                iters = np.arange(nsteps - warmup_steps)
+                schedule = final_value + 0.5 * (base_value - final_value) * (1 + np.cos(np.pi * iters / len(iters)))
 
-            schedule = np.concatenate((warmup_schedule, schedule))
-            assert len(schedule) == nsteps
-            return schedule
+                schedule = np.concatenate((warmup_schedule, schedule))
+                assert len(schedule) == nsteps
+                return schedule
 
-        self.momentum_schedule = cosine_scheduler(
-            base_value=0.996,
-            final_value=1.0,
-            nsteps=self.total_steps,
-            warmup_steps=0,
-        )
+            self.momentum_schedule = cosine_scheduler(
+                base_value=0.996,
+                final_value=1.0,
+                nsteps=self.total_steps,
+                warmup_steps=0,
+            )
 
         # 2. Partial FC heads
         embedding_size = model.config.hidden_size
@@ -156,45 +164,60 @@ class TomatoViTEngine(Engine):
                 param.requires_grad = False
 
         # 4. iBOT masked modeling loss
-        self.ibot_loss = iBOTLoss(
-            embedding_size,
-            warmup_teacher_temp=self.config.model.ibot.warmup_teacher_temp,
-            teacher_temp=self.config.model.ibot.teacher_temp,
-            warmup_teacher_temp_steps=self.config.model.ibot.warmup_teacher_temp_steps,
-            nsteps=self.total_steps,
-            student_temp=self.config.model.ibot.student_temp,
-            center_momentum=self.config.model.ibot.center_momentum,
-            lam=self.config.model.ibot.lam,
-            mim_start_step=self.config.model.ibot.mim_start_step,
-            warmup_steps=self.config.model.ibot.warmup_steps,
-        ).to(self.device)
+        if self._use_ibot_loss:
+            self.ibot_loss = iBOTLoss(
+                embedding_size,
+                warmup_teacher_temp=self.config.model.ibot.warmup_teacher_temp,
+                teacher_temp=self.config.model.ibot.teacher_temp,
+                warmup_teacher_steps=self.config.model.ibot.warmup_teacher_steps,
+                nsteps=self.total_steps,
+                student_temp=self.config.model.ibot.student_temp,
+                center_momentum=self.config.model.ibot.center_momentum,
+                lam=self.config.model.ibot.lam,
+                mim_start_step=self.config.model.ibot.mim_start_step,
+                warmup_steps=self.config.model.ibot.warmup_steps,
+            ).to(self.device)
 
-        # 5. DDP wrap
-        if self.config.parallel.type == "ddp":
-            ddp_model = torch.nn.parallel.DistributedDataParallel(
-                model.to(self.device),
-                device_ids=[self.device.index] if self.device.type == "cuda" else None,
-                output_device=self.device.index if self.device.type == "cuda" else None,
+        # 5. Parallelize student and teacher
+        if self.config.parallel.type in ["ddp", "fsdp2"]:
+            parallelized_model = parallelize_model(
+                model,
+                device_mesh=self.device_mesh,
+                backend=self.config.parallel.type,
+                backend_kwargs=self.config.parallel.get("backend_kwargs", {}),
             )
+            # For FSDP2, also shard the teacher so each rank's local shard
+            # matches the student's shard, enabling direct EMA updates.
+            if self.config.parallel.type == "fsdp2" and self._use_ibot_loss:
+                backend_kwargs = dict(self.config.parallel.get("backend_kwargs", {}))
+                backend_kwargs.update({"reshard_after_forward": True})
+                parallelized_teacher = parallelize_model(
+                    self.teacher_model,
+                    device_mesh=self.device_mesh,
+                    backend="fsdp2",
+                    backend_kwargs=backend_kwargs,
+                )
+                self.teacher_model = parallelized_teacher
         else:
             raise NotImplementedError(f"Parallel type {self.config.parallel.type} not implemented.")
 
         # 5. Calculate model size in B
-        model_size = sum(p.numel() for p in ddp_model.parameters())
+        model_size = sum(p.numel() for p in parallelized_model.parameters())
         logger.info(f" - Model size: {model_size / 1e9:.4f} B")
-        trainable_size = sum(p.numel() for p in ddp_model.parameters() if p.requires_grad)
+        trainable_size = sum(p.numel() for p in parallelized_model.parameters() if p.requires_grad)
         logger.info(f" - Trainable model size: {trainable_size / 1e9:.4f} B")
 
         # 6. Compile model
-        ddp_model = torch.compile(
-            ddp_model, backend=self.config.optim.compile_backend, mode=self.config.optim.compile_mode
+        parallelized_model = torch.compile(
+            parallelized_model, backend=self.config.optim.compile_backend, mode=self.config.optim.compile_mode
         )
-        self.teacher_model = torch.compile(
-            self.teacher_model, backend=self.config.optim.compile_backend, mode=self.config.optim.compile_mode
-        )
+        if self._use_ibot_loss:
+            self.teacher_model = torch.compile(
+                self.teacher_model, backend=self.config.optim.compile_backend, mode=self.config.optim.compile_mode
+            )
 
         # 7. Load from a checkpoint if specified
-        self.model = ddp_model
+        self.model = parallelized_model
         load_from_cfg = OmegaConf.select(self.config, "model.load_from", default=None)
         if load_from_cfg and load_from_cfg.path:
             self.load(
@@ -203,7 +226,7 @@ class TomatoViTEngine(Engine):
                 reset_teacher=load_from_cfg.reset_teacher,
             )
 
-        return ddp_model
+        return parallelized_model
 
     def prepare_optimizer(self):
         return torch.optim.AdamW(
@@ -315,16 +338,18 @@ class TomatoViTEngine(Engine):
 
             if reset_teacher:
                 # Reset teacher parameters to student parameters
-                for param_q, param_k in zip(self.model.module.parameters(), self.teacher_model.parameters()):
+                for param_q, param_k in zip(self.unwrapped_model.parameters(), self.teacher_model.parameters()):
                     param_k.data.copy_(param_q.detach().data)
         else:
             raise NotImplementedError(f"Unsupported parallel backend: {parallel_backend}")
 
     def run_train(self):
-        self.teacher_model.eval()
         self.rgb_head.train()
         self.depth_head.train()
-        self.ibot_loss.train()
+
+        if self._use_ibot_loss:
+            self.teacher_model.eval()
+            self.ibot_loss.train()
 
         return super().run_train()
 
@@ -378,7 +403,7 @@ class TomatoViTEngine(Engine):
                 pixel_values_depth=data["depths"],
                 mask_ratio=0,
             )
-            if self.config.model.ibot.mask_ratio > 0:
+            if self._use_ibot_loss:
                 masked_outputs = self.model(
                     pixel_values=data["images"],
                     pixel_values_depth=data["depths"],
@@ -386,10 +411,12 @@ class TomatoViTEngine(Engine):
                 )
             else:
                 masked_outputs = outputs
-            with torch.no_grad():
-                teacher_outputs = self.teacher_model(
-                    pixel_values=data["images"], pixel_values_depth=data["depths"], mask_ratio=0
-                )
+
+            if self._use_ibot_loss:
+                with torch.no_grad():
+                    teacher_outputs = self.teacher_model(
+                        pixel_values=data["images"], pixel_values_depth=data["depths"], mask_ratio=0
+                    )
 
         embeddings_rgb = outputs["pooler_output"].float()
         embeddings_depth = outputs["pooler_output_depth"].float()
@@ -405,8 +432,8 @@ class TomatoViTEngine(Engine):
                 student_mask=masked_outputs["mask"],
                 step=self.step,
             )
-            if self.config.model.ibot.mask_ratio > 0
-            else torch.tensor(0.0, device=self.device)
+            if self._use_ibot_loss
+            else (torch.tensor(0.0, device=self.device), torch.tensor(0.0, device=self.device))
         )
 
         total_loss = (
@@ -428,9 +455,11 @@ class TomatoViTEngine(Engine):
     def train_after_step(self, outputs: Dict) -> Dict:
         outputs = super().train_after_step(outputs)
 
-        if self.accumulate_step(skip_increase=True):
+        if self.accumulate_step(skip_increase=True) and self._use_ibot_loss:
             # EMA update for the teacher
             with torch.no_grad():
                 m = self.momentum_schedule[self.step]  # momentum parameter
-                for param_q, param_k in zip(self.model.module.parameters(), self.teacher_model.parameters()):
+                for (n_q, param_q), (n_k, param_k) in zip(
+                    self.unwrapped_model.named_parameters(), self.teacher_model.named_parameters()
+                ):
                     param_k.data.mul_(m).add_((1 - m) * param_q.detach().data)

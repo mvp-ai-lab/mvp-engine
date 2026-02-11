@@ -11,7 +11,7 @@ from typing import Mapping, Optional, Union
 
 from omegaconf import DictConfig, OmegaConf
 
-from mvp_engine.utils.distributed.utils import is_main_process
+from mvp_engine.distributed.utils import is_main_process
 
 from .backend import Backend
 

@@ -11,13 +11,14 @@ import torch
 from accelerate.utils import set_seed
 from addict import Dict
 from omegaconf import DictConfig, OmegaConf
+from torch.distributed.device_mesh import DeviceMesh
+from torch.distributed.fsdp import FSDPModule
+from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
-from mvp_engine.utils.distributed.utils import (
-    broadcast_from_main,
-    get_rank,
-    is_main_process,
-)
+from mvp_engine.distributed.device_mesh import initialize_device_mesh
+from mvp_engine.distributed.init import initialize_process_group
+from mvp_engine.distributed.utils import broadcast_from_main, get_rank, is_main_process
 from mvp_engine.utils.log import init_logger, logger
 from mvp_engine.utils.log.backend import FileBackend, TerminalBackend
 from mvp_engine.utils.misc import Timer, get_device, get_git_info
@@ -63,10 +64,12 @@ class Engine(ABC):
 
     config: DictConfig
 
+    device_mesh: DeviceMesh
+
     train_loader: DataLoader
     evaluate_loader: DataLoader
 
-    model: Union[torch.nn.Module, torch.nn.parallel.DistributedDataParallel]
+    model: Union[torch.nn.Module, DistributedDataParallel, FSDPModule]
 
     optimizer: torch.optim.Optimizer
     scheduler: torch.optim.lr_scheduler.LRScheduler
@@ -145,6 +148,13 @@ class Engine(ABC):
         """Training loop policy: 'iter' or 'epoch'."""
         return OmegaConf.select(self.config, "loop.policy", default="iter")
 
+    @property
+    def unwrapped_model(self) -> torch.nn.Module:
+        """Return the underlying model, unwrapping DistributedDataParallel if needed."""
+        if isinstance(self.model, DistributedDataParallel):
+            return self.model.module
+        return self.model
+
     def set_seed(self, seed: int, deterministic: bool = False) -> None:
         """Set random seed for reproducibility.
 
@@ -160,13 +170,17 @@ class Engine(ABC):
         Args:
             config: Configuration containing parallel backend settings.
         """
-        parallel_backend = OmegaConf.select(config, "parallel.type", default=None)
-        if parallel_backend == "ddp":
-            from mvp_engine.utils.distributed.ddp import prepare_ddp
+        initialize_process_group()
 
-            prepare_ddp()
-        else:
-            raise NotImplementedError(f"Unsupported parallel backend: {parallel_backend}")
+        parallel_backend = OmegaConf.select(config, "parallel.type", default=None)
+
+        assert parallel_backend in ["fsdp2", "ddp"], f"Unsupported parallel backend: {parallel_backend}"
+
+        self.device_mesh = initialize_device_mesh(
+            self.device.type,
+            mesh_shape=(torch.distributed.get_world_size(),),
+            mesh_dim_names=(parallel_backend,),
+        )
 
     def prepare_config(self, config: DictConfig) -> DictConfig:
         """Augment configuration with runtime values.
@@ -371,7 +385,6 @@ class Engine(ABC):
 
     def before_train(self) -> None:
         """Initialize all components before training starts."""
-        logger.info("Prepare components for training...")
         logger.log_config(self.config)
 
         logger.info("Building DataLoader...")
