@@ -13,7 +13,7 @@ from typing import List, Mapping, Optional, Union
 import torch
 import torch.distributed as dist
 
-from mvp_engine.utils.distributed.utils import get_world_size
+from mvp_engine.distributed.utils import get_world_size
 from mvp_engine.utils.log.backend.backend import Backend
 from mvp_engine.utils.log.metric import MetricAggregator
 

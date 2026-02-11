@@ -5,7 +5,7 @@ from typing import Mapping, Optional
 from omegaconf import DictConfig, OmegaConf
 from rich.console import Console
 
-from mvp_engine.utils.distributed.utils import is_main_process
+from mvp_engine.distributed.utils import is_main_process
 
 from .backend import Backend
 

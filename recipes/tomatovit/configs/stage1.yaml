@@ -32,12 +32,13 @@ model:
   ibot:
     teacher_temp: 0.04
     warmup_teacher_temp: 0.04
-    warmup_teacher_temp_steps: 1000
+    warmup_teacher_steps: 1000
     student_temp: 0.1
     center_momentum: 0.9
     lam: 0
     mim_start_step: 0
     mask_ratio: 0
+    warmup_steps: 5000
 optim:
   lr: 0.00001
   weight_decay: 0.05
