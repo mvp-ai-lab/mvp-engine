@@ -1,0 +1,32 @@
+dev_mode: false
+engine: Qwen3VLEngine
+project:
+  name: "qwen3vl"
+data:
+  dataset_type: "webdataset"
+  data_path: "./data/llavaov15_qs/data"
+  batch_size: 16
+  num_workers: 2
+  shuffle_buffer: 5000
+model:
+  name: "Qwen/Qwen3-VL-4B-Instruct"
+  pretrained: ./pretrained/Qwen3-VL-4B-ReinitLLM
+  freeze_vit: true
+  freeze_projector: false
+  freeze_llm: true
+optim:
+  lr: 0.00001
+  weight_decay: 0.05
+  gradient_accumulation_steps: 1
+  mixed_precision: "bf16"
+  warmup_ratio: 0.1
+  clip_grad_norm: 1
+  compile: True
+  compile_backend: "inductor"
+  compile_mode: "max-autotune"
+loop:
+  policy: "iter"
+  total_steps: 100000
+  checkpoint:
+    keep_n: 5
+    interval: 5000
