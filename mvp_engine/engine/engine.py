@@ -284,32 +284,20 @@ class Engine(ABC):
         torch.distributed.barrier()
 
         parallel_backend = OmegaConf.select(self.config, "parallel.type", default=None)
-        if parallel_backend == "ddp" and is_main_process():
-            torch.save(
-                self.model.module.state_dict(),
-                cur_checkpoint_dir / "model.pt",
-            )
-            torch.save(
-                self.optimizer.state_dict(),
-                cur_checkpoint_dir / "optimizer.pt",
-            )
-            torch.save(
-                self.scheduler.state_dict(),
-                cur_checkpoint_dir / "scheduler.pt",
-            )
-            torch.save(
-                self.scaler.state_dict(),
-                cur_checkpoint_dir / "scaler.pt",
-            )
-            torch.save(
-                {
-                    "step": self.step,
-                    "epoch": self.epoch,
-                    "_accumulate_step": self._accumulate_step,
-                    "rng_state": torch.get_rng_state(),
-                    "cuda_rng_state": torch.cuda.get_rng_state_all(),
-                },
-                cur_checkpoint_dir / "engine.pt",
+        if parallel_backend in ["ddp", "fsdp2"]:
+            from mvp_engine.utils.checkpointing.parallel_sl_util import parallel_save
+
+            parallel_save(
+                parallel_backend,
+                self.device_mesh,
+                str(cur_checkpoint_dir),
+                self.model,
+                self.optimizer,
+                scheduler=self.scheduler,
+                scaler=self.scaler,
+                step=self.step,
+                epoch=self.epoch,
+                _accumulate_step=self._accumulate_step,
             )
         else:
             if is_main_process():
@@ -326,17 +314,10 @@ class Engine(ABC):
         logger.info(f"Loading checkpoint from {ckpt_path}...")
 
         parallel_backend = OmegaConf.select(self.config, "parallel.type", default=None)
-        if parallel_backend == "ddp":
-            self.model.module.load_state_dict(torch.load(Path(ckpt_path) / "model.pt", map_location="cpu"))
-            self.optimizer.load_state_dict(torch.load(Path(ckpt_path) / "optimizer.pt", map_location="cpu"))
-            self.scheduler.load_state_dict(torch.load(Path(ckpt_path) / "scheduler.pt", map_location="cpu"))
-            self.scaler.load_state_dict(torch.load(Path(ckpt_path) / "scaler.pt", map_location="cpu"))
-            engine_state = torch.load(Path(ckpt_path) / "engine.pt", map_location="cpu")
-            self.step = engine_state["step"]
-            self.epoch = engine_state["epoch"]
-            self._accumulate_step = engine_state["_accumulate_step"]
-            torch.set_rng_state(engine_state["rng_state"])
-            torch.cuda.set_rng_state_all(engine_state["cuda_rng_state"])
+        if parallel_backend in ["ddp", "fsdp2"]:
+            from mvp_engine.utils.checkpointing.parallel_sl_util import parallel_load
+
+            parallel_load(self, parallel_backend, self.device_mesh, ckpt_path)
         else:
             raise NotImplementedError(f"Unsupported parallel backend: {parallel_backend}")
 
