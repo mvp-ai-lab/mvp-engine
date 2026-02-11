@@ -13,8 +13,8 @@ from torch.distributed.checkpoint.state_dict import (
 )
 from utils.training import GradientScaler
 
+from mvp_engine.distributed.utils import is_main_process
 from mvp_engine.engine.engine import Engine
-from mvp_engine.utils.distributed.utils import is_main_process
 
 
 def parallel_save(
