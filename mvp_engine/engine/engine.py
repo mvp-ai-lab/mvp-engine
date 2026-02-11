@@ -224,7 +224,7 @@ class Engine(ABC):
             logger_backends = [TerminalBackend(id=self.config.project.run_id)]
         else:
             logger_backends = []
-            config_backends = OmegaConf.select(self.config, "log.backends", default=["terminal", "file"])
+            config_backends = OmegaConf.select(self.config, "project.log.backends", default=["terminal", "file"])
 
             for backend in config_backends:
                 if backend == "terminal":
@@ -242,7 +242,7 @@ class Engine(ABC):
         global logger
         logger = init_logger(
             logger_backends,
-            interval=OmegaConf.select(self.config, "log.interval", default=20),
+            interval=OmegaConf.select(self.config, "project.log.interval", default=20),
         )
 
     @abstractmethod
