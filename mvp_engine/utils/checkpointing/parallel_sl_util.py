@@ -13,21 +13,21 @@ from torch.distributed.checkpoint.state_dict import (
 )
 
 from mvp_engine.distributed.utils import is_main_process
-from mvp_engine.engine.engine import Engine
 from mvp_engine.utils.training import GradientScaler
 
 
-def parallel_save(
+def save_checkpoint(
     backend: str,
     mesh: DeviceMesh,
     cur_checkpoint_dir: Path,
     model: nn.Module,
-    optimizer: torch.optim.Optimizer,
+    optimizer: torch.optim.Optimizer = None,
     scheduler: torch.optim.lr_scheduler.LRScheduler = None,
     scaler: GradientScaler = None,
     step: int = 0,
     epoch: int = 0,
     _accumulate_step: int = 0,
+    prefix: str = "",
 ):
     if backend == "ddp" and not is_main_process():
         return
@@ -35,99 +35,126 @@ def parallel_save(
     if backend == "ddp":
         torch.save(
             model.module.state_dict(),
-            cur_checkpoint_dir / "model.pt",
+            cur_checkpoint_dir / f"{prefix}model.pt",
         )
-        torch.save(
-            optimizer.state_dict(),
-            cur_checkpoint_dir / "optimizer.pt",
-        )
-        if scheduler is not None:
+        if optimizer is not None:
             torch.save(
-                scheduler.state_dict(),
-                cur_checkpoint_dir / "scheduler.pt",
+                optimizer.state_dict(),
+                cur_checkpoint_dir / f"{prefix}optimizer.pt",
             )
-        if scaler is not None:
-            torch.save(
-                scaler.state_dict(),
-                cur_checkpoint_dir / "scaler.pt",
-            )
-        torch.save(
-            {
-                "step": step,
-                "epoch": epoch,
-                "_accumulate_step": _accumulate_step,
-                "rng_state": torch.get_rng_state(),
-                "cuda_rng_state": torch.cuda.get_rng_state_all(),
-            },
-            cur_checkpoint_dir / "engine.pt",
-        )
     else:
         options = StateDictOptions(
             full_state_dict=False,
             cpu_offload=True,
         )
         model_sd = get_model_state_dict(model, options=options)
-        optim_sd = get_optimizer_state_dict(model, optimizer, options=options)
-
         state_dict = {
             "model": model_sd,
-            "optimizer": optim_sd,
         }
+        if optimizer is not None:
+            optim_sd = get_optimizer_state_dict(model, optimizer, options=options)
+            state_dict["optimizer"] = optim_sd
 
-        writer = dcp.FileSystemWriter(cur_checkpoint_dir)
+        if prefix == "":
+            dcp_save_path = cur_checkpoint_dir
+        else:
+            dcp_save_path = cur_checkpoint_dir / f"{prefix}model"
+        writer = dcp.FileSystemWriter(dcp_save_path)
         dcp.save(
             state_dict,
-            checkpoint_id=str(cur_checkpoint_dir),
+            checkpoint_id=str(dcp_save_path),
             process_group=mesh["fsdp2"].get_group(),
             storage_writer=writer,
         )
 
-        if is_main_process():
-            meta_dict = {
-                "step": step,
-                "epoch": epoch,
-                "_accumulate_step": _accumulate_step,
-            }
-            if scheduler is not None:
-                meta_dict["scheduler"] = scheduler.state_dict()
-            if scaler is not None:
-                meta_dict["scaler"] = scaler.state_dict()
-            torch.save(meta_dict, cur_checkpoint_dir / "engine.pt")
+    if prefix != "":
+        return
+
+    if is_main_process():
+        # Save engine state with scheduler, scaler, and rng states
+        engine_state = {
+            "step": step,
+            "epoch": epoch,
+            "_accumulate_step": _accumulate_step,
+            "rng_state": torch.get_rng_state(),
+            "cuda_rng_state": torch.cuda.get_rng_state_all(),
+        }
+        if scheduler is not None:
+            engine_state["scheduler"] = scheduler.state_dict()
+        if scaler is not None:
+            engine_state["scaler"] = scaler.state_dict()
+        torch.save(engine_state, cur_checkpoint_dir / "engine.pt")
 
 
-def parallel_load(
-    engine_instance: Engine,
+def load_checkpoint(
     backend: str,
     mesh: DeviceMesh,
     ckpt_path: str,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer = None,
+    scheduler: torch.optim.lr_scheduler.LRScheduler = None,
+    scaler: GradientScaler = None,
+    prefix: str = "",
 ):
+    """Load checkpoint from disk.
+
+    Args:
+        backend: Parallel backend type ('ddp' or 'fsdp2').
+        mesh: Device mesh for distributed training.
+        ckpt_path: Path to checkpoint directory.
+        model: Model to load state into.
+        optimizer: (Optional) Optimizer to load state into.
+        scheduler: (Optional) Learning rate scheduler to load state into.
+        scaler: (Optional) Gradient scaler to load state into.
+        prefix: (Optional) Prefix to load state into.
+
+    Returns:
+        dict: Engine state containing 'step', 'epoch', '_accumulate_step'.
+    """
     if backend == "ddp":
-        engine_instance.model.module.load_state_dict(torch.load(Path(ckpt_path) / "model.pt", map_location="cpu"))
-        engine_instance.optimizer.load_state_dict(torch.load(Path(ckpt_path) / "optimizer.pt", map_location="cpu"))
-        engine_instance.scheduler.load_state_dict(torch.load(Path(ckpt_path) / "scheduler.pt", map_location="cpu"))
-        engine_instance.scaler.load_state_dict(torch.load(Path(ckpt_path) / "scaler.pt", map_location="cpu"))
-        engine_state = torch.load(Path(ckpt_path) / "engine.pt", map_location="cpu")
-        engine_instance.step = engine_state["step"]
-        engine_instance.epoch = engine_state["epoch"]
-        engine_instance._accumulate_step = engine_state["_accumulate_step"]
-        torch.set_rng_state(engine_state["rng_state"])
-        torch.cuda.set_rng_state_all(engine_state["cuda_rng_state"])
+        model.module.load_state_dict(torch.load(Path(ckpt_path) / f"{prefix}model.pt", map_location="cpu"))
+        if optimizer is not None:
+            optimizer.load_state_dict(torch.load(Path(ckpt_path) / f"{prefix}optimizer.pt", map_location="cpu"))
     else:
         options = StateDictOptions(full_state_dict=False, cpu_offload=True, strict=False)
-        model_sd = get_model_state_dict(engine_instance.model, options=options)
-        optim_sd = get_optimizer_state_dict(engine_instance.model, engine_instance.optimizer, options=options)
+        model_sd = get_model_state_dict(model, options=options)
         state_dict = {
             "model": model_sd,
-            "optimizer": optim_sd,
         }
 
-        dcp.load(state_dict, checkpoint_id=ckpt_path, process_group=mesh["fsdp2"].get_group())
-        set_model_state_dict(engine_instance.model, state_dict["model"])
-        set_optimizer_state_dict(engine_instance.model, engine_instance.optimizer, state_dict["optimizer"])
+        if optimizer is not None:
+            optim_sd = get_optimizer_state_dict(model, optimizer, options=options)
+            state_dict["optimizer"] = optim_sd
 
-        engine_state = torch.load(Path(ckpt_path) / "engine.pt", map_location="cpu")
-        engine_instance.scheduler.load_state_dict(engine_state["scheduler"])
-        engine_instance.scaler.load_state_dict(engine_state["scaler"])
-        engine_instance.step = engine_state["step"]
-        engine_instance.epoch = engine_state["epoch"]
-        engine_instance._accumulate_step = engine_state["_accumulate_step"]
+        if prefix == "":
+            dcp_save_path = Path(ckpt_path)
+        else:
+            dcp_save_path = Path(ckpt_path) / f"{prefix}model"
+
+        dcp.load(state_dict, checkpoint_id=dcp_save_path, process_group=mesh["fsdp2"].get_group())
+        set_model_state_dict(model, state_dict["model"])
+        if optimizer is not None:
+            set_optimizer_state_dict(model, optimizer, state_dict["optimizer"])
+
+    if prefix != "":
+        return None
+
+    # Load scheduler and scaler if available in checkpoint
+    engine_state = torch.load(Path(ckpt_path) / "engine.pt", map_location="cpu")
+
+    if scheduler is not None and "scheduler" in engine_state:
+        scheduler.load_state_dict(engine_state["scheduler"])
+    if scaler is not None and "scaler" in engine_state:
+        scaler.load_state_dict(engine_state["scaler"])
+
+    # Restore RNG states if available in checkpoint
+    if "rng_state" in engine_state:
+        torch.set_rng_state(engine_state["rng_state"])
+    if "cuda_rng_state" in engine_state:
+        torch.cuda.set_rng_state_all(engine_state["cuda_rng_state"])
+
+    return {
+        "step": engine_state["step"],
+        "epoch": engine_state["epoch"],
+        "_accumulate_step": engine_state["_accumulate_step"],
+    }

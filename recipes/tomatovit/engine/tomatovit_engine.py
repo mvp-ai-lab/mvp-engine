@@ -6,14 +6,8 @@ from typing import Dict, List, Union
 
 import numpy as np
 import torch
-import torch.distributed.checkpoint as dcp
 from omegaconf import OmegaConf
 from pandas import read_parquet
-from torch.distributed.checkpoint.state_dict import (
-    StateDictOptions,
-    get_model_state_dict,
-    set_model_state_dict,
-)
 from torch.optim.lr_scheduler import LinearLR, PolynomialLR, SequentialLR
 from transformers.utils.logging import disable_progress_bar
 from webdataset import WebLoader
@@ -22,6 +16,10 @@ from mvp_engine.dataset.webdataset import WebDatasetBuilder
 from mvp_engine.distributed.parallelize import parallelize_model
 from mvp_engine.distributed.utils import get_rank, get_world_size, is_main_process
 from mvp_engine.engine import ENGINE_REGISTRY, Engine
+from mvp_engine.utils.checkpointing.parallel_sl_util import (
+    load_checkpoint,
+    save_checkpoint,
+)
 from mvp_engine.utils.log import logger
 from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
@@ -309,30 +307,10 @@ class TomatoViTEngine(Engine):
                     self.rgb_head_scheduler.state_dict(),
                     cur_checkpoint_dir / "rgb_scheduler.pt",
                 )
-            if parallel_backend == "ddp":
-                if is_main_process():
-                    torch.save(
-                        self.teacher_model.state_dict(),
-                        cur_checkpoint_dir / "teacher_model.pt",
-                    )
-            else:
-                if self._use_ibot_loss:
-                    options = StateDictOptions(
-                        full_state_dict=False,
-                        cpu_offload=True,
-                    )
-                    model_sd = get_model_state_dict(self.teacher_model, options=options)
-                    state_dict = {
-                        "model": model_sd,
-                    }
-
-                    writer = dcp.FileSystemWriter(cur_checkpoint_dir / "teacher")
-                    dcp.save(
-                        state_dict,
-                        checkpoint_id=str(cur_checkpoint_dir / "teacher"),
-                        process_group=self.device_mesh["fsdp2"].get_group(),
-                        storage_writer=writer,
-                    )
+            if self._use_ibot_loss:
+                save_checkpoint(
+                    parallel_backend, self.device_mesh, cur_checkpoint_dir, self.teacher_model, prefix="teacher_"
+                )
 
             torch.save(
                 self.depth_head.state_dict(),
@@ -378,20 +356,13 @@ class TomatoViTEngine(Engine):
 
         ckpt_path = Path(ckpt_path)
         if parallel_backend in ["ddp", "fsdp2"]:
-            teacher_model_path = ckpt_path / "teacher_model.pt" if parallel_backend == "ddp" else ckpt_path / "teacher"
             ibot_loss_path = ckpt_path / "ibot_loss.pt"
             rank = get_rank()
             world_size = get_world_size()
             # depth_head_path = ckpt_path / f"depth_head_rank{rank}.pt"
             # rgb_head_path = ckpt_path / f"rgb_head_rank{rank}.pt"
 
-            to_be_loaded = (
-                [
-                    (teacher_model_path, self.teacher_model, "Teacher Model"),
-                ]
-                if parallel_backend == "ddp"
-                else []
-            )
+            to_be_loaded = []
             if not only_model:
                 to_be_loaded.append((ibot_loss_path, self.ibot_loss, "iBOT Loss"))
             for model_path, model, model_name in to_be_loaded:
@@ -405,18 +376,10 @@ class TomatoViTEngine(Engine):
                 else:
                     logger.warning(f"{model_name} checkpoint not found at {model_path}.")
 
-            if parallel_backend == "fsdp2" and self._use_ibot_loss:
-                options = StateDictOptions(full_state_dict=False, cpu_offload=True, strict=False)
-                model_sd = get_model_state_dict(self.teacher_model, options=options)
-                state_dict = {
-                    "model": model_sd,
-                }
-                dcp.load(
-                    state_dict,
-                    checkpoint_id=str(teacher_model_path),
-                    process_group=self.device_mesh["fsdp2"].get_group(),
+            if self._use_ibot_loss:
+                load_checkpoint(
+                    parallel_backend, self.device_mesh, str(ckpt_path), self.teacher_model, prefix="teacher_"
                 )
-                set_model_state_dict(self.teacher_model, state_dict["model"])
 
             depth_partial_fc_dict = repartition_fc(ckpt_path, world_size, rank, data_type="depth")
             self.depth_head.load_state_dict(depth_partial_fc_dict, strict=False)

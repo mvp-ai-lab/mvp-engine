@@ -19,6 +19,10 @@ from torch.utils.data import DataLoader
 from mvp_engine.distributed.device_mesh import initialize_device_mesh
 from mvp_engine.distributed.init import initialize_process_group
 from mvp_engine.distributed.utils import broadcast_from_main, get_rank, is_main_process
+from mvp_engine.utils.checkpointing.parallel_sl_util import (
+    load_checkpoint,
+    save_checkpoint,
+)
 from mvp_engine.utils.log import init_logger, logger
 from mvp_engine.utils.log.backend import FileBackend, TerminalBackend
 from mvp_engine.utils.misc import Timer, get_device, get_git_info
@@ -299,9 +303,7 @@ class Engine(ABC):
 
         parallel_backend = OmegaConf.select(self.config, "parallel.type", default=None)
         if parallel_backend in ["ddp", "fsdp2"]:
-            from mvp_engine.utils.checkpointing.parallel_sl_util import parallel_save
-
-            parallel_save(
+            save_checkpoint(
                 parallel_backend,
                 self.device_mesh,
                 cur_checkpoint_dir,
@@ -329,9 +331,18 @@ class Engine(ABC):
 
         parallel_backend = OmegaConf.select(self.config, "parallel.type", default=None)
         if parallel_backend in ["ddp", "fsdp2"]:
-            from mvp_engine.utils.checkpointing.parallel_sl_util import parallel_load
-
-            parallel_load(self, parallel_backend, self.device_mesh, ckpt_path)
+            engine_state = load_checkpoint(
+                parallel_backend,
+                self.device_mesh,
+                ckpt_path,
+                self.model,
+                self.optimizer,
+                self.scheduler,
+                self.scaler,
+            )
+            self.step = engine_state["step"]
+            self.epoch = engine_state["epoch"]
+            self._accumulate_step = engine_state["_accumulate_step"]
         else:
             raise NotImplementedError(f"Unsupported parallel backend: {parallel_backend}")
 
