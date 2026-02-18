@@ -16,13 +16,18 @@ from mvp_engine.dataset.webdataset import WebDatasetBuilder
 from mvp_engine.distributed.parallelize import parallelize_model
 from mvp_engine.distributed.utils import get_rank, get_world_size, is_main_process
 from mvp_engine.engine import ENGINE_REGISTRY, Engine
+from mvp_engine.utils.checkpointing.parallel_sl_util import (
+    load_checkpoint,
+    save_checkpoint,
+)
 from mvp_engine.utils.log import logger
+from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
 from ..dataset.dali import dali_wrapper
 from ..dataset.preprocess import collate_fn, make_sample
 from ..model.ibot import iBOTLoss
 from ..model.partial_fc import PartialFC
-from ..model.partial_fc.utils import repartition_fc
+from ..model.partial_fc.utils import repartition_fc, smart_load_optimizer
 from ..model.tomato_vit import TomatoViTModel
 
 
@@ -229,19 +234,42 @@ class TomatoViTEngine(Engine):
         return parallelized_model
 
     def prepare_optimizer(self):
-        return torch.optim.AdamW(
-            [
-                {"params": self.model.parameters(), "lr": self.config.optim.lr},
-                {"params": self.depth_head.parameters(), "lr": self.config.optim.lr},
-                {"params": self.rgb_head.parameters(), "lr": self.config.optim.lr},
-            ],
-            weight_decay=self.config.optim.weight_decay,
+        model_optimizer = torch.optim.AdamW(
+            self.model.parameters(), lr=self.config.optim.lr, weight_decay=self.config.optim.weight_decay
         )
+        self.depth_head_optimizer = torch.optim.AdamW(
+            self.depth_head.parameters(), lr=self.config.optim.lr, weight_decay=self.config.optim.weight_decay
+        )
+        self.rgb_head_optimizer = torch.optim.AdamW(
+            self.rgb_head.parameters(), lr=self.config.optim.lr, weight_decay=self.config.optim.weight_decay
+        )
+        return model_optimizer
 
     def prepare_scheduler(self):
         warmup_steps = int(self.config.loop.total_steps * self.config.optim.warmup_ratio)
         scheduler_warmup = LinearLR(self.optimizer, start_factor=1e-10, end_factor=1.0, total_iters=warmup_steps)
         scheduler_main = PolynomialLR(self.optimizer, total_iters=self.config.loop.total_steps - warmup_steps, power=2)
+
+        depth_scheduler_warmup = LinearLR(
+            self.depth_head_optimizer, start_factor=1e-10, end_factor=1.0, total_iters=warmup_steps
+        )
+        depth_scheduler_main = PolynomialLR(
+            self.depth_head_optimizer, total_iters=self.config.loop.total_steps - warmup_steps, power=2
+        )
+
+        rgb_scheduler_warmup = LinearLR(
+            self.rgb_head_optimizer, start_factor=1e-10, end_factor=1.0, total_iters=warmup_steps
+        )
+        rgb_scheduler_main = PolynomialLR(
+            self.rgb_head_optimizer, total_iters=self.config.loop.total_steps - warmup_steps, power=2
+        )
+
+        self.depth_head_scheduler = SequentialLR(
+            self.depth_head_optimizer, [depth_scheduler_warmup, depth_scheduler_main], milestones=[warmup_steps]
+        )
+        self.rgb_head_scheduler = SequentialLR(
+            self.rgb_head_optimizer, [rgb_scheduler_warmup, rgb_scheduler_main], milestones=[warmup_steps]
+        )
         return SequentialLR(self.optimizer, [scheduler_warmup, scheduler_main], milestones=[warmup_steps])
 
     def save(self, force: bool = False) -> None:
@@ -262,17 +290,28 @@ class TomatoViTEngine(Engine):
         )
 
         parallel_backend = OmegaConf.select(self.config, "parallel.type", default=None)
-        if parallel_backend == "ddp":
+        rank = get_rank()
+        if parallel_backend in ["ddp", "fsdp2"]:
             if is_main_process():
+                if self._use_ibot_loss:
+                    torch.save(
+                        self.ibot_loss.state_dict(),
+                        cur_checkpoint_dir / "ibot_loss.pt",
+                    )
+                # PartialFC scheduler share the same information in different rank
                 torch.save(
-                    self.teacher_model.state_dict(),
-                    cur_checkpoint_dir / "teacher_model.pt",
+                    self.depth_head_scheduler.state_dict(),
+                    cur_checkpoint_dir / "depth_scheduler.pt",
                 )
                 torch.save(
-                    self.ibot_loss.state_dict(),
-                    cur_checkpoint_dir / "ibot_loss.pt",
+                    self.rgb_head_scheduler.state_dict(),
+                    cur_checkpoint_dir / "rgb_scheduler.pt",
                 )
-            rank = get_rank()
+            if self._use_ibot_loss:
+                save_checkpoint(
+                    parallel_backend, self.device_mesh, cur_checkpoint_dir, self.teacher_model, prefix="teacher_"
+                )
+
             torch.save(
                 self.depth_head.state_dict(),
                 cur_checkpoint_dir / f"depth_head_rank{rank}.pt",
@@ -280,6 +319,15 @@ class TomatoViTEngine(Engine):
             torch.save(
                 self.rgb_head.state_dict(),
                 cur_checkpoint_dir / f"rgb_head_rank{rank}.pt",
+            )
+
+            torch.save(
+                self.depth_head_optimizer.state_dict(),
+                cur_checkpoint_dir / f"optimizer_depth_head_rank{rank}.pt",
+            )
+            torch.save(
+                self.rgb_head_optimizer.state_dict(),
+                cur_checkpoint_dir / f"optimizer_rgb_head_rank{rank}.pt",
             )
         else:
             raise NotImplementedError(f"Unsupported parallel backend: {parallel_backend}")
@@ -307,17 +355,14 @@ class TomatoViTEngine(Engine):
             super().load(ckpt_path)
 
         ckpt_path = Path(ckpt_path)
-        if parallel_backend == "ddp":
-            teacher_model_path = ckpt_path / "teacher_model.pt"
+        if parallel_backend in ["ddp", "fsdp2"]:
             ibot_loss_path = ckpt_path / "ibot_loss.pt"
             rank = get_rank()
             world_size = get_world_size()
             # depth_head_path = ckpt_path / f"depth_head_rank{rank}.pt"
             # rgb_head_path = ckpt_path / f"rgb_head_rank{rank}.pt"
 
-            to_be_loaded = [
-                (teacher_model_path, self.teacher_model, "Teacher Model"),
-            ]
+            to_be_loaded = []
             if not only_model:
                 to_be_loaded.append((ibot_loss_path, self.ibot_loss, "iBOT Loss"))
             for model_path, model, model_name in to_be_loaded:
@@ -331,10 +376,30 @@ class TomatoViTEngine(Engine):
                 else:
                     logger.warning(f"{model_name} checkpoint not found at {model_path}.")
 
+            if self._use_ibot_loss:
+                load_checkpoint(
+                    parallel_backend, self.device_mesh, str(ckpt_path), self.teacher_model, prefix="teacher_"
+                )
+
             depth_partial_fc_dict = repartition_fc(ckpt_path, world_size, rank, data_type="depth")
             self.depth_head.load_state_dict(depth_partial_fc_dict, strict=False)
             rgb_partial_fc_dict = repartition_fc(ckpt_path, world_size, rank, data_type="rgb")
             self.rgb_head.load_state_dict(rgb_partial_fc_dict, strict=False)
+
+            smart_load_optimizer(
+                self.depth_head_optimizer,
+                "depth",
+                rank,
+                world_size,
+                self.config.model.partial_fc.num_classes,
+                ckpt_path,
+            )
+            smart_load_optimizer(
+                self.rgb_head_optimizer, "rgb", rank, world_size, self.config.model.partial_fc.num_classes, ckpt_path
+            )
+
+            self.depth_head_scheduler.load_state_dict(torch.load(ckpt_path / "depth_scheduler.pt", map_location="cpu"))
+            self.rgb_head_scheduler.load_state_dict(torch.load(ckpt_path / "rgb_scheduler.pt", map_location="cpu"))
 
             if reset_teacher:
                 # Reset teacher parameters to student parameters
@@ -453,7 +518,75 @@ class TomatoViTEngine(Engine):
         }
 
     def train_after_step(self, outputs: Dict) -> Dict:
-        outputs = super().train_after_step(outputs)
+        assert "loss" in outputs, "The model output must contain 'loss' key."
+        assert "logs" in outputs, "The model output must contain 'logs' key."
+
+        # Determine if we should sync gradients this step
+        is_sync = self.accumulate_step()
+
+        # Scale loss for gradient accumulation
+        gradient_accumulation_steps = OmegaConf.select(self.config, "optim.gradient_accumulation_steps", default=1)
+        loss = outputs["loss"] / gradient_accumulation_steps
+
+        # Backward pass with optional DDP no_sync for accumulation
+        with accumulate_gradients(self.model, sync=is_sync):
+            self.scaler.scale(loss).backward()
+
+        # Only step optimizer when gradients are synchronized
+        if is_sync:
+            # Unscale gradients before clipping (required for GradScaler)
+            self.scaler.unscale_(self.optimizer)
+            self.scaler.unscale_(self.depth_head_optimizer)
+            self.scaler.unscale_(self.rgb_head_optimizer)
+
+            # Gradient clipping
+            max_grad_norm = OmegaConf.select(self.config, "optim.clip_grad_norm", default=None)
+            if max_grad_norm is not None:
+                clip_grad_norm_(self.model.parameters(), max_grad_norm)
+                clip_grad_norm_(self.depth_head.parameters(), max_grad_norm)
+                clip_grad_norm_(self.rgb_head.parameters(), max_grad_norm)
+
+            # Optimizer step (skipped if inf/nan gradients detected by scaler)
+            self.scaler.step(self.optimizer)
+            self.scaler.step(self.depth_head_optimizer)
+            self.scaler.step(self.rgb_head_optimizer)
+            self.scaler.update()
+
+            # Scheduler step (after optimizer step)
+            self.scheduler.step()
+            self.depth_head_scheduler.step()
+            self.rgb_head_scheduler.step()
+
+            # Zero gradients for next accumulation cycle
+            self.optimizer.zero_grad(set_to_none=True)
+            self.depth_head_optimizer.zero_grad(set_to_none=True)
+            self.rgb_head_optimizer.zero_grad(set_to_none=True)
+
+            # Increment global step counter
+            self.step += 1
+
+            # Record batch time and update timer
+            self.timer.tick()
+
+            # Log training metrics with timing info
+            other_logs = {
+                "eta": self.timer.eta_string,
+                "time/batch": self.timer.batch_time,
+                "time/throughput": self.timer.throughput,
+            }
+
+            # Log LR
+            current_lrs = self.scheduler.get_last_lr()
+            for i, lr in enumerate(current_lrs):
+                other_logs[f"lr/group_{i}"] = lr
+
+            logger.log_metrics(
+                {**outputs["logs"], **other_logs},
+                step=self.step,
+            )
+
+            # Save checkpoint if needed
+            self.save()
 
         if self.accumulate_step(skip_increase=True) and self._use_ibot_loss:
             # EMA update for the teacher
