@@ -32,9 +32,7 @@ def check_config(config: DictConfig) -> None:
 
     mixed_precision = config.optim.mixed_precision
     if mixed_precision not in {"fp32", "fp16", "bf16"}:
-        raise ValueError(
-            f"`optim.mixed_precision` must be one of ['fp32', 'fp16', 'bf16'], got: {mixed_precision}."
-        )
+        raise ValueError(f"`optim.mixed_precision` must be one of ['fp32', 'fp16', 'bf16'], got: {mixed_precision}.")
 
     grad_steps = config.optim.gradient_accumulation_steps
     if not isinstance(grad_steps, int) or isinstance(grad_steps, bool) or grad_steps < 1:
