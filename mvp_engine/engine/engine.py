@@ -16,6 +16,7 @@ from torch.distributed.fsdp import FSDPModule
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
+from mvp_engine.config.check import check_config
 from mvp_engine.distributed.device_mesh import initialize_device_mesh
 from mvp_engine.distributed.init import initialize_process_group
 from mvp_engine.distributed.utils import broadcast_from_main, get_rank, is_main_process
@@ -86,6 +87,8 @@ class Engine(ABC):
     timer: Timer  # timer for tracking per-batch time and ETA
 
     def __init__(self, config: DictConfig):
+        check_config(config)
+
         # 0. Prepare the parallel backend
         self.prepare_parallel(config)
 
