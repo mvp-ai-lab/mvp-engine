@@ -50,7 +50,7 @@ def check_config(config: DictConfig) -> None:
     if log_interval is not None and (
         not isinstance(log_interval, int) or isinstance(log_interval, bool) or log_interval < 1
     ):
-        raise TypeError("`project.log.interval` must be an integer >= 1.")
+        raise ValueError("`project.log.interval` must be an integer >= 1.")
 
     log_backends = OmegaConf.select(config, "project.log.backends", default=None)
     if log_backends is not None:
