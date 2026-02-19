@@ -36,7 +36,7 @@ def check_config(config: DictConfig) -> None:
 
     grad_steps = config.optim.gradient_accumulation_steps
     if not isinstance(grad_steps, int) or isinstance(grad_steps, bool) or grad_steps < 1:
-        raise TypeError("`optim.gradient_accumulation_steps` must be an integer >= 1.")
+        raise ValueError("`optim.gradient_accumulation_steps` must be an integer >= 1.")
 
     loop_policy = config.loop.policy
     if loop_policy not in {"iter", "epoch"}:
@@ -44,7 +44,7 @@ def check_config(config: DictConfig) -> None:
     if loop_policy == "iter":
         total_steps = OmegaConf.select(config, "loop.total_steps", default=None)
         if not isinstance(total_steps, int) or isinstance(total_steps, bool) or total_steps < 1:
-            raise TypeError("`loop.total_steps` must be an integer >= 1 when `loop.policy` is 'iter'.")
+            raise ValueError("`loop.total_steps` must be an integer >= 1 when `loop.policy` is 'iter'.")
 
     log_interval = OmegaConf.select(config, "project.log.interval", default=None)
     if log_interval is not None and (
