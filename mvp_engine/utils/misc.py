@@ -6,6 +6,9 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from mvp_engine.distributed.utils import is_main_process
+from mvp_engine.utils.log import simple_info
+
 
 class Timer:
     """A timer utility for tracking per-batch time and estimating ETA.
@@ -286,3 +289,11 @@ def get_git_info():
         pass
 
     return {"branch": branch, "commit_hash": commit_hash}
+
+
+def calculate_model_size(model):
+    if is_main_process():
+        model_size = sum(p.numel() for p in model.parameters())
+        simple_info(f" - Model size: {model_size / 1e9:.4f} B")
+        trainable_size = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        simple_info(f" - Trainable model size: {trainable_size / 1e9:.4f} B")

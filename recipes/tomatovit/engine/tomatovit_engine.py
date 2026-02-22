@@ -21,6 +21,7 @@ from mvp_engine.utils.checkpointing.parallel_sl_util import (
     save_checkpoint,
 )
 from mvp_engine.utils.log import logger
+from mvp_engine.utils.misc import calculate_model_size
 from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
 from ..dataset.dali import dali_wrapper
@@ -207,10 +208,7 @@ class TomatoViTEngine(Engine):
             raise NotImplementedError(f"Parallel type {self.config.parallel.type} not implemented.")
 
         # 5. Calculate model size in B
-        model_size = sum(p.numel() for p in parallelized_model.parameters())
-        logger.info(f" - Model size: {model_size / 1e9:.4f} B")
-        trainable_size = sum(p.numel() for p in parallelized_model.parameters() if p.requires_grad)
-        logger.info(f" - Trainable model size: {trainable_size / 1e9:.4f} B")
+        calculate_model_size(parallelized_model)
 
         # 6. Compile model
         parallelized_model = torch.compile(
