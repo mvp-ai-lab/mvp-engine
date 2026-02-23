@@ -286,3 +286,19 @@ def get_git_info():
         pass
 
     return {"branch": branch, "commit_hash": commit_hash}
+
+
+def calculate_model_size(model: nn.Module):
+    """Log total and trainable parameter counts for a model.
+
+    This utility computes the total number of parameters and the number of
+    trainable parameters in the given model in distributed training setups (e.g., DDP/FSDP2)
+    and logs both in billions of parameters.
+
+    Args:
+        model: A PyTorch ``nn.Module`` (or compatible object) whose
+            parameters will be counted.
+    """
+    model_size = sum(p.numel() for p in model.parameters())
+    trainable_size = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    return model_size, trainable_size
