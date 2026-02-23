@@ -208,7 +208,10 @@ class TomatoViTEngine(Engine):
             raise NotImplementedError(f"Parallel type {self.config.parallel.type} not implemented.")
 
         # 5. Calculate model size in B
-        calculate_model_size(parallelized_model)
+        if is_main_process():
+            model_size, trainable_size = calculate_model_size(parallelized_model)
+            logger.info(f" - Model size: {model_size / 1e9:.4f} B")
+            logger.info(f" - Trainable model size: {trainable_size / 1e9:.4f} B")
 
         # 6. Compile model
         parallelized_model = torch.compile(
