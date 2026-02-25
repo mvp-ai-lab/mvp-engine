@@ -29,6 +29,8 @@ This repository contains the core training engine and utilities for vision and l
 - The code in `mvp_engine/` should be generic, reusable, clean, minimal, well-documented, and easy-to-maintain.
 - Keep experiment-specific logic under `recipes/<experiment>/` rather than in shared engine code.
 - NEVER over-abstract or over-encapsulate.
+- Your code should have clear comments and documentation to help others understand your thought process and the functionality of your code.
+- Avoid using deprecated functions, APIs, and libraries, and always keep your dependencies up to date.
 
 ## Testing Guidelines
 - Use `pytest` and place tests in `tests/` as `test_<feature>.py`.
