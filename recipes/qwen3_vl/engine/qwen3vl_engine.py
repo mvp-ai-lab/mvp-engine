@@ -6,6 +6,8 @@ from mvp_engine.distributed.parallelize import parallelize_model
 from mvp_engine.engine import ENGINE_REGISTRY, Engine
 from mvp_engine.utils.log import logger
 
+from ..utils.model import freeze_module
+
 
 @ENGINE_REGISTRY.register()
 class Qwen3VLEngine(Engine):
@@ -21,7 +23,43 @@ class Qwen3VLEngine(Engine):
         logger.info(f" - Model name: {model.__class__.__name__}")
 
         # 1. Freeze modules
-        # TODO: implement this.
+        projector_keywords = ("projector", "mm_projector", "multi_modal_projector", "merger")
+
+        visual_module = getattr(model, "visual", None) or getattr(model, "vision_tower", None)
+        if visual_module is None:
+            model_container = getattr(model, "model", None)
+            visual_module = getattr(model_container, "visual", None) or getattr(model_container, "vision_tower", None)
+
+        language_module = getattr(model, "language_model", None)
+        if language_module is None:
+            model_container = getattr(model, "model", None)
+            language_module = getattr(model_container, "language_model", None)
+
+        lm_head_module = getattr(model, "lm_head", None)
+
+        if self.config.model.freeze_vit:
+            frozen = 0
+            if visual_module is not None:
+                frozen += freeze_module(visual_module, exclude_keywords=projector_keywords)
+            logger.info(f" - Freeze ViT params: {frozen:,}")
+
+        if self.config.model.freeze_projector:
+            frozen = 0
+            if visual_module is not None:
+                frozen += freeze_module(visual_module, include_keywords=projector_keywords)
+            for attr in ("projector", "mm_projector", "multi_modal_projector", "merger"):
+                module = getattr(model, attr, None)
+                if module is not None:
+                    frozen += freeze_module(module)
+            logger.info(f" - Freeze projector params: {frozen:,}")
+
+        if self.config.model.freeze_llm:
+            frozen = 0
+            if language_module is not None:
+                frozen += freeze_module(language_module)
+            if lm_head_module is not None:
+                frozen += freeze_module(lm_head_module)
+            logger.info(f" - Freeze LLM params: {frozen:,}")
 
         # 2. Parallelize model
         parallelized_model = parallelize_model(
