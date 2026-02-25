@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""PyTorch Cheese ViT model."""
+"""PyTorch RedTomatoViT model."""
 
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union
@@ -45,16 +45,16 @@ except ImportError:
     _flash_attn_available = False
 
 
-class CheeseViTConfig(PretrainedConfig):
+class RedTomatoViTConfig(PretrainedConfig):
     r"""
-    Configuration class for [`CheeseViTModel`].
+    Configuration class for [`RedTomatoViTModel`].
 
     This keeps the same core ViT fields as TomatoViT while adding depth-bin RoPE controls.
     New depth-related parameters are initialized so the model can load RGB-only checkpoints
     and initially behave like the original 3D (T,H,W) RoPE.
     """
 
-    model_type = "cheese_vit"
+    model_type = "redtomatovit"
 
     def __init__(
         self,
@@ -110,7 +110,7 @@ class CheeseViTConfig(PretrainedConfig):
 
 
 @dataclass
-class CheeseViTModelOutput(ModelOutput):
+class RedTomatoViTModelOutput(ModelOutput):
     last_hidden_state: Optional[torch.FloatTensor] = None
     hidden_states: Optional[tuple[torch.FloatTensor, ...]] = None
     attentions: Optional[tuple[torch.FloatTensor, ...]] = None
@@ -118,7 +118,7 @@ class CheeseViTModelOutput(ModelOutput):
 
 
 @dataclass
-class CheeseViTModelOutputWithPooling(ModelOutput):
+class RedTomatoViTModelOutputWithPooling(ModelOutput):
     last_hidden_state: Optional[torch.FloatTensor] = None
     pooler_output: Optional[torch.FloatTensor] = None
     hidden_states: Optional[tuple[torch.FloatTensor, ...]] = None
@@ -126,11 +126,11 @@ class CheeseViTModelOutputWithPooling(ModelOutput):
     mask: Optional[torch.FloatTensor] = None
 
 
-CHEESE_VIT_START_DOCSTRING = r"""
+REDTOMATOVIT_START_DOCSTRING = r"""
     This model inherits from [`PreTrainedModel`]. Check the superclass documentation for generic methods.
 """
 
-CHEESE_VIT_INPUTS_DOCSTRING = r"""
+REDTOMATOVIT_INPUTS_DOCSTRING = r"""
     Args:
         pixel_values (`torch.FloatTensor` of shape `(batch_size, num_channels, height, width)`):
             RGB pixel values.
@@ -180,7 +180,7 @@ class DepthAwareVideoRotaryEmbedding(nn.Module):
     This makes resumed training from depth-free checkpoints stable by default.
     """
 
-    def __init__(self, config: CheeseViTConfig):
+    def __init__(self, config: RedTomatoViTConfig):
         super().__init__()
         head_dim = config.hidden_size // config.num_attention_heads
         base = config.rope_theta
@@ -352,7 +352,7 @@ class MultiheadAttentionPoolingHead(nn.Module):
     Multi-Head Attention Pooling with a learned probe (PMA-style).
     """
 
-    def __init__(self, config: CheeseViTConfig):
+    def __init__(self, config: RedTomatoViTConfig):
         super().__init__()
         self.embed_dim = config.hidden_size
         self.probe = nn.Parameter(torch.randn(1, 1, config.hidden_size))
@@ -370,8 +370,8 @@ class MultiheadAttentionPoolingHead(nn.Module):
         return attn_output[:, 0]
 
 
-class CheeseViTEmbeddings(nn.Module):
-    def __init__(self, config: CheeseViTConfig):
+class RedTomatoViTEmbeddings(nn.Module):
+    def __init__(self, config: RedTomatoViTConfig):
         super().__init__()
         self.config = config
         self.embed_dim = config.hidden_size
@@ -399,8 +399,8 @@ class CheeseViTEmbeddings(nn.Module):
         return embeddings
 
 
-class CheeseViTAttention(nn.Module):
-    def __init__(self, config: CheeseViTConfig):
+class RedTomatoViTAttention(nn.Module):
+    def __init__(self, config: RedTomatoViTConfig):
         super().__init__()
         self.embed_dim = config.hidden_size
         self.num_heads = config.num_attention_heads
@@ -455,8 +455,8 @@ class CheeseViTAttention(nn.Module):
         return attn_output, attn_weights if output_attentions else None
 
 
-class CheeseViTFlashAttention2(nn.Module):
-    def __init__(self, config: CheeseViTConfig):
+class RedTomatoViTFlashAttention2(nn.Module):
+    def __init__(self, config: RedTomatoViTConfig):
         super().__init__()
         if not _flash_attn_available:
             raise ImportError("flash_attn is not installed. Please install it to use flash_attention_2.")
@@ -512,26 +512,26 @@ class CheeseViTFlashAttention2(nn.Module):
         return attn_output, None
 
 
-CHEESEVIT_ATTENTION_CLASSES = {
-    "eager": CheeseViTAttention,
-    "flash_attention_2": CheeseViTFlashAttention2,
+REDTOMATOVIT_ATTENTION_CLASSES = {
+    "eager": RedTomatoViTAttention,
+    "flash_attention_2": RedTomatoViTFlashAttention2,
 }
 
 
-class CheeseViTEncoderLayer(nn.Module):
-    def __init__(self, config: CheeseViTConfig):
+class RedTomatoViTEncoderLayer(nn.Module):
+    def __init__(self, config: RedTomatoViTConfig):
         super().__init__()
         attn_implementation = getattr(config, "_attn_implementation", "flash_attention_2")
-        if attn_implementation not in CHEESEVIT_ATTENTION_CLASSES:
+        if attn_implementation not in REDTOMATOVIT_ATTENTION_CLASSES:
             raise ValueError(
                 f"Unknown attention implementation: {attn_implementation}. "
-                f"Available implementations: {list(CHEESEVIT_ATTENTION_CLASSES.keys())}"
+                f"Available implementations: {list(REDTOMATOVIT_ATTENTION_CLASSES.keys())}"
             )
         if attn_implementation == "flash_attention_2" and not _flash_attn_available:
             logger.warning("flash_attn is not available; falling back to eager attention.")
             attn_implementation = "eager"
 
-        self.self_attn = CHEESEVIT_ATTENTION_CLASSES[attn_implementation](config)
+        self.self_attn = REDTOMATOVIT_ATTENTION_CLASSES[attn_implementation](config)
         self.layer_norm1 = get_norm_layer(config)
         self.mlp = SiglipMLP(config)
         self.layer_norm2 = get_norm_layer(config)
@@ -563,10 +563,10 @@ class CheeseViTEncoderLayer(nn.Module):
         return (hidden_states,)
 
 
-class CheeseViTEncoder(nn.Module):
-    def __init__(self, config: CheeseViTConfig):
+class RedTomatoViTEncoder(nn.Module):
+    def __init__(self, config: RedTomatoViTConfig):
         super().__init__()
-        self.layers = nn.ModuleList([CheeseViTEncoderLayer(config) for _ in range(config.num_hidden_layers)])
+        self.layers = nn.ModuleList([RedTomatoViTEncoderLayer(config) for _ in range(config.num_hidden_layers)])
 
     def forward(
         self,
@@ -601,19 +601,19 @@ class CheeseViTEncoder(nn.Module):
         if not return_dict:
             return tuple(v for v in [hidden_states, all_hidden_states, all_self_attentions] if v is not None)
 
-        return CheeseViTModelOutput(
+        return RedTomatoViTModelOutput(
             last_hidden_state=hidden_states,
             hidden_states=all_hidden_states,
             attentions=all_self_attentions,
         )
 
 
-@add_start_docstrings("The bare Cheese ViT Model outputting raw hidden-states.", CHEESE_VIT_START_DOCSTRING)
-class CheeseViTPreTrainedModel(PreTrainedModel):
-    config_class = CheeseViTConfig
-    base_model_prefix = "cheese_vit"
+@add_start_docstrings("The bare RedTomatoViT Model outputting raw hidden-states.", REDTOMATOVIT_START_DOCSTRING)
+class RedTomatoViTPreTrainedModel(PreTrainedModel):
+    config_class = RedTomatoViTConfig
+    base_model_prefix = "redtomatovit"
     supports_gradient_checkpointing = True
-    _no_split_modules = ["CheeseViTEncoderLayer", "MultiheadAttentionPoolingHead"]
+    _no_split_modules = ["RedTomatoViTEncoderLayer", "MultiheadAttentionPoolingHead"]
     _supports_flash_attn_2 = True
 
     def _init_weights(self, module):
@@ -632,16 +632,16 @@ class CheeseViTPreTrainedModel(PreTrainedModel):
                 module.bias.data.zero_()
 
 
-@add_start_docstrings("Cheese ViT Model with depth-bin 4D RoPE.", CHEESE_VIT_START_DOCSTRING)
-class CheeseViTModel(CheeseViTPreTrainedModel):
-    def __init__(self, config: CheeseViTConfig):
+@add_start_docstrings("RedTomatoViT Model with depth-bin 4D RoPE.", REDTOMATOVIT_START_DOCSTRING)
+class RedTomatoViTModel(RedTomatoViTPreTrainedModel):
+    def __init__(self, config: RedTomatoViTConfig):
         super().__init__(config)
         self.config = config
 
-        self.embeddings = CheeseViTEmbeddings(config)
+        self.embeddings = RedTomatoViTEmbeddings(config)
         self.mask_embedding = nn.Parameter(torch.zeros(1, config.hidden_size))
         self.layernorm_pre = get_norm_layer(config)
-        self.encoder = CheeseViTEncoder(config)
+        self.encoder = RedTomatoViTEncoder(config)
         self.video_rope = DepthAwareVideoRotaryEmbedding(config)
 
         if config.use_head:
@@ -764,8 +764,8 @@ class CheeseViTModel(CheeseViTPreTrainedModel):
         depth_tokens = depth_tokens * spatial_scale
         return torch.stack([t_pos, h_pos, w_pos, depth_tokens], dim=-1)
 
-    @add_start_docstrings_to_model_forward(CHEESE_VIT_INPUTS_DOCSTRING)
-    @replace_return_docstrings(output_type=BaseModelOutputWithPooling, config_class=CheeseViTConfig)
+    @add_start_docstrings_to_model_forward(REDTOMATOVIT_INPUTS_DOCSTRING)
+    @replace_return_docstrings(output_type=BaseModelOutputWithPooling, config_class=RedTomatoViTConfig)
     def forward(
         self,
         pixel_values: torch.Tensor,
@@ -862,7 +862,7 @@ class CheeseViTModel(CheeseViTPreTrainedModel):
         if not return_dict:
             return (sequence_output, pooled_output, mask_indices) + encoder_outputs[1:]
 
-        return CheeseViTModelOutputWithPooling(
+        return RedTomatoViTModelOutputWithPooling(
             last_hidden_state=sequence_output,
             pooler_output=pooled_output,
             hidden_states=encoder_outputs.hidden_states,
@@ -871,7 +871,7 @@ class CheeseViTModel(CheeseViTPreTrainedModel):
         )
 
 
-def cheese_vit_l(pretrained: bool = False, ckpt_path=None, **kwargs):
+def redtomatovit_l(pretrained: bool = False, ckpt_path=None, **kwargs):
     del pretrained, ckpt_path
 
     config_kwargs = {
@@ -887,14 +887,14 @@ def cheese_vit_l(pretrained: bool = False, ckpt_path=None, **kwargs):
         "depth_inject_axes": "hw",
     }
     config_kwargs.update(kwargs)
-    config = CheeseViTConfig(**config_kwargs)
+    config = RedTomatoViTConfig(**config_kwargs)
     config._attn_implementation = "flash_attention_2"
-    return CheeseViTModel(config)
+    return RedTomatoViTModel(config)
 
 
 if __name__ == "__main__":
     torch.manual_seed(0)
-    model = cheese_vit_l().eval()
+    model = redtomatovit_l().eval()
     test_rgb = torch.randn(2, 3, 224, 224)
     test_depth = torch.rand(2, 1, 224, 224)
     output = model(test_rgb, pixel_values_depth=test_depth, mask_ratio=0.25)
