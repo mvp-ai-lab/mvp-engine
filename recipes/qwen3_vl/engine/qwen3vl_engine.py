@@ -29,6 +29,9 @@ class Qwen3VLEngine(Engine):
             else:
                 raise NotImplementedError(f"Unsupported dataset type: {self.config.data.dataset_type}")
             return dataloader
+        else:
+            logger.warning(f"Unsupported workflow for dataloader preparation: {workflow!r}. Returning None.")
+            return None
 
     def prepare_model(self):
         # 0. Main model
