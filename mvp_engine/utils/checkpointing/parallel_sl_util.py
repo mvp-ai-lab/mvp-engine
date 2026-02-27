@@ -21,7 +21,6 @@ from mvp_engine.distributed.utils import get_rank, is_main_process
 from mvp_engine.utils.log import simple_info
 from mvp_engine.utils.training import GradientScaler
 
-PARALLEL_META_FILE = "parallel_meta.pt"
 OPTIM_STATE_KEY = "state"
 
 
