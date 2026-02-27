@@ -29,6 +29,20 @@ def check_config(config: DictConfig) -> None:
     parallel_type = config.parallel.type
     if parallel_type not in {"ddp", "fsdp2"}:
         raise ValueError(f"`parallel.type` must be one of ['ddp', 'fsdp2'], got: {parallel_type}.")
+    if parallel_type == "fsdp2":
+        backend_kwargs = OmegaConf.select(config, "parallel.backend_kwargs", default={}) or {}
+        if not isinstance(backend_kwargs, (dict, DictConfig)):
+            raise TypeError("`parallel.backend_kwargs` must be a mapping.")
+
+        mesh_cfg = OmegaConf.select(config, "parallel.mesh", default={}) or {}
+        if not isinstance(mesh_cfg, (dict, DictConfig)):
+            raise TypeError("`parallel.mesh` must be a mapping.")
+        for mesh_key in ("dp_size", "fsdp2_size", "tp_size"):
+            mesh_val = mesh_cfg.get(mesh_key, None)
+            if mesh_val is None:
+                continue
+            if not isinstance(mesh_val, int) or isinstance(mesh_val, bool) or mesh_val < 1:
+                raise ValueError(f"`parallel.mesh.{mesh_key}` must be an integer >= 1.")
 
     mixed_precision = config.optim.mixed_precision
     if mixed_precision not in {"fp32", "fp16", "bf16"}:

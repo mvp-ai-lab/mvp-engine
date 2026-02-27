@@ -83,16 +83,37 @@ def parallelize_model(
     elif backend == "fsdp2":
         from mvp_engine.distributed.fsdp2 import parallelize_model_with_fsdp2
 
-        logger.info(f"Wrapping {model.__class__.__name__} with FSDP2...")
-        backend_kwargs = _set_default_kwargs(backend_kwargs, "target_classes", [])
-        backend_kwargs = _set_default_kwargs(backend_kwargs, "mesh", device_mesh["fsdp2"])
-        backend_kwargs = _set_default_kwargs(backend_kwargs, "reshard_after_forward", None)
-        backend_kwargs = _set_default_kwargs(backend_kwargs, "mp_policy", None)
+        tp_mesh = device_mesh["tp"]
+        fsdp2_mesh = device_mesh["fsdp2"]
 
-        # TODO: support cpu offloading
-        # TODO: support custom prefetching strategy
+        if tp_mesh is not None and tp_mesh.size() > 1:
+            from mvp_engine.distributed.tp import (
+                apply_tensor_parallel,
+                resolve_tp_module_config,
+            )
 
-        parallelized_model = parallelize_model_with_fsdp2(model, backend_kwargs)
+            tp_module_config = resolve_tp_module_config(model, attr_name="TP_MODULE_CONFIG")
+            applied = apply_tensor_parallel(
+                model,
+                tp_mesh,
+                tp_module_config,
+            )
+            logger.info(f"Applied Tensor Parallel to {len(applied)} modules on {model.__class__.__name__}.")
+        else:
+            logger.info(f"Skip Tensor Parallel for {model.__class__.__name__}.")
+
+        parallelized_model = model
+        if fsdp2_mesh is not None and fsdp2_mesh.size() > 1:
+            logger.info(f"Wrapping {model.__class__.__name__} with FSDP2...")
+            backend_kwargs = _set_default_kwargs(backend_kwargs, "target_classes", [])
+            backend_kwargs = _set_default_kwargs(backend_kwargs, "mesh", device_mesh["fsdp2"])
+            backend_kwargs = _set_default_kwargs(backend_kwargs, "reshard_after_forward", None)
+            backend_kwargs = _set_default_kwargs(backend_kwargs, "mp_policy", None)
+
+            # TODO: support cpu offloading
+            # TODO: support custom prefetching strategy
+
+            parallelized_model = parallelize_model_with_fsdp2(model, backend_kwargs)
 
     else:
         raise NotImplementedError(f"Unsupported parallel backend: {backend}")
