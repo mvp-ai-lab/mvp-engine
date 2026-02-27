@@ -181,3 +181,6 @@ slurmlogs
 .DS_Store
 .vscode
 .idea
+
+slurm/*
+batch_files/*
