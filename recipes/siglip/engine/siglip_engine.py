@@ -3,6 +3,7 @@ from typing import Dict, List
 
 import torch
 from omegaconf import OmegaConf
+from timm.optim import create_optimizer_v2
 from torch.optim.lr_scheduler import LinearLR, PolynomialLR, SequentialLR
 from transformers import AutoTokenizer, SiglipConfig, SiglipTextConfig
 from transformers.utils.logging import disable_progress_bar
@@ -78,11 +79,6 @@ class SigLipEngine(Engine):
         trainable_size = sum(p.numel() for p in parallelized_model.parameters() if p.requires_grad)
         logger.info(f" - Trainable model size: {trainable_size / 1e9:.4f} B")
 
-        # 6. Compile model
-        parallelized_model = torch.compile(
-            parallelized_model, backend=self.config.optim.compile_backend, mode=self.config.optim.compile_mode
-        )
-
         # 7. Load from a checkpoint if specified
         self.model = parallelized_model
         load_from_cfg = OmegaConf.select(self.config, "model.load_from", default=None)
@@ -96,12 +92,11 @@ class SigLipEngine(Engine):
         return parallelized_model
 
     def prepare_optimizer(self):
-        return torch.optim.AdamW(
-            [
-                {"params": self.model.parameters(), "lr": self.config.optim.lr},
-            ],
-            weight_decay=self.config.optim.weight_decay,
+        optimizer = create_optimizer_v2(
+            self.model, self.config.optim.name, lr=self.config.optim.lr, weight_decay=self.config.optim.weight_decay
         )
+
+        return optimizer
 
     def prepare_scheduler(self):
         warmup_steps = int(self.config.loop.total_steps * self.config.optim.warmup_ratio)
@@ -144,7 +139,9 @@ class SigLipEngine(Engine):
             enabled=self.dtype != torch.float32,
         ):
             loss = self.model(data["text_input"], data["pixel_input"], return_loss=True)
-
         return {
-            "loss": loss,
+            "loss": loss["loss"],
+            "logs": {
+                "train/loss": loss["loss"].item(),
+            },
         }

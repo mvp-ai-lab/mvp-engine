@@ -1,16 +1,11 @@
-import sys
-
-sys.path.insert(0, "/mnt/data-alpha-sg-01/team-camera/home/k00885418/projects/mvp-engine")
 import io
-from functools import partial
 from typing import Optional, Tuple
 
 import torch
-from PIL import Image
+from PIL import Image, ImageFile
 from timm.data import create_transform
-from transformers import AutoTokenizer
 
-from mvp_engine.dataset.webdataset import WebDatasetBuilder
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 # from .augment3 import new_data_aug_generator
 
@@ -79,15 +74,16 @@ def get_train_transforms(config):
 
 
 def main():
-    label_path = "/mnt/data-alpha-sg-01/team-camera/shared/SigLIP/data/"
-    tokenizer = AutoTokenizer.from_pretrained("google/siglip-so400m-patch14-384")
-    train_transform = get_train_transforms()
-    wds = WebDatasetBuilder(label_path).build(
-        batch_size=16,
-        make_sample_fn=partial(decode_data, transform=train_transform),
-        collate_fn=partial(collate_fn, tokenizer=tokenizer),
-    )
-    image, text = next(iter(wds))
+    # label_path = "/mnt/data-alpha-sg-01/team-camera/shared/SigLIP/data/"
+    # tokenizer = AutoTokenizer.from_pretrained("google/siglip-so400m-patch14-384")
+    # train_transform = get_train_transforms()
+    # wds = WebDatasetBuilder(label_path).build(
+    #     batch_size=16,
+    #     make_sample_fn=partial(decode_data, transform=train_transform),
+    #     collate_fn=partial(collate_fn, tokenizer=tokenizer),
+    # )
+    # image, text = next(iter(wds))
+    return 0
 
 
 if __name__ == "__main__":

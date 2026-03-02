@@ -27,7 +27,7 @@ model:
     hidden_size: 768
     intermediate_size: 3072
 optim:
-  name: muon
+  name: adamw
   lr: 0.001
   weight_decay: 0.05
   gradient_accumulation_steps: 1
