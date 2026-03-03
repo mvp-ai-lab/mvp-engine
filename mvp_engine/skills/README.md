@@ -3,6 +3,14 @@
 Skills are a **second kind of interface** in this repo, alongside code interfaces (functions, classes).  
 **中文：** [README.zh-CN.md](README.zh-CN.md)
 
+---
+
+## Core idea: codebase for the agent era
+
+This repo is built for a **coding-agent-first** workflow. The interface to the system is not only “code you run” but also **structured guidance an agent can follow**. Many training features have a clear, repeatable *pattern* (e.g. “wrap each encoder layer in checkpoint”), but the *implementation* depends on each model’s structure (encoder layout, layer types, forward signatures). Forcing everything into a single generic API leads to over-abstraction and hard-to-follow code; hand-writing each variant is repetitive and error-prone. **Skills** are the middle path: we document the pattern once (workflow, rules, examples, tests), and the agent generates the concrete code for each new model or recipe. So the codebase is “code + skills”: code where a single API fits, skills where the right move is “same pattern, different glue per case.” That keeps the repo simple, readable, and easy to extend without piling abstraction into the core engine.
+
+---
+
 ## Why Skills Exist
 
 Some capabilities in a training framework have **clear logic and fixed patterns but cannot be generalized into a single API**—because they must be adapted to each model’s structure.

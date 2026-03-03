@@ -30,7 +30,7 @@ self._gradient_checkpointing_func = torch.utils.checkpoint.checkpoint
 找到逐层 for 循环，在循环内判断是否启用 checkpointing。**关键模式**：定义一个 `custom_forward` 闭包，只接收需要梯度的 tensor 作为参数，其余参数通过闭包捕获。
 
 ```python
-use_gc = self.gradient_checkpointing and self.training
+use_gc = self.gradient_checkpointing and self.training and not output_attentions
 
 for layer in self.layers:
     if use_gc:
@@ -45,8 +45,8 @@ for layer in self.layers:
 **规则**：
 - `custom_forward` 的显式参数只放需要 `requires_grad=True` 的 tensor（如 `hidden_states`）。
 - 不需要梯度的参数（`attention_mask`、`rotary_pos_emb` 等）通过闭包捕获。
-- checkpointing 开启时必须关闭 `output_attentions`（attention weights 不会被保存）。
-- 条件：`self.gradient_checkpointing and self.training`（eval 时不 checkpoint）。
+- **用 `not output_attentions` 作为 checkpointing 的门控**：仅当调用方不请求 attention 权重时才使用 checkpointing。这样需要 `output_attentions=True` 的训练逻辑（如蒸馏、诊断）仍能拿到正确结果；不需求 attention 时再通过 checkpointing 省显存。
+- 条件：`self.gradient_checkpointing and self.training and not output_attentions`（eval 时不 checkpoint，请求 attention 时也不 checkpoint）。
 
 **若模型有多种 layer 类型**（如 regular layer + mixture layer），为每种 layer 分别写一个 checkpointing 分支或 helper。参见 [references/example-tomatovit.zh-CN.md](references/example-tomatovit.zh-CN.md) 中的 `_forward_single_branch_layer` 与 `_forward_mixture_layer`。
 
@@ -106,7 +106,7 @@ model:
 
 1. **`use_reentrant=False`**（推荐默认）：支持非确定性操作和 `torch.compile`，但要求 checkpoint 函数的输出对输入可微。
 2. **不要在 `custom_forward` 的显式参数中传入不需要梯度的 tensor**：会导致多余重算或报错。
-3. **`output_attentions` 与 checkpointing 冲突**：重算时不保存中间结果，attention weights 会丢失，因此 checkpointing 启用时应强制 `output_attentions=False`。
+3. **`output_attentions` 与 checkpointing**：重算时不保存中间结果，被 checkpoint 的层无法返回 attention weights。**用 `not output_attentions` 做门控**：仅当调用方不请求 attention 时才启用 checkpointing，避免静默丢弃 attention 输出、破坏依赖 `output_attentions=True` 的蒸馏/诊断逻辑。
 4. **顺序**：freeze → gradient checkpointing → FSDP/DDP wrap。
 
 ## 测试

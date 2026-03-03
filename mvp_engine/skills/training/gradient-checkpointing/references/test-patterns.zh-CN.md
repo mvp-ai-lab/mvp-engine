@@ -74,14 +74,14 @@ class DummyLayer(nn.Module):
 
 ## 测试 3: 梯度数值一致性
 
-最重要的一项：开启 checkpointing 后的梯度应与关闭时一致。
+最重要的一项：开启 checkpointing 后的梯度应与关闭时一致。在**每次 forward 前**重新设置相同种子，使两条分支的 RNG 消费一致，否则 dropout 等随机 op 会导致测试在 checkpointing 正确时仍失败（假阴性）。
 
 ```python
 def test_gradient_matches_without_checkpointing():
     config = {Config}(...)
-    torch.manual_seed(42)
 
     # 不开启 checkpointing
+    torch.manual_seed(42)
     model_ref = {Model}(config)
     model_ref.train()
     x = torch.randn(1, seq_len, hidden_size, requires_grad=True)
@@ -89,13 +89,13 @@ def test_gradient_matches_without_checkpointing():
     out_ref.backward()
     grad_ref = {收集关键参数的梯度}
 
-    # 开启 checkpointing
+    # 开启 checkpointing — 再次 reseed，使 forward 前 RNG 状态一致（避免 dropout 等导致假阴性）
     torch.manual_seed(42)
     model_gc = {Model}(config)
     model_gc.load_state_dict(model_ref.state_dict())  # 确保权重一致
     model_gc.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     model_gc.train()
-    x_gc = x.detach().clone().requires_grad_(True)
+    x_gc = torch.randn(1, seq_len, hidden_size, requires_grad=True)  # reseed 后重新采样
     out_gc = model_gc(x_gc).last_hidden_state.sum()
     out_gc.backward()
     grad_gc = {收集关键参数的梯度}

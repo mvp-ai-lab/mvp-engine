@@ -30,7 +30,7 @@ self._gradient_checkpointing_func = torch.utils.checkpoint.checkpoint
 Locate the per-layer `for` loop and, inside it, decide whether checkpointing is enabled. **Key pattern**: define a `custom_forward` closure that takes only tensors that require gradients as arguments; capture everything else in the closure.
 
 ```python
-use_gc = self.gradient_checkpointing and self.training
+use_gc = self.gradient_checkpointing and self.training and not output_attentions
 
 for layer in self.layers:
     if use_gc:
@@ -45,8 +45,8 @@ for layer in self.layers:
 **Rules**:
 - `custom_forward`’s explicit arguments must be only tensors that need `requires_grad=True` (e.g. `hidden_states`).
 - Non-differentiable inputs (`attention_mask`, `rotary_pos_emb`, etc.) are captured in the closure.
-- When checkpointing is on, force `output_attentions=False` (attention weights are not saved).
-- Condition: `self.gradient_checkpointing and self.training` (no checkpointing at eval).
+- **Gate checkpointing on `not output_attentions`**: only use checkpointing when the caller is not requesting attention weights. That way training code that needs `output_attentions=True` (e.g. distillation, diagnostics) still gets correct behavior; when attentions are not needed, checkpointing saves memory.
+- Condition: `self.gradient_checkpointing and self.training and not output_attentions` (no checkpointing at eval, and no checkpointing when attentions are requested).
 
 **If the model has multiple layer types** (e.g. regular layer + mixture layer), implement a checkpointing branch or helper per type. See [references/example-tomatovit.md](references/example-tomatovit.md) (or [references/example-tomatovit.zh-CN.md](references/example-tomatovit.zh-CN.md)) for `_forward_single_branch_layer` and `_forward_mixture_layer`.
 
@@ -106,7 +106,7 @@ model:
 
 1. **`use_reentrant=False`** (recommended default): works with non-deterministic ops and `torch.compile`, but the checkpointed function’s output must be differentiable w.r.t. its inputs.
 2. **Do not pass non-differentiable tensors as explicit arguments to `custom_forward`**: leads to unnecessary recompute or errors.
-3. **`output_attentions` conflicts with checkpointing**: recompute does not store intermediate results, so attention weights are lost; when checkpointing is on, force `output_attentions=False`.
+3. **`output_attentions` and checkpointing**: Recompute does not store intermediate results, so attention weights cannot be returned when a layer is checkpointed. **Gate** checkpointing with `and not output_attentions`: only apply it when the caller is not requesting attentions. That avoids silently dropping attention outputs and breaking distillation/diagnostics that rely on `output_attentions=True`.
 4. **Order**: freeze → gradient checkpointing → FSDP/DDP wrap.
 
 ## Testing

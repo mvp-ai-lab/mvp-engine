@@ -74,14 +74,14 @@ If the model has multiple layer types, define a DummyLayer and test per type.
 
 ## Test 3: Gradient numerical consistency
 
-Most important test — gradients with checkpointing on must match those with it off.
+Most important test — gradients with checkpointing on must match those with it off. Reseed before each forward so both branches consume RNG identically; otherwise dropout (or other stochastic ops) can make the test fail even when checkpointing is correct.
 
 ```python
 def test_gradient_matches_without_checkpointing():
     config = {Config}(...)
-    torch.manual_seed(42)
 
     # Without checkpointing
+    torch.manual_seed(42)
     model_ref = {Model}(config)
     model_ref.train()
     x = torch.randn(1, seq_len, hidden_size, requires_grad=True)
@@ -89,13 +89,13 @@ def test_gradient_matches_without_checkpointing():
     out_ref.backward()
     grad_ref = {collect gradients of key params}
 
-    # With checkpointing
+    # With checkpointing — reseed so RNG state matches before forward (avoids false negatives with dropout)
     torch.manual_seed(42)
     model_gc = {Model}(config)
     model_gc.load_state_dict(model_ref.state_dict())  # same weights
     model_gc.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     model_gc.train()
-    x_gc = x.detach().clone().requires_grad_(True)
+    x_gc = torch.randn(1, seq_len, hidden_size, requires_grad=True)  # fresh sample after reseed
     out_gc = model_gc(x_gc).last_hidden_state.sum()
     out_gc.backward()
     grad_gc = {collect gradients of key params}
