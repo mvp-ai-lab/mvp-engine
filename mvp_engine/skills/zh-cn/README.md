@@ -47,7 +47,7 @@ mvp_engine/skills/
 │   ├── README.md
 │   ├── training/, parallel/, model/, data/, debug/, recipe/
 │   └── ...
-└── cn/                   ← 中文文档
+└── zh-cn/                   ← 中文文档
     ├── README.md
     ├── training/, parallel/, model/, data/, debug/, recipe/
     └── ...
@@ -55,7 +55,7 @@ mvp_engine/skills/
 
 ## Skill 的结构
 
-每个 skill 是一个独立文件夹，在 en/ 与 cn/ 下各有一份：
+每个 skill 是一个独立文件夹，在 en/ 与 zh-cn/ 下各有一份：
 
 ```
 skill-name/
@@ -70,10 +70,10 @@ skill-name/
 
 ## 如何使用
 
-对 coding agent 说明需求并引用对应 skill（任选 en 或 cn 路径）：
+对 coding agent 说明需求并引用对应 skill（任选 en 或 zh-cn 路径）：
 
 ```
-参考 @mvp_engine/skills/cn/<分类>/<skill-name>/SKILL.md
+参考 @mvp_engine/skills/zh-cn/<分类>/<skill-name>/SKILL.md
 或 @mvp_engine/skills/en/<category>/<skill-name>/SKILL.md
 ```
 
@@ -81,7 +81,7 @@ Agent 会按 skill 工作流生成适配代码和测试。
 
 ## 如何新增 Skill
 
-1. 在对应分类目录下，在 **en/** 与 **cn/** 中分别创建 `skill-name/SKILL.md`。
+1. 在对应分类目录下，在 **en/** 与 **zh-cn/** 中分别创建 `skill-name/SKILL.md`。
 2. 写明：适用场景、分步工作流、关键规则、常见陷阱。
 3. 在 `references/` 中放至少一个已验证的完整示例。
 4. 若有测试模板，放在 `references/`（如 test-patterns.md）。

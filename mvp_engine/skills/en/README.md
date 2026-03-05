@@ -1,7 +1,7 @@
 # Skills
 
 Skills are a **second kind of interface** in this repo, alongside code interfaces (functions, classes).  
-**中文：** [README.md](../cn/README.md)
+**中文：** [README.md](../zh-cn/README.md)
 
 ---
 
@@ -47,7 +47,7 @@ mvp_engine/skills/
 │   ├── README.md
 │   ├── training/, parallel/, model/, data/, debug/, recipe/
 │   └── ...
-└── cn/                   ← 中文文档
+└── zh-cn/                   ← 中文文档
     ├── README.md
     ├── training/, parallel/, model/, data/, debug/, recipe/
     └── ...
@@ -70,7 +70,7 @@ skill-name/
 
 ## How to Use
 
-Tell the coding agent what you need and point it at the skill (under `en/` or `cn/` by language):
+Tell the coding agent what you need and point it at the skill (under `en/` or `zh-cn/` by language):
 
 ```
 Use @mvp_engine/skills/en/<category>/<skill-name>/SKILL.md
