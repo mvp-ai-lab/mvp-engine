@@ -1,6 +1,6 @@
 <p align="center">
   <picture>
-    <img alt="MVP Engine" src="./assets/logo.png" width="600" style="max-width: 100%;">
+    <img alt="MVP Engine" src="./assets/logo.png" width="600" style="max-width: 100%; border-radius: 25px;">
   </picture>
 </p>
 
