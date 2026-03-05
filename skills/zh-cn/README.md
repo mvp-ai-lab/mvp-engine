@@ -41,7 +41,7 @@ Skills 是本仓库的一种**新接口形式**，与代码接口（函数、类
 ## 目录结构
 
 ```
-mvp_engine/skills/
+skills/
 ├── README.md             ← 本说明（仓库总览）
 ├── en/                   ← 英文文档
 │   ├── README.md
@@ -73,8 +73,8 @@ skill-name/
 对 coding agent 说明需求并引用对应 skill（任选 en 或 zh-cn 路径）：
 
 ```
-参考 @mvp_engine/skills/zh-cn/<分类>/<skill-name>/SKILL.md
-或 @mvp_engine/skills/en/<category>/<skill-name>/SKILL.md
+参考 @skills/zh-cn/<分类>/<skill-name>/SKILL.md
+或 @skills/en/<category>/<skill-name>/SKILL.md
 ```
 
 Agent 会按 skill 工作流生成适配代码和测试。

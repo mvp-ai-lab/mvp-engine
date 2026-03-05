@@ -41,7 +41,7 @@ Is there a fixed pattern to follow? ─── yes ──→ Implement as a Skill
 ## Directory Layout
 
 ```
-mvp_engine/skills/
+skills/
 ├── README.md             ← overview (this repo)
 ├── en/                   ← English docs
 │   ├── README.md
@@ -73,7 +73,7 @@ skill-name/
 Tell the coding agent what you need and point it at the skill (under `en/` or `zh-cn/` by language):
 
 ```
-Use @mvp_engine/skills/en/<category>/<skill-name>/SKILL.md
+Use @skills/en/<category>/<skill-name>/SKILL.md
 ```
 
 The agent will follow the skill and generate the adapted code and tests.

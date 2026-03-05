@@ -9,7 +9,7 @@ This repository contains the core training engine and utilities for vision and l
 - `mvp_engine/engine/`: training orchestration and engine base classes.
 - `mvp_engine/dataset/`: dataset builders and data pipeline utilities.
 - `mvp_engine/distributed/` and `mvp_engine/utils/`: distributed/runtime helpers and other utilities.
-- `mvp_engine/skills/`: agent skills — structured guides for tasks that have clear patterns but cannot be generalized into a single API (for example gradient checkpointing, FSDP wrap policies). Organized by language (`en/`, `zh-cn/`) and category (`training/`, `parallel/`, `model/`, `data/`, `debug/`, `recipe/`). See `mvp_engine/skills/README.md` for overview and `mvp_engine/skills/en/README.md` or `mvp_engine/skills/zh-cn/README.md` for design rationale.
+- `skills/`: agent skills — structured guides for tasks that have clear patterns but cannot be generalized into a single API (for example gradient checkpointing, FSDP wrap policies). Organized by language (`en/`, `zh-cn/`) and category (`training/`, `parallel/`, `model/`, `data/`, `debug/`, `recipe/`). See `skills/README.md` for overview and `skills/en/README.md` or `skills/zh-cn/README.md` for design rationale.
 - `recipes/`: experiment-specific engines, models, datasets, and Hydra YAML configs (for example `recipes/tomatovit/configs/`).
 - `tests/`: pytest suite (`test_*.py`) and shared fixtures (`conftest.py`).
 - `tools/dataviewer/`: local data viewer app.
