@@ -16,3 +16,9 @@ skills/
 
 Point the agent at a skill under `en/` or `zh-cn/` by language, e.g.  
 `@skills/en/<category>/<skill-name>/SKILL.md`
+
+## Skill List
+
+- `model/model-migration`
+  - English: [en/model/model-migration/SKILL.md](en/model/model-migration/SKILL.md)
+  - 中文： [zh-cn/model/model-migration/SKILL.md](zh-cn/model/model-migration/SKILL.md)
