@@ -78,6 +78,10 @@ Use @skills/en/<category>/<skill-name>/SKILL.md
 
 The agent will follow the skill and generate the adapted code and tests.
 
+## Skill List
+
+- `model/model-migration`: [model/model-migration/SKILL.md](model/model-migration/SKILL.md)
+
 ## Adding a New Skill
 
 1. Create `skill-name/SKILL.md` under the right category.

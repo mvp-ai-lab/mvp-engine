@@ -79,6 +79,10 @@ skill-name/
 
 Agent 会按 skill 工作流生成适配代码和测试。
 
+## Skill 列表
+
+- `model/model-migration`：[model/model-migration/SKILL.md](model/model-migration/SKILL.md)
+
 ## 如何新增 Skill
 
 1. 在对应分类目录下，在 **en/** 与 **zh-cn/** 中分别创建 `skill-name/SKILL.md`。
