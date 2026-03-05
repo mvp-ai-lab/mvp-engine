@@ -14,6 +14,5 @@ mvp_engine/skills/
 └── cn/           ← 中文文档（结构同 en/）
 ```
 
-Use the skill that matches the agent or user language, e.g.  
-`@mvp_engine/skills/en/training/gradient-checkpointing/SKILL.md` or  
-`@mvp_engine/skills/cn/training/gradient-checkpointing/SKILL.md`.
+Point the agent at a skill under `en/` or `cn/` by language, e.g.  
+`@mvp_engine/skills/en/<category>/<skill-name>/SKILL.md`

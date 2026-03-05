@@ -45,17 +45,11 @@ mvp_engine/skills/
 ├── README.md             ← 本说明（仓库总览）
 ├── en/                   ← 英文文档
 │   ├── README.md
-│   ├── training/
-│   │   └── gradient-checkpointing/
-│   │       ├── SKILL.md
-│   │       └── references/
+│   ├── training/, parallel/, model/, data/, debug/, recipe/
 │   └── ...
 └── cn/                   ← 中文文档
     ├── README.md
-    ├── training/
-    │   └── gradient-checkpointing/
-    │       ├── SKILL.md
-    │       └── references/
+    ├── training/, parallel/, model/, data/, debug/, recipe/
     └── ...
 ```
 
@@ -71,7 +65,7 @@ skill-name/
     └── test-patterns.md
 ```
 
-- **SKILL.md / SKILL.zh-CN.md** 控制在约 500 行以内，只写核心工作流。
+- **SKILL.md** 控制在约 500 行以内，只写核心工作流。
 - 详细示例和模板放在 **references/**，agent 按需读取。
 
 ## 如何使用
@@ -79,11 +73,11 @@ skill-name/
 对 coding agent 说明需求并引用对应 skill（任选 en 或 cn 路径）：
 
 ```
-给 MyNewViT 加 gradient checkpointing，参考 @mvp_engine/skills/cn/training/gradient-checkpointing/SKILL.md
-Add gradient checkpointing to MyNewViT using @mvp_engine/skills/en/training/gradient-checkpointing/SKILL.md
+参考 @mvp_engine/skills/cn/<分类>/<skill-name>/SKILL.md
+或 @mvp_engine/skills/en/<category>/<skill-name>/SKILL.md
 ```
 
-Agent 会按 skill 工作流为你的模型生成适配代码和测试。
+Agent 会按 skill 工作流生成适配代码和测试。
 
 ## 如何新增 Skill
 

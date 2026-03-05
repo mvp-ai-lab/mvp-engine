@@ -45,18 +45,11 @@ mvp_engine/skills/
 ├── README.md             ← overview (this repo)
 ├── en/                   ← English docs
 │   ├── README.md
-│   ├── training/
-│   │   └── gradient-checkpointing/
-│   │       ├── SKILL.md
-│   │       └── references/
-│   ├── parallel/, model/, data/, debug/, recipe/
+│   ├── training/, parallel/, model/, data/, debug/, recipe/
 │   └── ...
 └── cn/                   ← 中文文档
     ├── README.md
-    ├── training/
-    │   └── gradient-checkpointing/
-    │       ├── SKILL.md
-    │       └── references/
+    ├── training/, parallel/, model/, data/, debug/, recipe/
     └── ...
 ```
 
@@ -77,13 +70,13 @@ skill-name/
 
 ## How to Use
 
-Tell the coding agent what you need and point it at the skill:
+Tell the coding agent what you need and point it at the skill (under `en/` or `cn/` by language):
 
 ```
-Add gradient checkpointing to MyNewViT using @mvp_engine/skills/en/training/gradient-checkpointing/SKILL.md
+Use @mvp_engine/skills/en/<category>/<skill-name>/SKILL.md
 ```
 
-The agent will follow the skill and generate the adapted code and tests for your model.
+The agent will follow the skill and generate the adapted code and tests.
 
 ## Adding a New Skill
 
