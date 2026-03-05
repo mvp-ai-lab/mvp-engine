@@ -6,7 +6,7 @@ description: Add gradient checkpointing (activation checkpointing) support to an
 # Gradient Checkpointing
 
 为任意模型添加 gradient checkpointing（activation checkpointing）支持。核心思路：**不要试图写一个通用封装函数**，而是针对每个模型的 Encoder 的 forward 逻辑做最小化适配。  
-**English:** [SKILL.md](SKILL.md)
+**English:** [SKILL.md](../../../en/training/gradient-checkpointing/SKILL.md)
 
 ## 核心概念
 

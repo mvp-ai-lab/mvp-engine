@@ -6,7 +6,7 @@ description: Add gradient checkpointing (activation checkpointing) support to an
 # Gradient Checkpointing
 
 Add gradient checkpointing (activation checkpointing) support to any model. Core idea: **do not try to write a single generic wrapper**; instead, adapt minimally to each model’s Encoder forward logic.  
-**中文：** [SKILL.zh-CN.md](SKILL.zh-CN.md)
+**中文：** [SKILL.md](../../../cn/training/gradient-checkpointing/SKILL.md)
 
 ## Core Concept
 

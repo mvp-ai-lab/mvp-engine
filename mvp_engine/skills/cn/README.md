@@ -1,7 +1,7 @@
 # Skills
 
 Skills 是本仓库的一种**新接口形式**，与代码接口（函数、类）并列存在。  
-**English:** [README.md](README.md)
+**English:** [README.md](../en/README.md)
 
 ---
 
@@ -42,31 +42,33 @@ Skills 是本仓库的一种**新接口形式**，与代码接口（函数、类
 
 ```
 mvp_engine/skills/
-├── README.md / README.zh-CN.md
-├── training/               ← 训练技巧（需按模型适配）
-│   └── gradient-checkpointing/
-│       ├── SKILL.md / SKILL.zh-CN.md
-│       └── references/
-├── parallel/               ← 分布式/并行策略
-├── model/                  ← 模型接入与转换
-├── data/                   ← 数据管线接入
-├── debug/                  ← 调试与性能分析
-└── recipe/                 ← 新实验搭建流程
+├── README.md             ← 本说明（仓库总览）
+├── en/                   ← 英文文档
+│   ├── README.md
+│   ├── training/
+│   │   └── gradient-checkpointing/
+│   │       ├── SKILL.md
+│   │       └── references/
+│   └── ...
+└── cn/                   ← 中文文档
+    ├── README.md
+    ├── training/
+    │   └── gradient-checkpointing/
+    │       ├── SKILL.md
+    │       └── references/
+    └── ...
 ```
 
 ## Skill 的结构
 
-每个 skill 是一个独立文件夹，中英文各一份：
+每个 skill 是一个独立文件夹，在 en/ 与 cn/ 下各有一份：
 
 ```
 skill-name/
-├── SKILL.md              # 英文（必需）
-├── SKILL.zh-CN.md        # 中文（可选）
+├── SKILL.md
 └── references/
     ├── example-xxx.md
-    ├── example-xxx.zh-CN.md
-    ├── test-patterns.md
-    └── test-patterns.zh-CN.md
+    └── test-patterns.md
 ```
 
 - **SKILL.md / SKILL.zh-CN.md** 控制在约 500 行以内，只写核心工作流。
@@ -74,18 +76,18 @@ skill-name/
 
 ## 如何使用
 
-对 coding agent 说明需求并引用对应 skill（中英文任选其一）：
+对 coding agent 说明需求并引用对应 skill（任选 en 或 cn 路径）：
 
 ```
-给 MyNewViT 加 gradient checkpointing，参考 @mvp_engine/skills/training/gradient-checkpointing/SKILL.zh-CN.md
-Add gradient checkpointing to MyNewViT using @mvp_engine/skills/training/gradient-checkpointing/SKILL.md
+给 MyNewViT 加 gradient checkpointing，参考 @mvp_engine/skills/cn/training/gradient-checkpointing/SKILL.md
+Add gradient checkpointing to MyNewViT using @mvp_engine/skills/en/training/gradient-checkpointing/SKILL.md
 ```
 
 Agent 会按 skill 工作流为你的模型生成适配代码和测试。
 
 ## 如何新增 Skill
 
-1. 在对应分类目录下创建 `skill-name/SKILL.md`（及可选 `SKILL.zh-CN.md`）。
+1. 在对应分类目录下，在 **en/** 与 **cn/** 中分别创建 `skill-name/SKILL.md`。
 2. 写明：适用场景、分步工作流、关键规则、常见陷阱。
-3. 在 `references/` 中放至少一个已验证的完整示例（可同时提供中英文）。
-4. 若有测试模板，放在 `references/`（可同时提供 test-patterns.md 与 test-patterns.zh-CN.md）。
+3. 在 `references/` 中放至少一个已验证的完整示例。
+4. 若有测试模板，放在 `references/`（如 test-patterns.md）。
