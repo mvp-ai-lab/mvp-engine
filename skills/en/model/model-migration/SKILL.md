@@ -7,13 +7,13 @@ description: Migrate an external model into an mvp-engine recipe with exact math
 
 ## Goal
 
-Port a source model into `mvp-engine/recipes/<recipe>/model/` without changing behavior.
+Port a source model into `recipes/<recipe>/model/` without changing behavior.
 
 Enforce all of the following:
 - Keep the same math and parameter naming.
 - Produce identical outputs for identical inputs and weights.
 - Load existing checkpoints with `strict=True` and zero key mismatches.
-- Place migration tests under the recipe folder, not global `mvp-engine/tests`.
+- Place migration tests under the recipe folder, not global `tests/`.
 
 ## Workflow
 
@@ -53,7 +53,7 @@ Recommended pattern:
 ### 4. Add recipe-local parity tests
 
 Create tests in:
-- `mvp-engine/recipes/<recipe>/tests/`
+- `recipes/<recipe>/tests/`
 
 Include at least:
 - Source vs migrated model parity on all supported inputs.
