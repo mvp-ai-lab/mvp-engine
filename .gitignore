@@ -164,8 +164,8 @@ cython_debug/
 #.idea/
 
 data/
-!mvp_engine/skills/en/data/
-!mvp_engine/skills/cn/data/
+!skills/en/data/
+!skills/cn/data/
 scripts/
 wandb/
 playground/
