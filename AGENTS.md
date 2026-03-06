@@ -9,6 +9,7 @@ This repository contains the core training engine and utilities for vision and l
 - `mvp_engine/engine/`: training orchestration and engine base classes.
 - `mvp_engine/dataset/`: dataset builders and data pipeline utilities.
 - `mvp_engine/distributed/` and `mvp_engine/utils/`: distributed/runtime helpers and other utilities.
+- `skills/`: agent skills — structured guides for tasks that have clear patterns but cannot be generalized into a single API (for example gradient checkpointing, FSDP wrap policies). Organized by language (`en/`, `zh-cn/`) and category (`training/`, `parallel/`, `model/`, `data/`, `debug/`, `recipe/`). See `skills/README.md` for overview and `skills/en/README.md` or `skills/zh-cn/README.md` for design rationale.
 - `recipes/`: experiment-specific engines, models, datasets, and Hydra YAML configs (for example `recipes/tomatovit/configs/`).
 - `tests/`: pytest suite (`test_*.py`) and shared fixtures (`conftest.py`).
 - `tools/dataviewer/`: local data viewer app.
@@ -29,6 +30,8 @@ This repository contains the core training engine and utilities for vision and l
 - The code in `mvp_engine/` should be generic, reusable, clean, minimal, well-documented, and easy-to-maintain.
 - Keep experiment-specific logic under `recipes/<experiment>/` rather than in shared engine code.
 - NEVER over-abstract or over-encapsulate.
+- Your code should have clear comments and documentation to help others understand your thought process and the functionality of your code.
+- Avoid using deprecated functions, APIs, and libraries, and always keep your dependencies up to date.
 
 ## Testing Guidelines
 - Use `pytest` and place tests in `tests/` as `test_<feature>.py`.
