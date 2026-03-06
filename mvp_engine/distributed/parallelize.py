@@ -84,7 +84,7 @@ def parallelize_model(
         from mvp_engine.distributed.fsdp2 import parallelize_model_with_fsdp2
 
         tp_mesh = device_mesh["tp"]
-        fsdp2_mesh = device_mesh["fsdp2"]
+        fsdp2_mesh = device_mesh["dp", "fsdp2"]
 
         if tp_mesh is not None and tp_mesh.size() > 1:
             from mvp_engine.distributed.tp import (

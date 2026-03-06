@@ -19,7 +19,12 @@ from torch.utils.data import DataLoader
 from mvp_engine.config.check import check_config
 from mvp_engine.distributed.device_mesh import initialize_device_mesh
 from mvp_engine.distributed.init import initialize_process_group
-from mvp_engine.distributed.utils import broadcast_from_main, get_rank, is_main_process
+from mvp_engine.distributed.utils import (
+    broadcast_from_main,
+    build_mesh_shape_and_names,
+    get_rank,
+    is_main_process,
+)
 from mvp_engine.utils.checkpointing.parallel_sl_util import (
     load_checkpoint,
     save_checkpoint,
@@ -185,43 +190,15 @@ class Engine(ABC):
 
         world_size = torch.distributed.get_world_size()
 
-        if parallel_backend == "ddp":
-            mesh_shape = (world_size,)
-            mesh_dim_names = ("ddp",)
-        else:
-            backend_kwargs = OmegaConf.select(config, "parallel.backend_kwargs", default={}) or {}
-            if not isinstance(backend_kwargs, dict):
-                backend_kwargs = dict(backend_kwargs)
+        mesh_cfg = OmegaConf.select(config, "parallel.mesh", default={}) or {}
+        if not isinstance(mesh_cfg, dict):
+            mesh_cfg = dict(mesh_cfg)
 
-            mesh_cfg = OmegaConf.select(config, "parallel.mesh", default={}) or {}
-            if not isinstance(mesh_cfg, dict):
-                mesh_cfg = dict(mesh_cfg)
-
-            tp_size = int(mesh_cfg.get("tp_size", 1))
-            if tp_size < 1:
-                raise ValueError(f"tp_size must be >= 1, got {tp_size}.")
-            if world_size % tp_size != 0:
-                raise ValueError(f"WORLD_SIZE({world_size}) must be divisible by tp_size({tp_size}).")
-
-            fsdp2_size = int(mesh_cfg.get("fsdp2_size", 1))
-            if fsdp2_size < 1:
-                raise ValueError(f"fsdp2_size must be >= 1, got {fsdp2_size}.")
-            if world_size % (fsdp2_size * tp_size) != 0:
-                raise ValueError(
-                    f"WORLD_SIZE({world_size}) must be divisible by fsdp2_size({fsdp2_size})*tp_size({tp_size})."
-                )
-
-            dp_size = int(mesh_cfg.get("dp_size", world_size // (tp_size * fsdp2_size)))
-
-            if dp_size * fsdp2_size * tp_size != world_size:
-                raise ValueError(
-                    "Invalid mesh configuration: "
-                    f"dp_size({dp_size}) * fsdp2_size({fsdp2_size}) * tp_size({tp_size}) "
-                    f"must equal world_size({world_size})."
-                )
-
-            mesh_shape = (dp_size, fsdp2_size, tp_size)
-            mesh_dim_names = ("dp", "fsdp2", "tp")
+        mesh_shape, mesh_dim_names = build_mesh_shape_and_names(
+            parallel_backend=parallel_backend,
+            world_size=world_size,
+            mesh_cfg=mesh_cfg,
+        )
 
         self.device_mesh = initialize_device_mesh(
             self.device.type,

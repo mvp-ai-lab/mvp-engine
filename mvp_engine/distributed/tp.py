@@ -11,10 +11,7 @@ try:
         parallelize_module,
     )
 except Exception as exc:  # pragma: no cover - runtime-dependent
-    raise ImportError(
-        "torch.distributed.tensor.parallel is required for tensor parallel support. "
-        "Please install a compatible PyTorch build."
-    ) from exc
+    raise ImportError("Please install pytorch >= 2.3.0 for tensor parallel support.") from exc
 
 _TP_STYLE_FACTORIES = {
     "col": ColwiseParallel,
