@@ -1,6 +1,8 @@
 <p align="center">
   <picture>
-    <img alt="MVP Engine" src="./assets/logo.png" width="600" style="max-width: 100%; border-radius: 25px;">
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/logo-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="./assets/logo-light.png">
+    <img alt="MVP Engine" src="./assets/logo-dark.png">
   </picture>
 </p>
 
