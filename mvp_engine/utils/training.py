@@ -1,10 +1,20 @@
 """Training utilities for gradient accumulation and mixed precision."""
 
+import math
 from contextlib import contextmanager
 from typing import Generator, Union
 
 import torch
+import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
+
+from mvp_engine.distributed.utils import (
+    get_grad_scalar_device,
+    is_dtensor_tensor,
+    reduce_dtensor_scalar,
+    scale_dtensor_grad_,
+    to_local_dense_tensor,
+)
 
 
 @contextmanager
@@ -170,4 +180,84 @@ def clip_grad_norm_(
     if len(parameters) == 0:
         return torch.tensor(0.0)
 
+    if any(is_dtensor_tensor(param.grad) for param in parameters):
+        return _clip_grad_norm_for_dtensor(parameters, max_norm=max_norm, norm_type=norm_type)
+
     return torch.nn.utils.clip_grad_norm_(parameters, max_norm=max_norm, norm_type=norm_type)
+
+
+def _tensor_norm_power(grad: torch.Tensor, norm_type: float, device: torch.device) -> torch.Tensor:
+    """Compute sum(|g|^p) for finite p or max(|g|) for inf-norm."""
+    local_grad = to_local_dense_tensor(grad).detach()
+    if local_grad.numel() == 0:
+        return torch.zeros((), device=device, dtype=torch.float32)
+
+    local_grad = local_grad.to(dtype=torch.float32)
+    if math.isinf(norm_type):
+        return local_grad.abs().max().to(device=device)
+    return local_grad.abs().pow(norm_type).sum().to(device=device)
+
+
+def _clip_grad_norm_for_dtensor(
+    parameters,
+    max_norm: float,
+    norm_type: float = 2.0,
+) -> torch.Tensor:
+    """Clip gradients when DTensor grads are present without using foreach kernels."""
+    grads = [parameter.grad for parameter in parameters if parameter.grad is not None]
+    device = get_grad_scalar_device(parameters)
+
+    ordinary_grads = [grad for grad in grads if not is_dtensor_tensor(grad)]
+    dtensor_grads = [grad for grad in grads if is_dtensor_tensor(grad)]
+
+    if math.isinf(norm_type):
+        ordinary_norm = torch.zeros((), device=device, dtype=torch.float32)
+        if ordinary_grads:
+            ordinary_norm = torch.stack(
+                [_tensor_norm_power(grad, norm_type=norm_type, device=device) for grad in ordinary_grads]
+            ).max()
+
+        dtensor_norm = torch.zeros((), device=device, dtype=torch.float32)
+        if dtensor_grads:
+            dtensor_norm = torch.stack(
+                [
+                    reduce_dtensor_scalar(
+                        _tensor_norm_power(grad, norm_type=norm_type, device=device),
+                        grad,
+                        dist.ReduceOp.MAX,
+                    )
+                    for grad in dtensor_grads
+                ]
+            ).max()
+
+        total_norm = torch.maximum(ordinary_norm, dtensor_norm)
+    else:
+        ordinary_power = torch.zeros((), device=device, dtype=torch.float32)
+        if ordinary_grads:
+            ordinary_power = torch.stack(
+                [_tensor_norm_power(grad, norm_type=norm_type, device=device) for grad in ordinary_grads]
+            ).sum()
+
+        dtensor_power = torch.zeros((), device=device, dtype=torch.float32)
+        if dtensor_grads:
+            dtensor_power = torch.stack(
+                [
+                    reduce_dtensor_scalar(
+                        _tensor_norm_power(grad, norm_type=norm_type, device=device),
+                        grad,
+                        dist.ReduceOp.SUM,
+                    )
+                    for grad in dtensor_grads
+                ]
+            ).sum()
+
+        total_norm = (ordinary_power + dtensor_power).pow(1.0 / norm_type)
+
+    clip_coef = torch.tensor(float(max_norm), device=device, dtype=torch.float32) / (total_norm + 1e-6)
+    clip_coef_clamped = torch.clamp(clip_coef, max=1.0)
+
+    if clip_coef_clamped.item() < 1.0:
+        for grad in grads:
+            scale_dtensor_grad_(grad, clip_coef_clamped)
+
+    return total_norm

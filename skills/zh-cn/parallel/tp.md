@@ -44,7 +44,12 @@ class <TopModelClass>(...):
 - plan 的值仅使用 `"col"` 或 `"row"`。
 - 顶层模型类包含 `TP_MODULE_CONFIG` 赋值。
 
-## TomatoViT 参考
-可直接参考 `recipes/tomatovit/model/tomato_vit/modeling_tomatovit.py`：
-- 常量：`TOMATOVIT_TP_MODULE_CONFIG`
-- 绑定：`TP_MODULE_CONFIG = TOMATOVIT_TP_MODULE_CONFIG`
+## ViT Classification 参考
+可直接参考 `recipes/vit_classification/model/vit.py`：
+- 常量：`VIT_TP_MODULE_CONFIG`
+- 绑定：`TP_MODULE_CONFIG = VIT_TP_MODULE_CONFIG`
+- ViT 的典型切分：
+  - `ViTSelfAttention.query/key/value -> "col"`
+  - `ViTSelfOutput.dense -> "row"`
+  - `ViTIntermediate.dense -> "col"`
+  - `ViTOutput.dense -> "row"`

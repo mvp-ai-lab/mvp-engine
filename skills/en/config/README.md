@@ -1,11 +1,9 @@
 # Config
 
 Guide for generating recipe config YAML files from user requirements, based on patterns in:
-- `recipes/tomatovit/configs/stage1.yaml`
-- `recipes/tomatovit/configs/stage2.yaml`
-- `recipes/tomatovit/configs/stage1_fsdp.yaml`
-- `recipes/tomatovit/configs/stage1_tp.yaml`
-- `recipes/tomatovit/configs/stage1_fsdp2_tp.yaml`
+- `recipes/vit_classification/configs/stage1.yaml`
+- `recipes/vit_classification/configs/stage1_fsdp2.yaml`
+- `recipes/vit_classification/configs/stage1_tp.yaml`
 
 ## Goal
 Help users create their own `recipe` config YAML with:
@@ -83,7 +81,7 @@ If TP divisibility fails (for example hidden size or head count not divisible by
 
 ## YAML Generation Workflow
 1. Ask required questions first (TP requirement + cluster topology are mandatory).
-2. Pick a base from `stage1.yaml` or `stage2.yaml`.
+2. Pick a base from `stage1.yaml`, then override only the sections required by the requested topology.
 3. Add/override the `parallel.mesh` section according to confirmed topology, and do not add `parallel.type`.
 4. Keep optimizer/loop defaults unless user asks otherwise.
 5. Return:

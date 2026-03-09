@@ -4,6 +4,11 @@ from typing import Any, Optional
 import torch
 import torch.distributed as dist
 
+try:
+    from torch.distributed.tensor import DTensor
+except Exception:  # pragma: no cover - runtime-dependent
+    DTensor = None
+
 
 def get_rank() -> int:
     """Return the rank of the current process in the distributed group."""
@@ -140,3 +145,79 @@ def broadcast_from_main(obj: Any, group: Optional[dist.ProcessGroup] = None) -> 
         obj = pickle.loads(tensor.cpu().numpy().tobytes())
 
     return obj
+
+
+def is_dtensor_tensor(tensor: torch.Tensor) -> bool:
+    """Best-effort DTensor detection with a duck-typing fallback for tests."""
+    if DTensor is not None and isinstance(tensor, DTensor):
+        return True
+    return hasattr(tensor, "to_local") and hasattr(tensor, "placements") and hasattr(tensor, "device_mesh")
+
+
+def has_dtensor_parameters(parameters) -> bool:
+    """Return True when any parameter tensor is backed by DTensor."""
+    return any(is_dtensor_tensor(parameter) for parameter in parameters)
+
+
+def to_local_dense_tensor(tensor: torch.Tensor) -> torch.Tensor:
+    """Return the dense local tensor used for DTensor-aware math."""
+    local_tensor = tensor.to_local() if is_dtensor_tensor(tensor) else tensor
+    if getattr(local_tensor, "is_sparse", False):
+        return local_tensor.coalesce().values()
+    return local_tensor
+
+
+def get_grad_scalar_device(parameters) -> torch.device:
+    """Return the device used to host scalar norm accumulators."""
+    for parameter in parameters:
+        grad = parameter.grad
+        if grad is None:
+            continue
+        return to_local_dense_tensor(grad).device
+    return torch.device("cpu")
+
+
+def dtensor_reduce_groups(tensor: torch.Tensor) -> list:
+    """Return process groups for shard/partial mesh dimensions of a DTensor."""
+    groups = []
+    device_mesh = tensor.device_mesh
+    placements = tensor.placements
+
+    for mesh_dim, placement in enumerate(placements):
+        if not (placement.is_shard() or placement.is_partial()):
+            continue
+        if not hasattr(device_mesh, "get_group"):
+            groups.append(None)
+            continue
+
+        try:
+            group = device_mesh.get_group(mesh_dim=mesh_dim)
+        except TypeError:
+            try:
+                group = device_mesh.get_group(mesh_dim)
+            except TypeError:
+                group = device_mesh.get_group()
+        groups.append(group)
+
+    return groups
+
+
+def reduce_dtensor_scalar(tensor: torch.Tensor, dtensor_grad: torch.Tensor, reduce_op) -> torch.Tensor:
+    """Reduce a local DTensor-derived scalar across shard/partial mesh dimensions."""
+    if not (dist.is_available() and dist.is_initialized()):
+        return tensor
+
+    reduced = tensor
+    for group in dtensor_reduce_groups(dtensor_grad):
+        dist.all_reduce(reduced, op=reduce_op, group=group)
+    return reduced
+
+
+def scale_dtensor_grad_(grad: torch.Tensor, scale: torch.Tensor) -> None:
+    """Scale a gradient tensor in-place, including DTensor local shards."""
+    local_grad = grad.to_local() if is_dtensor_tensor(grad) else grad
+    if getattr(local_grad, "is_sparse", False):
+        local_grad = local_grad.coalesce()
+        local_grad.values().mul_(scale.to(device=local_grad.device, dtype=local_grad.dtype))
+        return
+    local_grad.mul_(scale.to(device=local_grad.device, dtype=local_grad.dtype))

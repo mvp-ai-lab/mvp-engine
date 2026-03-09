@@ -281,6 +281,10 @@ class Engine(ABC):
         """Build and return the scheduler instance."""
 
     @abstractmethod
+    def verify_checkpoint(self) -> None:
+        """Verify and load checkpoint after model, optimizer and scheduler initialization."""
+
+    @abstractmethod
     def prepare_dataloader(self, workflow: str = "train") -> DataLoader:
         """Build and return the dataloader instance for the given stage."""
 
@@ -408,6 +412,9 @@ class Engine(ABC):
 
         logger.info("Building Scheduler...")
         self.scheduler = self.prepare_scheduler()
+
+        logger.info("Load from a checkpoint if specified...")
+        self.verify_checkpoint()
 
         logger.info("Building GradientScaler...")
         mixed_precision_enabled = self.dtype != torch.float32

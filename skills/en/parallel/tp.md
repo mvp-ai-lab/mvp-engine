@@ -44,7 +44,12 @@ class <TopModelClass>(...):
 - Plan values only use `"col"` or `"row"`.
 - `TP_MODULE_CONFIG` is defined on the top-level model class.
 
-## TomatoViT Reference
-Use `recipes/tomatovit/model/tomato_vit/modeling_tomatovit.py` as a canonical pattern:
-- Constant: `TOMATOVIT_TP_MODULE_CONFIG`
-- Binding: `TP_MODULE_CONFIG = TOMATOVIT_TP_MODULE_CONFIG`
+## ViT Classification Reference
+Use `recipes/vit_classification/model/vit.py` as a canonical pattern:
+- Constant: `VIT_TP_MODULE_CONFIG`
+- Binding: `TP_MODULE_CONFIG = VIT_TP_MODULE_CONFIG`
+- ViT-specific split:
+  - `ViTSelfAttention.query/key/value -> "col"`
+  - `ViTSelfOutput.dense -> "row"`
+  - `ViTIntermediate.dense -> "col"`
+  - `ViTOutput.dense -> "row"`

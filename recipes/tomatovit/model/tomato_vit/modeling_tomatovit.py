@@ -699,29 +699,6 @@ TOMATOVIT_MOT_ATTENTION_CLASSES = {
     "flash_attention_2": TomatoViTMoTFlashAttention2,
 }
 
-TOMATOVIT_TP_MODULE_CONFIG: dict[str, object] = {
-    "TomatoViTFlashAttention2": {
-        "q_proj": "col",
-        "k_proj": "col",
-        "v_proj": "col",
-        "out_proj": "row",
-    },
-    "TomatoViTMoTFlashAttention2": {
-        "q_proj_a": "col",
-        "k_proj_a": "col",
-        "v_proj_a": "col",
-        "out_proj_a": "row",
-        "q_proj_b": "col",
-        "k_proj_b": "col",
-        "v_proj_b": "col",
-        "out_proj_b": "row",
-    },
-    "SiglipMLP": {
-        "fc1": "col",
-        "fc2": "row",
-    },
-}
-
 
 class TomatoViTEncoderLayer(nn.Module):
     def __init__(self, config: TomatoViTConfig):
@@ -1044,8 +1021,6 @@ class TomatoViTPreTrainedModel(PreTrainedModel):
     TOMATO_VIT_START_DOCSTRING,
 )
 class TomatoViTModel(TomatoViTPreTrainedModel):
-    TP_MODULE_CONFIG = TOMATOVIT_TP_MODULE_CONFIG
-
     def __init__(self, config: TomatoViTConfig):
         super().__init__(config)
         self.config = config

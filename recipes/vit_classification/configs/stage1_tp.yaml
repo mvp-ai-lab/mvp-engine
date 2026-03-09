@@ -1,0 +1,18 @@
+defaults:
+  - stage1
+
+# Tensor-parallel template for 2 GPUs.
+# Adjust mesh sizes so dp_size * fsdp2_size * tp_size == WORLD_SIZE.
+parallel:
+  mesh:
+    dp_size: 1
+    fsdp2_size: 1
+    tp_size: 2
+
+optim:
+  # Even if foreach is enabled in config, the engine will automatically
+  # fall back to foreach=False when DTensor parameters are detected.
+  # This avoids the unadapted PyTorch error:
+  # "aten._foreach_mul_.Scalar: got mixed torch.Tensor and DTensor"
+  # when optimizer state updates touch DTensor parameters.
+  foreach: true

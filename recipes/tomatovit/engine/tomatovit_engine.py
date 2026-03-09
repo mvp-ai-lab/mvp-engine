@@ -224,14 +224,6 @@ class TomatoViTEngine(Engine):
 
         # 7. Load from a checkpoint if specified
         self.model = parallelized_model
-        load_from_cfg = OmegaConf.select(self.config, "model.load_from", default=None)
-        if load_from_cfg and load_from_cfg.path:
-            self.load(
-                ckpt_path=load_from_cfg.path,
-                only_model=load_from_cfg.only_model,
-                reset_teacher=load_from_cfg.reset_teacher,
-            )
-
         return parallelized_model
 
     def prepare_optimizer(self):
@@ -333,6 +325,15 @@ class TomatoViTEngine(Engine):
             raise NotImplementedError(f"Unsupported parallel backend: {self.parallel_backend}")
 
         torch.distributed.barrier()
+
+    def verify_checkpoint(self):
+        load_from_cfg = OmegaConf.select(self.config, "model.load_from", default=None)
+        if load_from_cfg and load_from_cfg.path:
+            self.load(
+                ckpt_path=load_from_cfg.path,
+                only_model=load_from_cfg.only_model,
+                reset_teacher=load_from_cfg.reset_teacher,
+            )
 
     def load(self, ckpt_path: Union[str, os.PathLike], only_model: bool = False, reset_teacher: bool = True) -> None:
         """Load training checkpoint from disk.

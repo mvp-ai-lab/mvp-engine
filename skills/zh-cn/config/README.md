@@ -1,11 +1,9 @@
 # Config
 
 用于根据用户需求生成 recipe 配置 YAML，参考以下样例：
-- `recipes/tomatovit/configs/stage1.yaml`
-- `recipes/tomatovit/configs/stage2.yaml`
-- `recipes/tomatovit/configs/stage1_fsdp.yaml`
-- `recipes/tomatovit/configs/stage1_tp.yaml`
-- `recipes/tomatovit/configs/stage1_fsdp2_tp.yaml`
+- `recipes/vit_classification/configs/stage1.yaml`
+- `recipes/vit_classification/configs/stage1_fsdp2.yaml`
+- `recipes/vit_classification/configs/stage1_tp.yaml`
 
 ## 目标
 帮助用户生成可直接训练的 `recipe` 配置文件，并满足：
@@ -83,7 +81,7 @@ pressure: 中
 
 ## YAML 生成流程
 1. 先提问并确认必要信息（TP 需求 + 集群拓扑为必选项）。
-2. 选择 `stage1.yaml` 或 `stage2.yaml` 作为基础。
+2. 选择 `stage1.yaml` 作为基础，再按用户要求覆写必要字段。
 3. 按确认后的硬件拓扑补齐/覆盖 `parallel.mesh` 段，不要再添加 `parallel.type`。
 4. 除非用户明确要求，`optim` 与 `loop` 保持基础默认。
 5. 输出时必须包含：
