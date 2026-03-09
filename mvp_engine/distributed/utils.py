@@ -3,11 +3,7 @@ from typing import Any, Optional
 
 import torch
 import torch.distributed as dist
-
-try:
-    from torch.distributed.tensor import DTensor
-except Exception:  # pragma: no cover - runtime-dependent
-    DTensor = None
+from torch.distributed.tensor import DTensor
 
 
 def get_rank() -> int:
