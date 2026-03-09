@@ -23,6 +23,7 @@ from mvp_engine.distributed.utils import (
     broadcast_from_main,
     build_mesh_shape_and_names,
     get_rank,
+    infer_parallel_backend,
     is_main_process,
 )
 from mvp_engine.utils.checkpointing.parallel_sl_util import (
@@ -74,6 +75,7 @@ class Engine(ABC):
 
     config: DictConfig
 
+    parallel_backend: str
     device_mesh: DeviceMesh
 
     train_loader: DataLoader
@@ -184,18 +186,15 @@ class Engine(ABC):
         """
         initialize_process_group()
 
-        parallel_backend = OmegaConf.select(config, "parallel.type", default=None)
-
-        assert parallel_backend in ["fsdp2", "ddp"], f"Unsupported parallel backend: {parallel_backend}"
-
         world_size = torch.distributed.get_world_size()
 
         mesh_cfg = OmegaConf.select(config, "parallel.mesh", default={}) or {}
         if not isinstance(mesh_cfg, dict):
             mesh_cfg = dict(mesh_cfg)
 
+        self.parallel_backend = infer_parallel_backend(mesh_cfg)
         mesh_shape, mesh_dim_names = build_mesh_shape_and_names(
-            parallel_backend=parallel_backend,
+            parallel_backend=self.parallel_backend,
             world_size=world_size,
             mesh_cfg=mesh_cfg,
         )
@@ -321,10 +320,9 @@ class Engine(ABC):
         cur_checkpoint_dir.mkdir(parents=True, exist_ok=True)
         torch.distributed.barrier()
 
-        parallel_backend = OmegaConf.select(self.config, "parallel.type", default=None)
-        if parallel_backend in ["ddp", "fsdp2"]:
+        if self.parallel_backend in ["ddp", "fsdp2"]:
             save_checkpoint(
-                parallel_backend,
+                self.parallel_backend,
                 self.device_mesh,
                 cur_checkpoint_dir,
                 self.model,
@@ -337,7 +335,7 @@ class Engine(ABC):
             )
         else:
             if is_main_process():
-                raise NotImplementedError(f"Unsupported parallel backend: {parallel_backend}")
+                raise NotImplementedError(f"Unsupported parallel backend: {self.parallel_backend}")
 
         torch.distributed.barrier()
 
@@ -349,10 +347,9 @@ class Engine(ABC):
         """
         logger.info(f"Loading checkpoint from {ckpt_path}...")
 
-        parallel_backend = OmegaConf.select(self.config, "parallel.type", default=None)
-        if parallel_backend in ["ddp", "fsdp2"]:
+        if self.parallel_backend in ["ddp", "fsdp2"]:
             engine_state = load_checkpoint(
-                parallel_backend,
+                self.parallel_backend,
                 self.device_mesh,
                 ckpt_path,
                 self.model,
@@ -364,7 +361,7 @@ class Engine(ABC):
             self.epoch = engine_state["epoch"]
             self._accumulate_step = engine_state["_accumulate_step"]
         else:
-            raise NotImplementedError(f"Unsupported parallel backend: {parallel_backend}")
+            raise NotImplementedError(f"Unsupported parallel backend: {self.parallel_backend}")
 
     def accumulate_step(self, skip_increase: bool = False) -> bool:
         """Check if the gradients should be synchronized this step."""

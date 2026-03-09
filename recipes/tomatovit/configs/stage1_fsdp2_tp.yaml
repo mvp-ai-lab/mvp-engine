@@ -4,7 +4,6 @@ defaults:
 # FSDP2 + Tensor-parallel example config.
 # Adjust mesh sizes so dp_size * fsdp2_size * tp_size == WORLD_SIZE.
 parallel:
-  type: "fsdp2"
   mesh:
     dp_size: 1
     fsdp2_size: 2

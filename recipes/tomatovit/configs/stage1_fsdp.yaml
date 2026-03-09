@@ -1,7 +1,6 @@
 defaults:
   - stage1
 parallel:
-  type: "fsdp2"
   mesh:
     dp_size: 1
     fsdp2_size: 8

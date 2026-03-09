@@ -11,8 +11,7 @@ project:
   log:
     interval: 20
     backends: ["terminal", "file"]
-parallel:
-  type: "ddp"
+parallel: {}
 data:
   batch_size: 0
   num_workers: 0

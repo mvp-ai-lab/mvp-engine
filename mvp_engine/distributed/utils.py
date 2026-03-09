@@ -28,6 +28,23 @@ def is_main_process() -> bool:
     return get_rank() == 0
 
 
+def infer_parallel_backend(mesh_cfg: Optional[dict[str, Any]] = None) -> str:
+    """Infer the parallel backend from mesh config.
+
+    Rules:
+    - default to ``ddp`` when mesh is empty or absent;
+    - if ``ddp_size`` is present, force ``ddp`` and ignore other mesh sizes;
+    - otherwise use ``fsdp2``.
+    """
+    mesh_cfg = mesh_cfg or {}
+
+    if mesh_cfg.get("ddp_size", None) is not None:
+        return "ddp"
+    if mesh_cfg:
+        return "fsdp2"
+    return "ddp"
+
+
 def build_mesh_shape_and_names(
     parallel_backend: str,
     world_size: int,
@@ -38,7 +55,8 @@ def build_mesh_shape_and_names(
     Args:
         parallel_backend: Distributed backend type, supports ``ddp`` and ``fsdp2``.
         world_size: Total number of distributed processes.
-        mesh_cfg: Optional mesh config with ``dp_size``, ``fsdp2_size``, ``tp_size``.
+        mesh_cfg: Optional mesh config with ``ddp_size``, ``dp_size``, ``fsdp2_size``,
+            and ``tp_size``.
 
     Returns:
         A tuple ``(mesh_shape, mesh_dim_names)``.
@@ -52,18 +70,29 @@ def build_mesh_shape_and_names(
     mesh_cfg = mesh_cfg or {}
 
     tp_size = int(mesh_cfg.get("tp_size", 1))
-    if tp_size < 1:
-        raise ValueError(f"tp_size must be >= 1, got {tp_size}.")
+    fsdp2_size = int(mesh_cfg.get("fsdp2_size", 1))
+
+    if tp_size == -1 and fsdp2_size == -1:
+        raise ValueError("Only one of tp_size and fsdp2_size can be -1.")
+
+    force_global_dp = False
+    if tp_size == -1:
+        tp_size = world_size
+        force_global_dp = True
+    elif tp_size < 1:
+        raise ValueError(f"tp_size must be >= 1 or -1, got {tp_size}.")
     if world_size % tp_size != 0:
         raise ValueError(f"WORLD_SIZE({world_size}) must be divisible by tp_size({tp_size}).")
 
-    fsdp2_size = int(mesh_cfg.get("fsdp2_size", 1))
-    if fsdp2_size < 1:
-        raise ValueError(f"fsdp2_size must be >= 1, got {fsdp2_size}.")
+    if fsdp2_size == -1:
+        fsdp2_size = world_size
+        force_global_dp = True
+    elif fsdp2_size < 1:
+        raise ValueError(f"fsdp2_size must be >= 1 or -1, got {fsdp2_size}.")
     if world_size % (fsdp2_size * tp_size) != 0:
         raise ValueError(f"WORLD_SIZE({world_size}) must be divisible by fsdp2_size({fsdp2_size})*tp_size({tp_size}).")
 
-    dp_size = int(mesh_cfg.get("dp_size", world_size // (tp_size * fsdp2_size)))
+    dp_size = 1 if force_global_dp else int(mesh_cfg.get("dp_size", world_size // (tp_size * fsdp2_size)))
     if dp_size * fsdp2_size * tp_size != world_size:
         raise ValueError(
             "Invalid mesh configuration: "
