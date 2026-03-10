@@ -45,11 +45,11 @@ mvp_engine/skills/
 ├── README.md             ← 本说明（仓库总览）
 ├── en/                   ← 英文文档
 │   ├── README.md
-│   ├── training/, parallel/, model/, data/, debug/, recipe/
+│   ├── training/, parallel/, model/, data/, debug/, recipe/, git/
 │   └── ...
 └── zh-cn/                   ← 中文文档
     ├── README.md
-    ├── training/, parallel/, model/, data/, debug/, recipe/
+    ├── training/, parallel/, model/, data/, debug/, recipe/, git/
     └── ...
 ```
 
@@ -78,6 +78,12 @@ skill-name/
 ```
 
 Agent 会按 skill 工作流生成适配代码和测试。
+
+示例：
+
+```
+参考 @mvp_engine/skills/zh-cn/git/pr-gate/SKILL.md
+```
 
 ## 如何新增 Skill
 

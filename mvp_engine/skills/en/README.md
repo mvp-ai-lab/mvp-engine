@@ -45,11 +45,11 @@ mvp_engine/skills/
 ├── README.md             ← overview (this repo)
 ├── en/                   ← English docs
 │   ├── README.md
-│   ├── training/, parallel/, model/, data/, debug/, recipe/
+│   ├── training/, parallel/, model/, data/, debug/, recipe/, git/
 │   └── ...
 └── zh-cn/                   ← 中文文档
     ├── README.md
-    ├── training/, parallel/, model/, data/, debug/, recipe/
+    ├── training/, parallel/, model/, data/, debug/, recipe/, git/
     └── ...
 ```
 
@@ -77,6 +77,12 @@ Use @mvp_engine/skills/en/<category>/<skill-name>/SKILL.md
 ```
 
 The agent will follow the skill and generate the adapted code and tests.
+
+Example:
+
+```
+Use @mvp_engine/skills/en/git/pr-gate/SKILL.md
+```
 
 ## Adding a New Skill
 

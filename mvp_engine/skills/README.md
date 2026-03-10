@@ -10,7 +10,7 @@ Structured task guidance for coding agents. Documentation is split by language:
 ```
 mvp_engine/skills/
 ├── README.md     ← this file (overview)
-├── en/           ← English docs (README, training/, parallel/, model/, data/, debug/, recipe/)
+├── en/           ← English docs (README, training/, parallel/, model/, data/, debug/, recipe/, git/)
 └── zh-cn/           ← 中文文档（结构同 en/）
 ```
 
