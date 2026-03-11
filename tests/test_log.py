@@ -429,9 +429,7 @@ class TestLoggerInitAndSimpleInfo:
     @patch.dict("os.environ", {"LOG_LEVEL": "invalid_level"}, clear=False)
     @patch("mvp_engine.utils.log.Console")
     @patch("mvp_engine.utils.log.logger.get_world_size", return_value=1)
-    def test_init_logger_invalid_env_level_falls_back_to_info(
-        self, mock_world_size, mock_console_cls
-    ):
+    def test_init_logger_invalid_env_level_falls_back_to_info(self, mock_world_size, mock_console_cls):
         """Test invalid LOG_LEVEL env value falls back to info and emits warning."""
         from mvp_engine.utils.log import init_logger
         from mvp_engine.utils.log.logger import LogLevel

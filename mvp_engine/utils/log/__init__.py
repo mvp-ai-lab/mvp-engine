@@ -54,9 +54,7 @@ def _parse_env_log_level() -> LogLevel:
         return LogLevel.INFO
 
 
-def init_logger(
-    backends: list[Backend], interval: int = 20, level: Optional[str] = None
-) -> Logger:
+def init_logger(backends: list[Backend], interval: int = 20, level: Optional[str] = None) -> Logger:
     """Initialize the global logger with the given backends.
 
     Args:
