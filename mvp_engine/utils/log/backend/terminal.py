@@ -131,6 +131,12 @@ class TerminalBackend(Backend):
         else:
             self.console.print(f"{main_content} {location_part}", soft_wrap=True)
 
+    def debug(self, message: str) -> None:
+        """Log a debug message."""
+        if self.enable:
+            location = _get_caller_info(depth=3)
+            self._print_with_location(message, "DEBUG", "dim", location)
+
     def info(self, message: str) -> None:
         """Log an informational message."""
         if self.enable:

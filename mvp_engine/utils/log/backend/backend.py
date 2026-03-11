@@ -37,6 +37,9 @@ class Backend:
     def info(self, message: str) -> None:
         """Log an informational message (backend-specific)."""
 
+    def debug(self, message: str) -> None:
+        """Log a debug message (backend-specific)."""
+
     def warning(self, message: str) -> None:
         """Log a warning message (backend-specific)."""
 

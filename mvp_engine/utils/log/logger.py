@@ -8,6 +8,7 @@ Types:
 - Metric values can be numeric (`float`) or `str` (last-value metrics).
 """
 
+from enum import IntEnum
 from typing import List, Mapping, Optional, Union
 
 import torch
@@ -18,6 +19,34 @@ from mvp_engine.utils.log.backend.backend import Backend
 from mvp_engine.utils.log.metric import MetricAggregator
 
 
+class LogLevel(IntEnum):
+    """Severity order for logger message filtering."""
+
+    DEBUG = 10
+    INFO = 20
+    WARNING = 30
+    ERROR = 40
+
+
+LOG_LEVEL_ALIASES = {
+    "debug": LogLevel.DEBUG,
+    "info": LogLevel.INFO,
+    "warn": LogLevel.WARNING,
+    "warning": LogLevel.WARNING,
+    "error": LogLevel.ERROR,
+}
+
+
+def parse_log_level(level: str) -> LogLevel:
+    """Convert a string log level to ``LogLevel``."""
+    normalized_level = level.strip().lower()
+    if normalized_level not in LOG_LEVEL_ALIASES:
+        raise ValueError(
+            f"Invalid log level '{level}'. Supported levels: {', '.join(LOG_LEVEL_ALIASES.keys())}."
+        )
+    return LOG_LEVEL_ALIASES[normalized_level]
+
+
 class Logger:
     """Coordinator for metric aggregation and backend forwarding.
 
@@ -26,7 +55,7 @@ class Logger:
         interval: Default aggregation interval (passed to MetricAggregator).
     """
 
-    def __init__(self, backends: List[Backend], interval: int = 20) -> None:
+    def __init__(self, backends: List[Backend], interval: int = 20, level: LogLevel = LogLevel.INFO) -> None:
         if get_world_size() > 1:
             gloo_group = dist.new_group(backend="gloo")
         else:
@@ -35,6 +64,7 @@ class Logger:
         self.metrics = MetricAggregator(dist_group=gloo_group, default_interval=interval)
         self.step: int = 0
         self.backends: List[Backend] = backends
+        self.level: LogLevel = level
 
     def log_config(self, config: dict) -> None:
         """Forward configuration dict to all backends.
@@ -121,17 +151,30 @@ class Logger:
         for backend in self.backends:
             backend.destroy()
 
+    def debug(self, message: str) -> None:
+        """Log a debug message via backends."""
+        if self.level > LogLevel.DEBUG:
+            return
+        for backend in self.backends:
+            backend.debug(message)
+
     def info(self, message: str) -> None:
         """Log an informational message via backends."""
+        if self.level > LogLevel.INFO:
+            return
         for backend in self.backends:
             backend.info(message)
 
     def warning(self, message: str) -> None:
         """Log a warning message via backends."""
+        if self.level > LogLevel.WARNING:
+            return
         for backend in self.backends:
             backend.warning(message)
 
     def error(self, message: str) -> None:
         """Log an error message via backends."""
+        if self.level > LogLevel.ERROR:
+            return
         for backend in self.backends:
             backend.error(message)
