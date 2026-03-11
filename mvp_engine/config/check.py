@@ -1,7 +1,5 @@
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
-from mvp_engine.distributed.utils import infer_parallel_backend
-
 
 def check_config(config: DictConfig) -> None:
     """Validate required engine config keys and value types."""
@@ -35,28 +33,12 @@ def check_config(config: DictConfig) -> None:
     if not isinstance(mesh_cfg, (dict, DictConfig)):
         raise TypeError("`parallel.mesh` must be a mapping.")
 
-    parallel_backend = infer_parallel_backend(mesh_cfg)
-    if parallel_backend == "ddp":
-        ddp_size = mesh_cfg.get("ddp_size", None)
-        if ddp_size is not None and (not isinstance(ddp_size, int) or isinstance(ddp_size, bool) or ddp_size < 1):
-            raise ValueError("`parallel.mesh.ddp_size` must be an integer >= 1.")
-    else:
-        for mesh_key in ("fsdp2_size", "tp_size"):
-            mesh_val = mesh_cfg.get(mesh_key, None)
-            if mesh_val is None:
-                continue
-            if not isinstance(mesh_val, int) or isinstance(mesh_val, bool) or (mesh_val < 1 and mesh_val != -1):
-                raise ValueError(f"`parallel.mesh.{mesh_key}` must be an integer >= 1 or -1.")
-
-        if mesh_cfg.get("fsdp2_size", None) == -1 and mesh_cfg.get("tp_size", None) == -1:
-            raise ValueError("`parallel.mesh.fsdp2_size` and `parallel.mesh.tp_size` cannot both be -1.")
-
-        if mesh_cfg.get("fsdp2_size", None) == -1 or mesh_cfg.get("tp_size", None) == -1:
-            pass
-        else:
-            dp_size = mesh_cfg.get("dp_size", None)
-            if dp_size is not None and (not isinstance(dp_size, int) or isinstance(dp_size, bool) or dp_size < 1):
-                raise ValueError("`parallel.mesh.dp_size` must be an integer >= 1.")
+    for mesh_type in mesh_cfg.keys():
+        if mesh_type not in {"replicate", "shard", "tensor"}:
+            raise ValueError(f"Invalid mesh type: {mesh_type}. Supported types are ['replicate', 'shard', 'tensor'].")
+        value = mesh_cfg[mesh_type]
+        if not isinstance(value, int) or isinstance(value, bool) or value < -1 or value == 0:
+            raise ValueError(f"`parallel.mesh.{mesh_type}` must be an integer >= 1 or -1.")
 
     mixed_precision = config.optim.mixed_precision
     if mixed_precision not in {"fp32", "fp16", "bf16"}:

@@ -1,40 +1,19 @@
 """Training engine for the ViT image classification recipe."""
 
-from typing import TypedDict
-
 import torch
 from omegaconf import OmegaConf
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader, DistributedSampler
 
 from mvp_engine.distributed.parallelize import parallelize_model
-from mvp_engine.distributed.utils import (
-    get_rank,
-    get_world_size,
-    has_dtensor_parameters,
-    is_main_process,
-)
+from mvp_engine.distributed.utils import get_rank, get_world_size, is_main_process
 from mvp_engine.engine import ENGINE_REGISTRY, Engine
-from mvp_engine.utils.log import get_logger, logger
+from mvp_engine.utils.log import logger
 from mvp_engine.utils.misc import calculate_model_size
 
 from ..dataset import build_dataset
 from ..dataset.sampler import InfiniteDistributedSampler
 from ..model import build_vit_model
-
-
-class TrainBatch(TypedDict):
-    """Normalized batch structure consumed by the ViT classifier."""
-
-    pixel_values: torch.Tensor
-    labels: torch.Tensor
-
-
-class TrainStepOutput(TypedDict):
-    """Outputs returned by one training step."""
-
-    loss: torch.Tensor
-    logs: dict[str, float]
 
 
 @ENGINE_REGISTRY.register()
@@ -76,14 +55,9 @@ class ViTClassificationEngine(Engine):
         model = build_vit_model(self.config.model).to(self.device)
         logger.info(f" - Model name: {model.__class__.__name__}")
 
-        parallel_backend = OmegaConf.select(self.config, "parallel.type", default=None)
-        if parallel_backend not in ["ddp", "fsdp2"]:
-            raise NotImplementedError(f"Parallel type {parallel_backend} not implemented.")
-
         parallelized_model = parallelize_model(
             model,
             device_mesh=self.device_mesh,
-            backend=parallel_backend,
             backend_kwargs=self.config.parallel.get("backend_kwargs", {}),
         )
 
@@ -108,19 +82,6 @@ class ViTClassificationEngine(Engine):
             "lr": float(self.config.optim.lr),
             "weight_decay": float(self.config.optim.weight_decay),
         }
-        foreach_cfg = OmegaConf.select(self.config, "optim.foreach", default=None)
-
-        if has_dtensor_parameters(model_parameters):
-            if foreach_cfg is not False:
-                log = get_logger()
-                if log is not None:
-                    log.info(
-                        " - Detected DTensor parameters. Falling back to AdamW foreach=False "
-                        "to avoid mixed Tensor/DTensor foreach kernel errors."
-                    )
-            optimizer_kwargs["foreach"] = False
-        elif foreach_cfg is not None:
-            optimizer_kwargs["foreach"] = bool(foreach_cfg)
 
         return torch.optim.AdamW(model_parameters, **optimizer_kwargs)
 
@@ -142,7 +103,7 @@ class ViTClassificationEngine(Engine):
         )
         return SequentialLR(self.optimizer, [scheduler_warmup, scheduler_main], milestones=[warmup_steps])
 
-    def train_pre_step(self, data: tuple[torch.Tensor, torch.Tensor]) -> TrainBatch:
+    def train_pre_step(self, data: tuple[torch.Tensor, torch.Tensor]) -> dict:
         """Move a batch from the dataloader onto the current device."""
         pixel_values, labels = data
         return {
@@ -150,7 +111,7 @@ class ViTClassificationEngine(Engine):
             "labels": labels.to(self.device, non_blocking=True),
         }
 
-    def train_one_step(self, data: TrainBatch) -> TrainStepOutput:
+    def train_one_step(self, data: dict) -> dict:
         """Run the forward pass and collect training metrics."""
         with torch.autocast(
             device_type=self.device_type,

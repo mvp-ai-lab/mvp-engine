@@ -19,13 +19,7 @@ from torch.utils.data import DataLoader
 from mvp_engine.config.check import check_config
 from mvp_engine.distributed.device_mesh import initialize_device_mesh
 from mvp_engine.distributed.init import initialize_process_group
-from mvp_engine.distributed.utils import (
-    broadcast_from_main,
-    build_mesh_shape_and_names,
-    get_rank,
-    infer_parallel_backend,
-    is_main_process,
-)
+from mvp_engine.distributed.utils import broadcast_from_main, get_rank, is_main_process
 from mvp_engine.utils.checkpointing.parallel_sl_util import (
     load_checkpoint,
     save_checkpoint,
@@ -75,7 +69,6 @@ class Engine(ABC):
 
     config: DictConfig
 
-    parallel_backend: str
     device_mesh: DeviceMesh
 
     train_loader: DataLoader
@@ -186,23 +179,11 @@ class Engine(ABC):
         """
         initialize_process_group()
 
-        world_size = torch.distributed.get_world_size()
-
-        mesh_cfg = OmegaConf.select(config, "parallel.mesh", default={}) or {}
-        if not isinstance(mesh_cfg, dict):
-            mesh_cfg = dict(mesh_cfg)
-
-        self.parallel_backend = infer_parallel_backend(mesh_cfg)
-        mesh_shape, mesh_dim_names = build_mesh_shape_and_names(
-            parallel_backend=self.parallel_backend,
-            world_size=world_size,
-            mesh_cfg=mesh_cfg,
-        )
+        mesh_cfg = OmegaConf.select(config, "parallel.mesh")
 
         self.device_mesh = initialize_device_mesh(
             self.device.type,
-            mesh_shape=mesh_shape,
-            mesh_dim_names=mesh_dim_names,
+            mesh_cfg,
         )
 
     def prepare_config(self, config: DictConfig) -> DictConfig:
@@ -281,10 +262,6 @@ class Engine(ABC):
         """Build and return the scheduler instance."""
 
     @abstractmethod
-    def verify_checkpoint(self) -> None:
-        """Verify and load checkpoint after model, optimizer and scheduler initialization."""
-
-    @abstractmethod
     def prepare_dataloader(self, workflow: str = "train") -> DataLoader:
         """Build and return the dataloader instance for the given stage."""
 
@@ -324,22 +301,18 @@ class Engine(ABC):
         cur_checkpoint_dir.mkdir(parents=True, exist_ok=True)
         torch.distributed.barrier()
 
-        if self.parallel_backend in ["ddp", "fsdp2"]:
-            save_checkpoint(
-                self.parallel_backend,
-                self.device_mesh,
-                cur_checkpoint_dir,
-                self.model,
-                self.optimizer,
-                scheduler=self.scheduler,
-                scaler=self.scaler,
-                step=self.step,
-                epoch=self.epoch,
-                _accumulate_step=self._accumulate_step,
-            )
-        else:
-            if is_main_process():
-                raise NotImplementedError(f"Unsupported parallel backend: {self.parallel_backend}")
+        # TODO: fix this function
+        save_checkpoint(
+            self.device_mesh,
+            cur_checkpoint_dir,
+            self.model,
+            self.optimizer,
+            scheduler=self.scheduler,
+            scaler=self.scaler,
+            step=self.step,
+            epoch=self.epoch,
+            _accumulate_step=self._accumulate_step,
+        )
 
         torch.distributed.barrier()
 
@@ -351,21 +324,17 @@ class Engine(ABC):
         """
         logger.info(f"Loading checkpoint from {ckpt_path}...")
 
-        if self.parallel_backend in ["ddp", "fsdp2"]:
-            engine_state = load_checkpoint(
-                self.parallel_backend,
-                self.device_mesh,
-                ckpt_path,
-                self.model,
-                self.optimizer,
-                self.scheduler,
-                self.scaler,
-            )
-            self.step = engine_state["step"]
-            self.epoch = engine_state["epoch"]
-            self._accumulate_step = engine_state["_accumulate_step"]
-        else:
-            raise NotImplementedError(f"Unsupported parallel backend: {self.parallel_backend}")
+        engine_state = load_checkpoint(
+            self.device_mesh,
+            ckpt_path,
+            self.model,
+            self.optimizer,
+            self.scheduler,
+            self.scaler,
+        )
+        self.step = engine_state["step"]
+        self.epoch = engine_state["epoch"]
+        self._accumulate_step = engine_state["_accumulate_step"]
 
     def accumulate_step(self, skip_increase: bool = False) -> bool:
         """Check if the gradients should be synchronized this step."""
@@ -412,9 +381,6 @@ class Engine(ABC):
 
         logger.info("Building Scheduler...")
         self.scheduler = self.prepare_scheduler()
-
-        logger.info("Load from a checkpoint if specified...")
-        self.verify_checkpoint()
 
         logger.info("Building GradientScaler...")
         mixed_precision_enabled = self.dtype != torch.float32

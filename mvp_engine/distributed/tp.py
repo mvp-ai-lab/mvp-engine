@@ -19,6 +19,20 @@ _TP_STYLE_FACTORIES = {
 }
 
 
+def _normalize_module_path(path: str) -> str:
+    """Normalize module paths so user filters can be matched consistently."""
+    return path.strip(".")
+
+
+def _matches_module_path(path: str, prefix: str) -> bool:
+    """Return True when ``path`` is the same module as ``prefix`` or its subtree."""
+    normalized_path = _normalize_module_path(path)
+    normalized_prefix = _normalize_module_path(prefix)
+    if normalized_prefix == "":
+        return True
+    return normalized_path == normalized_prefix or normalized_path.startswith(f"{normalized_prefix}.")
+
+
 def _mode_to_style(mode: Any) -> ParallelStyle:
     if isinstance(mode, str):
         mode_key = mode.lower()
@@ -58,9 +72,9 @@ def _build_tp_plan(module: nn.Module, plan_cfg: object) -> dict[str, ParallelSty
 
 
 def _should_apply(path: str, include_paths: Iterable[str], exclude_paths: Iterable[str]) -> bool:
-    if include_paths and not any(path.startswith(prefix) for prefix in include_paths):
+    if include_paths and not any(_matches_module_path(path, prefix) for prefix in include_paths):
         return False
-    if exclude_paths and any(path.startswith(prefix) for prefix in exclude_paths):
+    if exclude_paths and any(_matches_module_path(path, prefix) for prefix in exclude_paths):
         return False
     return True
 
@@ -82,13 +96,14 @@ def resolve_tp_module_config(model: nn.Module, attr_name: str = "TP_MODULE_CONFI
     return module_config
 
 
-def apply_tensor_parallel(
+def parallelize_model_with_tensor_parallel(
     model: nn.Module,
     tp_mesh,
-    module_config: dict[str, object],
     include_paths: Iterable[str] = (),
     exclude_paths: Iterable[str] = (),
 ) -> list[tuple[str, str, list[str]]]:
+    module_config = resolve_tp_module_config(model, attr_name="TP_MODULE_CONFIG")
+
     applied: list[tuple[str, str, list[str]]] = []
     seen_ids: set[int] = set()
 
