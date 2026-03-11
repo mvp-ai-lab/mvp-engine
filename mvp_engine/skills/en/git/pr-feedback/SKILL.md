@@ -31,7 +31,7 @@ description: Use after a PR is open and review comments arrive. Covers comment t
 
 3. Implement targeted fixes
 - Keep each fix scoped to comment intent.
-- Update docstrings/comments when behavior contract changed.
+- Update docstrings and type hints/comments when behavior contract changed.
 - Avoid unrelated cleanup in the same patch.
 
 4. Re-validate
@@ -57,4 +57,4 @@ description: Use after a PR is open and review comments arrive. Covers comment t
 ## Read on demand
 
 - [references/feedback-checklist.md](references/feedback-checklist.md): when the PR is about a skill, use this to ensure replies address the same dimensions reviewers use.
-- [references/docstring-rules.md](references/docstring-rules.md): docstring update rules when API behavior changed.
+- [../references/docstring-and-typing.md](../references/docstring-and-typing.md): docstring and typing update rules when behavior changed.

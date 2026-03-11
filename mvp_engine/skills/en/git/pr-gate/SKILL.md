@@ -1,6 +1,6 @@
 ---
 name: pr-gate
-description: Use before pushing or opening/updating a PR. Covers commit-level diff inspection, docstring completion for changed APIs, and pre-PR lint/test quality gates.
+description: Use before pushing or opening/updating a PR. Covers commit-level diff inspection, docstring and typing cleanup for changed APIs, and pre-PR lint/test quality gates.
 ---
 
 # Pre-PR Quality Gate
@@ -8,7 +8,7 @@ description: Use before pushing or opening/updating a PR. Covers commit-level di
 ## When to use
 
 - The user asks for pre-push cleanup before opening/updating a PR.
-- The user asks to add/update docstrings based on current commits.
+- The user asks to add/update docstrings or type hints based on current commits.
 
 ## Required inputs
 
@@ -31,12 +31,15 @@ description: Use before pushing or opening/updating a PR. Covers commit-level di
 - File-level map: `git diff --name-status origin/<base>...HEAD`
 - Inspect critical diffs.
 
-3. Docstring completion from changed commits
+3. Docstring and typing cleanup from changed commits
 - Limit edits to touched functions/classes/modules.
 - Rules:
   - New public functions/classes must have docstrings.
-  - Update docstrings when signature/returns/side effects/behavior changes.
+  - New or changed public functions should have explicit parameter and return type hints where the language supports them.
+  - Update docstrings and type hints when signature/returns/side effects/behavior changes.
+  - Tighten inaccurate or stale types in touched code; avoid broad `Any` if a concrete type is available.
   - Private trivial helpers may skip docstrings.
+- Keep docstrings and type hints aligned with actual behavior.
 - Avoid filler text; describe behavior, IO contract, constraints.
 
 4. Pre-PR quality gates
@@ -60,5 +63,4 @@ description: Use before pushing or opening/updating a PR. Covers commit-level di
 
 ## Read on demand
 
-- [references/review-checklist.md](references/review-checklist.md): concise review checklist.
-- [references/docstring-rules.md](references/docstring-rules.md): docstring rules and examples.
+- [../references/docstring-and-typing.md](../references/docstring-and-typing.md): rules for updating docstrings and type hints in touched code.

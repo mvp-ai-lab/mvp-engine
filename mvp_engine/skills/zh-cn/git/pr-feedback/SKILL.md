@@ -31,7 +31,7 @@ description: 用于 PR 已创建且收到评审意见后的响应处理。覆盖
 
 3. 定向修复
 - 每次改动严格围绕评论意图。
-- 若行为契约变化，同步更新 docstring/注释。
+- 若行为契约变化，同步更新 docstring 与类型标注/注释。
 - 避免夹带无关重构。
 
 4. 回归验证
@@ -57,4 +57,4 @@ description: 用于 PR 已创建且收到评审意见后的响应处理。覆盖
 ## 需要参考时再读取
 
 - [references/feedback-checklist.md](references/feedback-checklist.md): 当 PR 涉及 skill 时，回复前用此清单对照，确保覆盖 reviewer 关心的维度。
-- [references/docstring-rules.md](references/docstring-rules.md): 行为变更时 docstring 更新规则。
+- [../references/docstring-and-typing.md](../references/docstring-and-typing.md): 行为变化时 docstring 与类型标注更新规则。
