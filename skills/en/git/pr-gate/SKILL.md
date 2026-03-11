@@ -63,4 +63,4 @@ description: Use before pushing or opening/updating a PR. Covers commit-level di
 
 ## Read on demand
 
-- [../references/docstring-and-typing.md](../references/docstring-and-typing.md): rules for updating docstrings and type hints in touched code.
+- [references/docstring-and-typing.md](references/docstring-and-typing.md): rules for updating docstrings and type hints in touched code.
