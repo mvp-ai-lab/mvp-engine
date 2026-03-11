@@ -57,4 +57,4 @@ description: Use after a PR is open and review comments arrive. Covers comment t
 ## Read on demand
 
 - [references/feedback-checklist.md](references/feedback-checklist.md): when the PR is about a skill, use this to ensure replies address the same dimensions reviewers use.
-- [../references/docstring-and-typing.md](../references/docstring-and-typing.md): docstring and typing update rules when behavior changed.
+- [../pr-gate/references/docstring-and-typing.md](../pr-gate/references/docstring-and-typing.md): docstring and typing update rules when behavior changed.

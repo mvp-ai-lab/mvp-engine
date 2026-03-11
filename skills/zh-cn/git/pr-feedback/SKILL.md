@@ -57,4 +57,4 @@ description: 用于 PR 已创建且收到评审意见后的响应处理。覆盖
 ## 需要参考时再读取
 
 - [references/feedback-checklist.md](references/feedback-checklist.md): 当 PR 涉及 skill 时，回复前用此清单对照，确保覆盖 reviewer 关心的维度。
-- [../references/docstring-and-typing.md](../references/docstring-and-typing.md): 行为变化时 docstring 与类型标注更新规则。
+- [../pr-gate/references/docstring-and-typing.md](../pr-gate/references/docstring-and-typing.md): 行为变化时 docstring 与类型标注更新规则。
