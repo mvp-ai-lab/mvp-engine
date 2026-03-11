@@ -230,7 +230,7 @@ class TestLogger:
     @patch("mvp_engine.utils.log.logger.get_world_size", return_value=1)
     def test_logger_level_filters_messages(self, mock_world_size):
         """Test logger-level filtering for debug/info/warn/error methods."""
-        from mvp_engine.utils.log.logger import LogLevel, Logger
+        from mvp_engine.utils.log.logger import Logger, LogLevel
 
         mock_backend = MagicMock()
         logger = Logger(backends=[mock_backend], level=LogLevel.WARNING)
@@ -244,7 +244,6 @@ class TestLogger:
         mock_backend.info.assert_not_called()
         mock_backend.warning.assert_called_once_with("warning message")
         mock_backend.error.assert_called_once_with("error message")
-
 
     @patch("mvp_engine.utils.log.logger.get_world_size", return_value=1)
     def test_destroy(self, mock_world_size):
@@ -430,7 +429,9 @@ class TestLoggerInitAndSimpleInfo:
     @patch.dict("os.environ", {"LOG_LEVEL": "invalid_level"}, clear=False)
     @patch("mvp_engine.utils.log.Console")
     @patch("mvp_engine.utils.log.logger.get_world_size", return_value=1)
-    def test_init_logger_invalid_env_level_falls_back_to_info(self, mock_world_size, mock_console_cls):
+    def test_init_logger_invalid_env_level_falls_back_to_info(
+        self, mock_world_size, mock_console_cls
+    ):
         """Test invalid LOG_LEVEL env value falls back to info and emits warning."""
         from mvp_engine.utils.log import init_logger
         from mvp_engine.utils.log.logger import LogLevel
@@ -457,6 +458,21 @@ class TestLoggerInitAndSimpleInfo:
 
         assert logger.level == LogLevel.DEBUG
         logger.destroy()
+
+    @patch("mvp_engine.utils.log.logger.get_world_size", return_value=1)
+    def test_init_logger_invalid_level_keeps_existing_logger(self, mock_world_size):
+        """Test invalid explicit level does not destroy existing logger instance."""
+        from mvp_engine.utils.log import get_logger, init_logger
+
+        first_backend = MagicMock()
+        first_logger = init_logger([first_backend], level="info")
+
+        with pytest.raises(ValueError):
+            init_logger([MagicMock()], level="invalid_level")
+
+        assert get_logger() is first_logger
+        first_backend.destroy.assert_not_called()
+        first_logger.destroy()
 
     @patch.dict("os.environ", {"LOG_LEVEL": "invalid_level"}, clear=False)
     @patch("mvp_engine.utils.log.Console")
@@ -485,8 +501,6 @@ class TestLoggerInitAndSimpleInfo:
         simple_info("shown", level="error")
 
         assert mock_console.print.call_count == 1
-
-
 
 
 if __name__ == "__main__":

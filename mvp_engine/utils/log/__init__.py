@@ -5,7 +5,7 @@ from typing import Optional
 from rich.console import Console
 
 from .backend.backend import Backend
-from .logger import LogLevel, Logger, parse_log_level
+from .logger import Logger, LogLevel, parse_log_level
 
 
 class LoggerProxy:
@@ -34,8 +34,6 @@ def get_logger() -> Optional[Logger]:
     return logger._instance
 
 
-
-
 def _warn_invalid_log_level(invalid_level: str) -> None:
     """Warn and fallback to info when ``LOG_LEVEL`` is invalid."""
     console = Console(color_system="auto")
@@ -55,7 +53,10 @@ def _parse_env_log_level() -> LogLevel:
         _warn_invalid_log_level(raw_level)
         return LogLevel.INFO
 
-def init_logger(backends: list[Backend], interval: int = 20, level: Optional[str] = None) -> Logger:
+
+def init_logger(
+    backends: list[Backend], interval: int = 20, level: Optional[str] = None
+) -> Logger:
     """Initialize the global logger with the given backends.
 
     Args:
@@ -66,13 +67,14 @@ def init_logger(backends: list[Backend], interval: int = 20, level: Optional[str
     Returns:
         The initialized Logger instance.
     """
-    if logger._instance is not None:
-        logger._instance.destroy()
-
     if level is None:
         parsed_level = _parse_env_log_level()
     else:
         parsed_level = parse_log_level(level)
+
+    if logger._instance is not None:
+        logger._instance.destroy()
+
     logger._instance = Logger(backends, interval, parsed_level)
     return logger._instance
 
@@ -112,4 +114,7 @@ def simple_info(message: str, level: str = "info") -> None:
 
     console = Console(color_system="auto")
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    console.print(f"[bold]{date_str}[/bold] | [{level_color}]{level_name.upper()}[/{level_color}] | {message}", soft_wrap=True)
+    console.print(
+        f"[bold]{date_str}[/bold] | [{level_color}]{level_name.upper()}[/{level_color}] | {message}",
+        soft_wrap=True,
+    )
