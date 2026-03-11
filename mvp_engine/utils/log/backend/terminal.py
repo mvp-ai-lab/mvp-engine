@@ -111,7 +111,9 @@ class TerminalBackend(Backend):
         if self.console is None:
             return None
         date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        terminal_width = self.console.width or 120
+        terminal_width = self.console.width
+        if not isinstance(terminal_width, int) or terminal_width <= 0:
+            terminal_width = 120
 
         # Build the main content (without location)
         if level_color == "cyan":

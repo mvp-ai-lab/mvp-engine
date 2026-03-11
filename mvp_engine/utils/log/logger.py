@@ -41,9 +41,7 @@ def parse_log_level(level: str) -> LogLevel:
     """Convert a string log level to ``LogLevel``."""
     normalized_level = level.strip().lower()
     if normalized_level not in LOG_LEVEL_ALIASES:
-        raise ValueError(
-            f"Invalid log level '{level}'. Supported levels: {', '.join(LOG_LEVEL_ALIASES.keys())}."
-        )
+        raise ValueError(f"Invalid log level '{level}'. Supported levels: {', '.join(LOG_LEVEL_ALIASES.keys())}.")
     return LOG_LEVEL_ALIASES[normalized_level]
 
 
@@ -147,9 +145,15 @@ class Logger:
                 backend.log_metrics(collected, step, epoch)
 
     def destroy(self) -> None:
-        """Call `destroy()` on all registered backends."""
+        """Call `destroy()` on all registered backends and clear the global instance."""
         for backend in self.backends:
             backend.destroy()
+
+        # Avoid leaving a destroyed logger registered as the global instance.
+        from mvp_engine.utils.log import logger as global_logger
+
+        if global_logger._instance is self:
+            global_logger._instance = None
 
     def debug(self, message: str) -> None:
         """Log a debug message via backends."""
