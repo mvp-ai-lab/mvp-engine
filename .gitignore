@@ -183,3 +183,7 @@ slurmlogs
 .DS_Store
 .vscode
 .idea
+
+# AI
+CUSTOM.md
+references

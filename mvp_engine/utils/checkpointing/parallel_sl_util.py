@@ -30,6 +30,25 @@ def _get_checkpoint_process_group():
     return None
 
 
+def _infer_checkpoint_backend(mesh: DeviceMesh) -> str:
+    """Infer whether checkpoint IO should use the DDP or FSDP2 path from the mesh."""
+    mesh_dim_names = mesh.mesh_dim_names or ()
+
+    if "shard" in mesh_dim_names and mesh["shard"].size() > 1:
+        return "fsdp2"
+    if "tensor" in mesh_dim_names and mesh["tensor"].size() > 1:
+        return "fsdp2"
+
+    # Fallback for unnamed meshes: any extra non-replicate dimension implies
+    # sharded checkpointing rather than rank-0-only DDP checkpointing.
+    mesh_shape = tuple(mesh.shape)
+    if len(mesh_shape) <= 1:
+        return "ddp"
+    if any(dim_size > 1 for dim_size in mesh_shape[1:]):
+        return "fsdp2"
+    return "ddp"
+
+
 def _optimizer_state_contains_fqn(optim_state: dict[str, Any], fqn: str) -> bool:
     state = optim_state.get(OPTIM_STATE_KEY)
     if not isinstance(state, dict):
@@ -62,7 +81,6 @@ def _fill_missing_optimizer_states(model: nn.Module, optim_state: dict[str, Any]
 
 
 def save_checkpoint(
-    backend: str,
     mesh: DeviceMesh,
     cur_checkpoint_dir: Path,
     model: nn.Module,
@@ -74,6 +92,8 @@ def save_checkpoint(
     _accumulate_step: int = 0,
     prefix: str = "",
 ):
+    backend = _infer_checkpoint_backend(mesh)
+
     if prefix == "":
         rng_state = {
             "torch_rng_state": torch.get_rng_state(),
@@ -156,7 +176,6 @@ def save_checkpoint(
 
 
 def load_checkpoint(
-    backend: str,
     mesh: DeviceMesh,
     ckpt_path: str,
     model: nn.Module,
@@ -168,7 +187,6 @@ def load_checkpoint(
     """Load checkpoint from disk.
 
     Args:
-        backend: Parallel backend type ('ddp' or 'fsdp2').
         mesh: Device mesh for distributed training.
         ckpt_path: Path to checkpoint directory.
         model: Model to load state into.
@@ -180,6 +198,8 @@ def load_checkpoint(
     Returns:
         dict: Engine state containing 'step', 'epoch', '_accumulate_step'.
     """
+    backend = _infer_checkpoint_backend(mesh)
+
     if backend == "ddp":
         if hasattr(model, "module"):
             model.module.load_state_dict(torch.load(Path(ckpt_path) / f"{prefix}model.pt", map_location="cpu"))

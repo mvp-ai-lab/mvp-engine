@@ -1,4 +1,4 @@
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 import torch.nn as nn
@@ -96,6 +96,27 @@ def resolve_tp_module_config(model: nn.Module, attr_name: str = "TP_MODULE_CONFI
     return module_config
 
 
+def resolve_tp_module_postprocessors(
+    model: nn.Module,
+    attr_name: str = "TP_MODULE_POSTPROCESSORS",
+) -> dict[str, Callable[[nn.Module, Any], None]]:
+    cls = model.__class__
+    if not hasattr(cls, attr_name):
+        return {}
+
+    postprocessors = getattr(cls, attr_name)
+    if postprocessors is None:
+        return {}
+    if not isinstance(postprocessors, dict):
+        raise TypeError(f"{cls.__name__}.{attr_name} must be dict, got {type(postprocessors)}.")
+
+    for module_name, postprocess in postprocessors.items():
+        if not callable(postprocess):
+            raise TypeError(f"{cls.__name__}.{attr_name}[{module_name!r}] must be callable, got {type(postprocess)}.")
+
+    return postprocessors
+
+
 def parallelize_model_with_tensor_parallel(
     model: nn.Module,
     tp_mesh,
@@ -103,6 +124,7 @@ def parallelize_model_with_tensor_parallel(
     exclude_paths: Iterable[str] = (),
 ) -> list[tuple[str, str, list[str]]]:
     module_config = resolve_tp_module_config(model, attr_name="TP_MODULE_CONFIG")
+    module_postprocessors = resolve_tp_module_postprocessors(model)
 
     applied: list[tuple[str, str, list[str]]] = []
     seen_ids: set[int] = set()
@@ -124,6 +146,9 @@ def parallelize_model_with_tensor_parallel(
             continue
 
         parallelize_module(module, tp_mesh, plan)
+        postprocess = module_postprocessors.get(cls_name)
+        if postprocess is not None:
+            postprocess(module, tp_mesh)
         applied.append((path, cls_name, list(plan.keys())))
         seen_ids.add(id(module))
 

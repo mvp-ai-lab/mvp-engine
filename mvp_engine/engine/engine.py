@@ -503,7 +503,7 @@ class Engine(ABC):
             # Gradient clipping
             max_grad_norm = OmegaConf.select(self.config, "optim.clip_grad_norm", default=None)
             if max_grad_norm is not None:
-                clip_grad_norm_(self.model.parameters(), max_grad_norm)
+                clip_grad_norm_(self.model, max_grad_norm)
 
             # Optimizer step (skipped if inf/nan gradients detected by scaler)
             self.scaler.step(self.optimizer)
