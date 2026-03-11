@@ -10,7 +10,7 @@ This repository contains the core training engine and utilities for vision and l
 - `mvp_engine/dataset/`: dataset builders and data pipeline utilities.
 - `mvp_engine/distributed/` and `mvp_engine/utils/`: distributed/runtime helpers and other utilities.
 - `skills/`: agent skills — structured guides for tasks that have clear patterns but cannot be generalized into a single API (for example gradient checkpointing, FSDP wrap policies). Organized by language (`en/`, `zh-cn/`) and category (`training/`, `parallel/`, `model/`, `data/`, `debug/`, `recipe/`). See `skills/README.md` for overview and `skills/en/README.md` or `skills/zh-cn/README.md` for design rationale.
-- `recipes/`: experiment-specific engines, models, datasets, and Hydra YAML configs (for example `recipes/tomatovit/configs/`).
+- `recipes/`: experiment-specific engines, models, datasets, and Hydra YAML configs (for example `recipes/vit_classification/configs/`).
 - `tests/`: pytest suite (`test_*.py`) and shared fixtures (`conftest.py`).
 - `tools/dataviewer/`: local data viewer app.
 - `assets/`, `data/`, `outputs/`, `pretrained/`: static assets, local data links, run artifacts, and model weights.
@@ -21,7 +21,7 @@ This repository contains the core training engine and utilities for vision and l
 - `pre-commit install`: install local hooks.
 - `pre-commit run --all-files`: run the same lint checks as CI.
 - `pytest -q`: run tests.
-- `torchrun --nproc_per_node=8 -m mvp_engine.launch --config ./recipes/tomatovit/configs/stage1.yaml`: launch a demo distributed training.
+- `torchrun --nproc_per_node=8 -m mvp_engine.launch --config ./recipes/vit_classification/configs/stage1.yaml`: launch a demo distributed training.
 
 ## Coding Style & Naming Conventions
 - Python 3.12, 4-space indentation, max line length 120.
@@ -37,6 +37,7 @@ This repository contains the core training engine and utilities for vision and l
 - Use `pytest` and place tests in `tests/` as `test_<feature>.py`.
 - Add or update tests for any behavior change (engine loop, logging, distributed behavior, or dataset handling).
 - Prefer targeted runs while iterating (for example `pytest tests/test_log.py -q`) and run full suite before opening a PR.
+- For recipe-specific code under `recipes/`, add tests in the same directory (for example `recipes/vit_classification/test_*.py`).
 
 ## Commit & Pull Request Guidelines
 - Follow existing history style: short, imperative subjects with prefixes like `feat:`, `fix:`, `chore:`, `enhance:`.
