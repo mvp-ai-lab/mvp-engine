@@ -111,7 +111,9 @@ class TerminalBackend(Backend):
         if self.console is None:
             return None
         date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        terminal_width = self.console.width or 120
+        terminal_width = self.console.width
+        if not isinstance(terminal_width, int) or terminal_width <= 0:
+            terminal_width = 120
 
         # Build the main content (without location)
         if level_color == "cyan":
@@ -130,6 +132,12 @@ class TerminalBackend(Backend):
             self.console.print(f"{main_content}{' ' * padding}{location_part}", soft_wrap=True)
         else:
             self.console.print(f"{main_content} {location_part}", soft_wrap=True)
+
+    def debug(self, message: str) -> None:
+        """Log a debug message."""
+        if self.enable:
+            location = _get_caller_info(depth=3)
+            self._print_with_location(message, "DEBUG", "dim", location)
 
     def info(self, message: str) -> None:
         """Log an informational message."""

@@ -12,7 +12,11 @@ project:
     interval: 20
     backends: ["terminal", "file"]
 parallel:
-  type: "ddp"
+  mesh:
+    replicate: 1
+    shard: 8
+    tensor: 1
+  backend_kwargs:
 data:
   batch_size: 0
   num_workers: 0

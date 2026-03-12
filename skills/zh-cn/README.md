@@ -1,6 +1,6 @@
 # Skills
 
-Skills 是本仓库的一种**新接口形式**，与代码接口（函数、类）并列存在。  
+Skills 是本仓库的一种**新接口形式**，与代码接口（函数、类）并列存在。
 **English:** [README.md](../en/README.md)
 
 ---
@@ -35,7 +35,7 @@ Skills 是本仓库的一种**新接口形式**，与代码接口（函数、类
     保留在 recipe/ 中作为实验特定代码
 ```
 
-**代码接口**示例：checkpoint 文件存取、日志工具、config 解析、分布式通信原语。  
+**代码接口**示例：checkpoint 文件存取、日志工具、config 解析、分布式通信原语。
 **Skill 接口**示例：gradient checkpointing 适配、FSDP wrap 策略、新模型接入、新 dataset 接入。
 
 ## 目录结构
@@ -45,11 +45,11 @@ skills/
 ├── README.md             ← 本说明（仓库总览）
 ├── en/                   ← 英文文档
 │   ├── README.md
-│   ├── training/, parallel/, model/, data/, debug/, recipe/
+│   ├── training/, parallel/, model/, data/, debug/, recipe/, config/, git/
 │   └── ...
 └── zh-cn/                   ← 中文文档
     ├── README.md
-    ├── training/, parallel/, model/, data/, debug/, recipe/
+    ├── training/, parallel/, model/, data/, debug/, recipe/, config/, git/
     └── ...
 ```
 
@@ -79,9 +79,18 @@ skill-name/
 
 Agent 会按 skill 工作流生成适配代码和测试。
 
+示例：
+
+```
+参考 @skills/zh-cn/git/pr-gate/SKILL.md
+```
+
 ## Skill 列表
 
 - `model/model-migration`：[model/model-migration/SKILL.md](model/model-migration/SKILL.md)
+- `git/pr-gate`：[git/pr-gate/SKILL.md](git/pr-gate/SKILL.md)
+- `git/pr-feedback`：[git/pr-feedback/SKILL.md](git/pr-feedback/SKILL.md)
+- `git/pr-skill-review`：[git/pr-skill-review/SKILL.md](git/pr-skill-review/SKILL.md)
 
 ## 如何新增 Skill
 
