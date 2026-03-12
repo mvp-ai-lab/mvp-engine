@@ -8,6 +8,7 @@ Types:
 - Metric values can be numeric (`float`) or `str` (last-value metrics).
 """
 
+import os
 from enum import IntEnum
 from typing import List, Mapping, Optional, Union
 
@@ -55,6 +56,7 @@ class Logger:
 
     def __init__(self, backends: List[Backend], interval: int = 20, level: LogLevel = LogLevel.INFO) -> None:
         if get_world_size() > 1:
+            os.environ["GLOO_LOG_LEVEL"] = "ERROR"
             gloo_group = dist.new_group(backend="gloo")
         else:
             gloo_group = None

@@ -49,8 +49,8 @@ loop:
 parallel:
   mesh:
     replicate: -1
-    shard: 8
-    tensor: 1
+    shard: 4
+    tensor: 2
   backend_kwargs:
     fsdp2:
       reshard_after_forward: true

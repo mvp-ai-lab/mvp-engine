@@ -8,14 +8,9 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader, DistributedSampler
 
 from mvp_engine.distributed.parallelize import parallelize_model
-from mvp_engine.distributed.utils import (
-    get_rank,
-    get_world_size,
-    has_dtensor_parameters,
-    is_main_process,
-)
+from mvp_engine.distributed.utils import get_rank, get_world_size, is_main_process
 from mvp_engine.engine import ENGINE_REGISTRY, Engine
-from mvp_engine.utils.log import get_logger, logger
+from mvp_engine.utils.log import logger
 from mvp_engine.utils.misc import calculate_model_size
 
 from ..dataset import build_dataset
@@ -76,14 +71,9 @@ class ViTClassificationEngine(Engine):
         model = build_vit_model(self.config.model).to(self.device)
         logger.info(f" - Model name: {model.__class__.__name__}")
 
-        parallel_backend = OmegaConf.select(self.config, "parallel.type", default=None)
-        if parallel_backend not in ["ddp", "fsdp2"]:
-            raise NotImplementedError(f"Parallel type {parallel_backend} not implemented.")
-
         parallelized_model = parallelize_model(
             model,
             device_mesh=self.device_mesh,
-            backend=parallel_backend,
             backend_kwargs=self.config.parallel.get("backend_kwargs", {}),
         )
 
@@ -108,19 +98,6 @@ class ViTClassificationEngine(Engine):
             "lr": float(self.config.optim.lr),
             "weight_decay": float(self.config.optim.weight_decay),
         }
-        foreach_cfg = OmegaConf.select(self.config, "optim.foreach", default=None)
-
-        if has_dtensor_parameters(model_parameters):
-            if foreach_cfg is not False:
-                log = get_logger()
-                if log is not None:
-                    log.info(
-                        " - Detected DTensor parameters. Falling back to AdamW foreach=False "
-                        "to avoid mixed Tensor/DTensor foreach kernel errors."
-                    )
-            optimizer_kwargs["foreach"] = False
-        elif foreach_cfg is not None:
-            optimizer_kwargs["foreach"] = bool(foreach_cfg)
 
         return torch.optim.AdamW(model_parameters, **optimizer_kwargs)
 

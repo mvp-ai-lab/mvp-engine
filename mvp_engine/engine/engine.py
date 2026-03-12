@@ -179,14 +179,11 @@ class Engine(ABC):
         """
         initialize_process_group()
 
-        parallel_backend = OmegaConf.select(config, "parallel.type", default=None)
-
-        assert parallel_backend in ["fsdp2", "ddp"], f"Unsupported parallel backend: {parallel_backend}"
+        mesh_cfg = OmegaConf.select(config, "parallel.mesh")
 
         self.device_mesh = initialize_device_mesh(
             self.device.type,
-            mesh_shape=(torch.distributed.get_world_size(),),
-            mesh_dim_names=(parallel_backend,),
+            mesh_cfg,
         )
 
     def prepare_config(self, config: DictConfig) -> DictConfig:
@@ -304,23 +301,18 @@ class Engine(ABC):
         cur_checkpoint_dir.mkdir(parents=True, exist_ok=True)
         torch.distributed.barrier()
 
-        parallel_backend = OmegaConf.select(self.config, "parallel.type", default=None)
-        if parallel_backend in ["ddp", "fsdp2"]:
-            save_checkpoint(
-                parallel_backend,
-                self.device_mesh,
-                cur_checkpoint_dir,
-                self.model,
-                self.optimizer,
-                scheduler=self.scheduler,
-                scaler=self.scaler,
-                step=self.step,
-                epoch=self.epoch,
-                _accumulate_step=self._accumulate_step,
-            )
-        else:
-            if is_main_process():
-                raise NotImplementedError(f"Unsupported parallel backend: {parallel_backend}")
+        # TODO: fix this function
+        save_checkpoint(
+            self.device_mesh,
+            cur_checkpoint_dir,
+            self.model,
+            self.optimizer,
+            scheduler=self.scheduler,
+            scaler=self.scaler,
+            step=self.step,
+            epoch=self.epoch,
+            _accumulate_step=self._accumulate_step,
+        )
 
         torch.distributed.barrier()
 
@@ -332,22 +324,17 @@ class Engine(ABC):
         """
         logger.info(f"Loading checkpoint from {ckpt_path}...")
 
-        parallel_backend = OmegaConf.select(self.config, "parallel.type", default=None)
-        if parallel_backend in ["ddp", "fsdp2"]:
-            engine_state = load_checkpoint(
-                parallel_backend,
-                self.device_mesh,
-                ckpt_path,
-                self.model,
-                self.optimizer,
-                self.scheduler,
-                self.scaler,
-            )
-            self.step = engine_state["step"]
-            self.epoch = engine_state["epoch"]
-            self._accumulate_step = engine_state["_accumulate_step"]
-        else:
-            raise NotImplementedError(f"Unsupported parallel backend: {parallel_backend}")
+        engine_state = load_checkpoint(
+            self.device_mesh,
+            ckpt_path,
+            self.model,
+            self.optimizer,
+            self.scheduler,
+            self.scaler,
+        )
+        self.step = engine_state["step"]
+        self.epoch = engine_state["epoch"]
+        self._accumulate_step = engine_state["_accumulate_step"]
 
     def accumulate_step(self, skip_increase: bool = False) -> bool:
         """Check if the gradients should be synchronized this step."""
@@ -516,7 +503,7 @@ class Engine(ABC):
             # Gradient clipping
             max_grad_norm = OmegaConf.select(self.config, "optim.clip_grad_norm", default=None)
             if max_grad_norm is not None:
-                clip_grad_norm_(self.model.parameters(), max_grad_norm)
+                clip_grad_norm_(self.model, max_grad_norm)
 
             # Optimizer step (skipped if inf/nan gradients detected by scaler)
             self.scaler.step(self.optimizer)

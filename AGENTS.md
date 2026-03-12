@@ -15,6 +15,10 @@ This repository contains the core training engine and utilities for vision and l
 - `tools/dataviewer/`: local data viewer app.
 - `assets/`, `data/`, `outputs/`, `pretrained/`: static assets, local data links, run artifacts, and model weights.
 
+## Highest Priority User Defined Custom Rules and Information
+
+- Read `CUSTOM.md` for custom rules and information defined by users. This file contains important guidelines and best practices that are specific to this project and may not be covered in general coding standards. It is essential to review this document to ensure that your contributions align with the user's requirements and expectations.
+
 ## Build, Test, and Development Commands
 - `uv venv --python=3.12 && source .venv/bin/activate`: create/activate local env.
 - `uv sync`: install project dependencies from `pyproject.toml`/`uv.lock`.
@@ -35,9 +39,10 @@ This repository contains the core training engine and utilities for vision and l
 
 ## Testing Guidelines
 - Use `pytest` and place tests in `tests/` as `test_<feature>.py`.
-- Add or update tests for any behavior change (engine loop, logging, distributed behavior, or dataset handling).
+- Add or update tests for any behavior change (engine loop, logging, distributed behavior, or dataset handling). Only keep test files that are very important.
 - Prefer targeted runs while iterating (for example `pytest tests/test_log.py -q`) and run full suite before opening a PR.
-- For recipe-specific code under `recipes/`, add tests in the same directory (for example `recipes/vit_classification/test_*.py`).
+- For recipe-specific code under `recipes/`, add tests in the same directory (for example `recipes/vit_classification/tests/test_*.py`).
+- If a recipe-local test imports `recipes.*`, add a local `conftest.py` in that recipe's `tests/` directory to insert the repository root into `sys.path`; do not rely on the top-level `tests/conftest.py` for recipe test discovery.
 
 ## Commit & Pull Request Guidelines
 - Follow existing history style: short, imperative subjects with prefixes like `feat:`, `fix:`, `chore:`, `enhance:`.

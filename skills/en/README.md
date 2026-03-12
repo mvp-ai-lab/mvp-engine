@@ -45,11 +45,11 @@ skills/
 ├── README.md             ← overview (this repo)
 ├── en/                   ← English docs
 │   ├── README.md
-│   ├── training/, parallel/, model/, data/, debug/, recipe/, git/
+│   ├── training/, parallel/, model/, data/, debug/, recipe/, config/, git/
 │   └── ...
 └── zh-cn/                   ← 中文文档
     ├── README.md
-    ├── training/, parallel/, model/, data/, debug/, recipe/, git/
+    ├── training/, parallel/, model/, data/, debug/, recipe/, config/, git/
     └── ...
 ```
 

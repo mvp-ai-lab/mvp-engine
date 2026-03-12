@@ -10,7 +10,6 @@ def check_config(config: DictConfig) -> None:
         "dev_mode",
         "project.name",
         "project.dir",
-        "parallel.type",
         "optim.gradient_accumulation_steps",
         "optim.mixed_precision",
         "loop.policy",
@@ -26,9 +25,20 @@ def check_config(config: DictConfig) -> None:
     if not isinstance(config.project.dir, str):
         raise TypeError("`project.dir` must be a str.")
 
-    parallel_type = config.parallel.type
-    if parallel_type not in {"ddp", "fsdp2"}:
-        raise ValueError(f"`parallel.type` must be one of ['ddp', 'fsdp2'], got: {parallel_type}.")
+    backend_kwargs = OmegaConf.select(config, "parallel.backend_kwargs", default={}) or {}
+    if not isinstance(backend_kwargs, (dict, DictConfig)):
+        raise TypeError("`parallel.backend_kwargs` must be a mapping.")
+
+    mesh_cfg = OmegaConf.select(config, "parallel.mesh", default={}) or {}
+    if not isinstance(mesh_cfg, (dict, DictConfig)):
+        raise TypeError("`parallel.mesh` must be a mapping.")
+
+    for mesh_type in mesh_cfg.keys():
+        if mesh_type not in {"replicate", "shard", "tensor"}:
+            raise ValueError(f"Invalid mesh type: {mesh_type}. Supported types are ['replicate', 'shard', 'tensor'].")
+        value = mesh_cfg[mesh_type]
+        if not isinstance(value, int) or isinstance(value, bool) or value < -1 or value == 0:
+            raise ValueError(f"`parallel.mesh.{mesh_type}` must be an integer >= 1 or -1.")
 
     mixed_precision = config.optim.mixed_precision
     if mixed_precision not in {"fp32", "fp16", "bf16"}:
