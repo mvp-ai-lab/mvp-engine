@@ -53,7 +53,7 @@ rg -n "torch\\.compile|optim\\.compile|compile_backend|compile_mode" recipes
 
 ```python
 if bool(OmegaConf.select(self.config, "optim.compile", default=False)):
-    model = model.compile(
+    model.compile(
         backend=OmegaConf.select(self.config, "optim.compile_backend", default="inductor"),
         mode=OmegaConf.select(self.config, "optim.compile_mode", default="default"),
     )
