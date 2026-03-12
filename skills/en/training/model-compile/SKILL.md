@@ -1,0 +1,87 @@
+---
+name: model-compile
+description: Add or adjust model.compile for a recipe, decide whether compile should happen before or after parallelize, which modules should be compiled together, how to expose config, and how to validate correctness and performance. Use for enabling compile on a new model, changing compile order in an existing recipe, or investigating compile regressions.
+---
+
+# Model Compile
+
+## Goal
+
+Add or adjust `model.compile` support for a training recipe under `recipes/<recipe>/`, while keeping:
+- compile disabled by default and enabled explicitly through config.
+- compile applied to the modules actually used during training.
+- compile always placed before `parallelize_model`.
+
+## Repo conventions
+
+- Put config keys under `optim`:
+  - `optim.compile`
+  - `optim.compile_backend`
+  - `optim.compile_mode`
+- Put compile logic in `prepare_model()` in most cases.
+- Do not compile the optimizer, scheduler, or dataloader.
+
+## Workflow
+
+### 1. Gather context first
+
+- Find the recipe's `prepare_model()`. Confirm the base model construction is already complete.
+- Search the repo for similar recipes as precedents:
+
+```bash
+rg -n "torch\\.compile|optim\\.compile|compile_backend|compile_mode" recipes
+```
+
+If you need a concrete precedent, read `references/recipe-patterns.md` as needed.
+
+### 2. Decide compile scope
+
+- Compile only modules on the training hot path.
+- Check whether there are teacher, EMA, auxiliary heads, distillation branches, or other independent `forward()` paths. If so, ask whether they all need compile.
+
+### 3. Decide compile placement
+
+Default preference:
+- call `model.compile(...)` first, then `parallelize_model(...)`.
+
+Hard requirement:
+- If you do not use the default order, explain the reason in code comments or the change summary.
+
+### 4. Implement config and code
+
+Recommended pattern:
+
+```python
+if bool(OmegaConf.select(self.config, "optim.compile", default=False)):
+    model = model.compile(
+        backend=OmegaConf.select(self.config, "optim.compile_backend", default="inductor"),
+        mode=OmegaConf.select(self.config, "optim.compile_mode", default="default"),
+    )
+```
+
+Rules:
+- `optim.compile` must have a default of `False`.
+- Read `backend` and `mode` through `OmegaConf.select(..., default=...)`.
+- Compile extra modules such as teacher or EMA separately; do not hide them inside the main-model logic.
+- Do not change checkpoint format, parameter names, or the model's public interface just to fit compile.
+
+### 5. Validate
+
+At minimum:
+- config validation
+
+If GPU is available, ask the user whether to run the following tests:
+- a single-GPU or single-process `forward/backward` smoke test.
+- compare compile on/off loss and logs. Bitwise identity is not required, but there should be no obvious divergence.
+
+Good to record:
+- first-step compile latency.
+- steady-state throughput change.
+- memory change.
+
+## Acceptance checklist
+
+- [ ] `optim.compile`, `optim.compile_backend`, and `optim.compile_mode` are wired into config.
+- [ ] The compiled target module matches the real training hot path.
+- [ ] Compile placement has a clear rationale; exception order is documented.
+- [ ] Extra modules and branches have each been evaluated for compile.

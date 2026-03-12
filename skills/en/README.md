@@ -86,6 +86,7 @@ Use @skills/en/git/pr-gate/SKILL.md
 
 ## Skill List
 
+- `training/model-compile`: [training/model-compile/SKILL.md](training/model-compile/SKILL.md)
 - `model/model-migration`: [model/model-migration/SKILL.md](model/model-migration/SKILL.md)
 - `git/pr-gate`: [git/pr-gate/SKILL.md](git/pr-gate/SKILL.md)
 - `git/pr-feedback`: [git/pr-feedback/SKILL.md](git/pr-feedback/SKILL.md)
