@@ -1,5 +1,7 @@
 """Training engine for the ViT image classification recipe."""
 
+from typing import TypedDict
+
 import torch
 from omegaconf import OmegaConf
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
@@ -14,6 +16,20 @@ from mvp_engine.utils.misc import calculate_model_size
 from ..dataset import build_dataset
 from ..dataset.sampler import InfiniteDistributedSampler
 from ..model import build_vit_model
+
+
+class TrainBatch(TypedDict):
+    """Normalized batch structure consumed by the ViT classifier."""
+
+    pixel_values: torch.Tensor
+    labels: torch.Tensor
+
+
+class TrainStepOutput(TypedDict):
+    """Outputs returned by one training step."""
+
+    loss: torch.Tensor
+    logs: dict[str, float]
 
 
 @ENGINE_REGISTRY.register()
@@ -103,7 +119,7 @@ class ViTClassificationEngine(Engine):
         )
         return SequentialLR(self.optimizer, [scheduler_warmup, scheduler_main], milestones=[warmup_steps])
 
-    def train_pre_step(self, data: tuple[torch.Tensor, torch.Tensor]) -> dict:
+    def train_pre_step(self, data: tuple[torch.Tensor, torch.Tensor]) -> TrainBatch:
         """Move a batch from the dataloader onto the current device."""
         pixel_values, labels = data
         return {
@@ -111,7 +127,7 @@ class ViTClassificationEngine(Engine):
             "labels": labels.to(self.device, non_blocking=True),
         }
 
-    def train_one_step(self, data: dict) -> dict:
+    def train_one_step(self, data: TrainBatch) -> TrainStepOutput:
         """Run the forward pass and collect training metrics."""
         with torch.autocast(
             device_type=self.device_type,

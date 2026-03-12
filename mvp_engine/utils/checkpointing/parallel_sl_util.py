@@ -91,7 +91,8 @@ def save_checkpoint(
     epoch: int = 0,
     _accumulate_step: int = 0,
     prefix: str = "",
-):
+) -> None:
+    """Save model, optimizer, and engine state for the current distributed mesh."""
     backend = _infer_checkpoint_backend(mesh)
 
     if prefix == "":
@@ -183,7 +184,7 @@ def load_checkpoint(
     scheduler: torch.optim.lr_scheduler.LRScheduler = None,
     scaler: GradientScaler = None,
     prefix: str = "",
-):
+) -> dict[str, int] | None:
     """Load checkpoint from disk.
 
     Args:

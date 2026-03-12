@@ -18,6 +18,8 @@ _TP_STYLE_FACTORIES = {
     "row": RowwiseParallel,
 }
 
+TPModulePostprocessor = Callable[[nn.Module, Any], None]
+
 
 def _normalize_module_path(path: str) -> str:
     """Normalize module paths so user filters can be matched consistently."""
@@ -80,6 +82,7 @@ def _should_apply(path: str, include_paths: Iterable[str], exclude_paths: Iterab
 
 
 def resolve_tp_module_config(model: nn.Module, attr_name: str = "TP_MODULE_CONFIG") -> dict[str, object]:
+    """Load the model-defined tensor-parallel module config from a class attribute."""
     cls = model.__class__
     if not hasattr(cls, attr_name):
         raise AttributeError(
@@ -99,7 +102,8 @@ def resolve_tp_module_config(model: nn.Module, attr_name: str = "TP_MODULE_CONFI
 def resolve_tp_module_postprocessors(
     model: nn.Module,
     attr_name: str = "TP_MODULE_POSTPROCESSORS",
-) -> dict[str, Callable[[nn.Module, Any], None]]:
+) -> dict[str, TPModulePostprocessor]:
+    """Load optional tensor-parallel postprocessors from the model class."""
     cls = model.__class__
     if not hasattr(cls, attr_name):
         return {}
@@ -123,6 +127,7 @@ def parallelize_model_with_tensor_parallel(
     include_paths: Iterable[str] = (),
     exclude_paths: Iterable[str] = (),
 ) -> list[tuple[str, str, list[str]]]:
+    """Apply tensor parallelism to model submodules selected by ``TP_MODULE_CONFIG``."""
     module_config = resolve_tp_module_config(model, attr_name="TP_MODULE_CONFIG")
     module_postprocessors = resolve_tp_module_postprocessors(model)
 

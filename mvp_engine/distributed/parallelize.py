@@ -27,7 +27,7 @@ def parallelize_model(
     model: nn.Module,
     device_mesh: DeviceMesh,
     backend_kwargs: Dict = None,
-):
+) -> nn.Module:
     """Parallelize a neural network model using specified distributed backend.
 
     Supports multiple parallelization strategies including DistributedDataParallel (DDP)
