@@ -1,6 +1,6 @@
 ---
 name: model-compile
-description: 为 recipe 接入或调整 model.compile，判断 compile 放在 parallelize 前后、哪些模块需要一起编译、如何暴露配置并做正确性与性能验证。适用于新模型启用 compile、已有 recipe 调整 compile 顺序、排查 compile 回归。
+description: 为 recipe 接入或调整 model.compile，判断 compile 范围与放置位置、在 optim 下暴露配置，并做正确性与性能验证。`references/` 下的文件是这个 skill 的参考实现。适用于新模型启用 compile、已有 recipe 调整 compile 顺序、排查 compile 回归。
 ---
 
 # Model Compile
@@ -26,13 +26,15 @@ description: 为 recipe 接入或调整 model.compile，判断 compile 放在 pa
 ### 1. 先收集上下文
 
 - 找到 recipe 的 `prepare_model()`。确认基础的模型构建已经完成。
-- 搜索仓库内相近 recipe 作为先例：
+- 如果 `references/` 里有匹配目标 recipe 的参考实现，先读这些文件。它们是这个 skill 期望的 config 和 engine 接线范例。
+- 搜索仓库内相近 recipe 作为补充先例：
 
 ```bash
 rg -n "torch\\.compile|optim\\.compile|compile_backend|compile_mode" recipes
 ```
 
-如果需要具体先例，按需读 `references/recipe-patterns.md`。
+对于当前 skill，`references/vit_classification/configs/train.yaml` 和
+`references/vit_classification/engine/vit_classification_engine.py` 是当前参考实现。
 
 ### 2. 决定 compile 范围
 

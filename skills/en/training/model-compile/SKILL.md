@@ -1,6 +1,6 @@
 ---
 name: model-compile
-description: Add or adjust model.compile for a recipe, decide whether compile should happen before or after parallelize, which modules should be compiled together, how to expose config, and how to validate correctness and performance. Use for enabling compile on a new model, changing compile order in an existing recipe, or investigating compile regressions.
+description: Add or adjust model.compile for a recipe, decide compile scope and placement, wire config under optim, and validate correctness and performance. The files under references/ are reference implementations for this skill. Use for enabling compile on a new model, changing compile order in an existing recipe, or investigating compile regressions.
 ---
 
 # Model Compile
@@ -26,13 +26,15 @@ Add or adjust `model.compile` support for a training recipe under `recipes/<reci
 ### 1. Gather context first
 
 - Find the recipe's `prepare_model()`. Confirm the base model construction is already complete.
-- Search the repo for similar recipes as precedents:
+- Read the reference implementations under `references/` first when they match the target recipe. These files are concrete examples of the expected config and engine wiring.
+- Search the repo for similar recipes as additional precedents:
 
 ```bash
 rg -n "torch\\.compile|optim\\.compile|compile_backend|compile_mode" recipes
 ```
 
-If you need a concrete precedent, read `references/recipe-patterns.md` as needed.
+For this skill, `references/vit_classification/configs/train.yaml` and
+`references/vit_classification/engine/vit_classification_engine.py` are the current reference implementation.
 
 ### 2. Decide compile scope
 
