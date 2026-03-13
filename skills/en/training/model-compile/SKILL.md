@@ -38,6 +38,9 @@ If you need a concrete precedent, read `references/recipe-patterns.md` as needed
 
 - Compile only modules on the training hot path.
 - Check whether there are teacher, EMA, auxiliary heads, distillation branches, or other independent `forward()` paths. If so, ask whether they all need compile.
+- If the top-level `forward()` mixes Python-heavy preprocessing, token building, positional encoding setup, output branching, or other recipe glue, do not compile the whole model by default.
+- In that case, ask the user whether to extract one compile-friendly core module/callable that covers the dense tensor hot path.
+- Avoid splitting compile across many small child modules unless you have evidence it helps; fragmented compile often loses cross-layer fusion and can greatly increase first-step latency.
 
 ### 3. Decide compile placement
 
@@ -63,6 +66,7 @@ Rules:
 - `optim.compile` must have a default of `False`.
 - Read `backend` and `mode` through `OmegaConf.select(..., default=...)`.
 - Compile extra modules such as teacher or EMA separately; do not hide them inside the main-model logic.
+- If you need a recipe-specific encoder/core submodule just for compile, prefer one larger target over compiling dozens of blocks individually.
 - Do not change checkpoint format, parameter names, or the model's public interface just to fit compile.
 
 ### 5. Validate
@@ -76,6 +80,7 @@ If GPU is available, ask the user whether to run the following tests:
 
 Good to record:
 - first-step compile latency.
+- whether step 2 / steady-state is reached at all; a compile that only finishes step 1 is not usable.
 - steady-state throughput change.
 - memory change.
 
@@ -83,5 +88,6 @@ Good to record:
 
 - [ ] `optim.compile`, `optim.compile_backend`, and `optim.compile_mode` are wired into config.
 - [ ] The compiled target module matches the real training hot path.
+- [ ] The compile target is not over-fragmented; one compile-friendly core is preferred over many tiny compiled children.
 - [ ] Compile placement has a clear rationale; exception order is documented.
 - [ ] Extra modules and branches have each been evaluated for compile.
