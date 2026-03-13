@@ -30,6 +30,32 @@ def _get_checkpoint_process_group():
     return None
 
 
+def _get_accelerator_rng_state() -> tuple[str | None, torch.Tensor | None]:
+    """Capture RNG state for the active accelerator when supported."""
+    if torch.cuda.is_available():
+        return "cuda", torch.cuda.get_rng_state()
+
+    npu_module = getattr(torch, "npu", None)
+    if npu_module is not None and hasattr(npu_module, "get_rng_state"):
+        return "npu", npu_module.get_rng_state()
+
+    return None, None
+
+
+def _set_accelerator_rng_state(device_type: str | None, rng_state: torch.Tensor | None) -> None:
+    """Restore RNG state for the accelerator encoded in the checkpoint."""
+    if device_type is None or rng_state is None:
+        return
+
+    if device_type == "cuda" and torch.cuda.is_available():
+        torch.cuda.set_rng_state(rng_state)
+        return
+
+    npu_module = getattr(torch, "npu", None)
+    if device_type == "npu" and npu_module is not None and hasattr(npu_module, "set_rng_state"):
+        npu_module.set_rng_state(rng_state)
+
+
 def _infer_checkpoint_backend(mesh: DeviceMesh) -> str:
     """Infer whether checkpoint IO should use the DDP or FSDP2 path from the mesh."""
     mesh_dim_names = mesh.mesh_dim_names or ()
@@ -96,12 +122,15 @@ def save_checkpoint(
     backend = _infer_checkpoint_backend(mesh)
 
     if prefix == "":
+        accelerator_type, accelerator_rng_state = _get_accelerator_rng_state()
         rng_state = {
             "torch_rng_state": torch.get_rng_state(),
-            "cuda_rng_state": torch.cuda.get_rng_state(),
             "python_rng_state": random.getstate(),
             "numpy_rng_state": np.random.get_state(),
         }
+        if accelerator_type is not None and accelerator_rng_state is not None:
+            rng_state["accelerator_type"] = accelerator_type
+            rng_state["accelerator_rng_state"] = accelerator_rng_state
         rank = get_rank()
         engine_path = cur_checkpoint_dir / "engine"
         if is_main_process():
@@ -259,8 +288,13 @@ def load_checkpoint(
         )
         if "torch_rng_state" in rng_state:
             torch.set_rng_state(rng_state["torch_rng_state"])
-        if "cuda_rng_state" in rng_state:
-            torch.cuda.set_rng_state(rng_state["cuda_rng_state"])
+        accelerator_type = rng_state.get("accelerator_type")
+        accelerator_rng_state = rng_state.get("accelerator_rng_state")
+        if accelerator_type is None and "cuda_rng_state" in rng_state:
+            # Backward compatibility for older CUDA checkpoints.
+            accelerator_type = "cuda"
+            accelerator_rng_state = rng_state["cuda_rng_state"]
+        _set_accelerator_rng_state(accelerator_type, accelerator_rng_state)
         if "python_rng_state" in rng_state:
             random.setstate(rng_state["python_rng_state"])
         if "numpy_rng_state" in rng_state:
