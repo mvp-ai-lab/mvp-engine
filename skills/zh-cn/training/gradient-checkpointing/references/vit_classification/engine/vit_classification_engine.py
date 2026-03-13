@@ -76,9 +76,7 @@ class ViTClassificationEngine(Engine):
         gc_enabled = OmegaConf.select(self.config, "model.gradient_checkpointing.enabled", default=False)
         gc_use_reentrant = OmegaConf.select(self.config, "model.gradient_checkpointing.use_reentrant", default=False)
         if gc_enabled:
-            model.gradient_checkpointing_enable(
-                gradient_checkpointing_kwargs={"use_reentrant": gc_use_reentrant}
-            )
+            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": gc_use_reentrant})
 
         parallelized_model = parallelize_model(
             model,
