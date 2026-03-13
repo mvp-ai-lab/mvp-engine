@@ -808,8 +808,8 @@ class RedTomatoViTModel(RedTomatoViTPreTrainedModel):
                 :, :num_masked
             ]
             if mask_rgb and self.mask_embedding is not None:
-                hidden_states[torch.arange(batch_size).unsqueeze(1), mask_indices] = self.mask_embedding.to(
-                    device=hidden_states.device, dtype=hidden_states.dtype
+                hidden_states[torch.arange(batch_size, device=hidden_states.device).unsqueeze(1), mask_indices] = (
+                    self.mask_embedding.to(device=hidden_states.device, dtype=hidden_states.dtype)
                 )
         else:
             mask_indices = None
