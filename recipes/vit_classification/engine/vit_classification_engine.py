@@ -67,16 +67,9 @@ class ViTClassificationEngine(Engine):
         )
 
     def prepare_model(self) -> torch.nn.Module:
-        """Build, optionally compile, and parallelize the ViT classifier."""
+        """Build and parallelize the ViT classifier."""
         model = build_vit_model(self.config.model).to(self.device)
         logger.info(f" - Model name: {model.__class__.__name__}")
-
-        compile_enabled = bool(OmegaConf.select(self.config, "optim.compile", default=False))
-        if compile_enabled:
-            model.compile(
-                backend=OmegaConf.select(self.config, "optim.compile_backend", default="inductor"),
-                mode=OmegaConf.select(self.config, "optim.compile_mode", default="default"),
-            )
 
         parallelized_model = parallelize_model(
             model,
