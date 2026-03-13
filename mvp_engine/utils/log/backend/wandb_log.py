@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Mapping, Optional, Union
 
@@ -43,6 +44,11 @@ class WandbBackend(Backend):
         self.enable = is_main_process() and _WANDB_AVAILABLE
 
         if self.enable:
+            wandb_mode = os.getenv("WANDB_MODE")
+            if wandb_mode is None and os.getenv("WANDB_API_KEY") is None:
+                # Avoid interactive login and local service startup without credentials.
+                wandb_mode = "disabled"
+
             # init wandb run
             wandb.init(
                 project=project,
@@ -51,6 +57,7 @@ class WandbBackend(Backend):
                 config=OmegaConf.to_container(config, resolve=True) if isinstance(config, DictConfig) else config,
                 dir=str(path) if path else None,
                 resume="allow",
+                mode=wandb_mode,
             )
 
     def log_config(self, config: DictConfig) -> None:

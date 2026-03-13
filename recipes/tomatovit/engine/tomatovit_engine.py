@@ -185,16 +185,16 @@ class TomatoViTEngine(Engine):
             ).to(self.device)
 
         # 5. Parallelize student and teacher
-        if self.config.parallel.type in ["ddp", "fsdp2"]:
+        if self.parallel_backend in ["ddp", "fsdp2"]:
             parallelized_model = parallelize_model(
                 model,
                 device_mesh=self.device_mesh,
-                backend=self.config.parallel.type,
+                backend=self.parallel_backend,
                 backend_kwargs=self.config.parallel.get("backend_kwargs", {}),
             )
             # For FSDP2, also shard the teacher so each rank's local shard
             # matches the student's shard, enabling direct EMA updates.
-            if self.config.parallel.type == "fsdp2" and self._use_ibot_loss:
+            if self.parallel_backend == "fsdp2" and self._use_ibot_loss:
                 backend_kwargs = dict(self.config.parallel.get("backend_kwargs", {}))
                 backend_kwargs.update({"reshard_after_forward": True})
                 parallelized_teacher = parallelize_model(
@@ -205,7 +205,7 @@ class TomatoViTEngine(Engine):
                 )
                 self.teacher_model = parallelized_teacher
         else:
-            raise NotImplementedError(f"Parallel type {self.config.parallel.type} not implemented.")
+            raise NotImplementedError(f"Parallel type {self.parallel_backend} not implemented.")
 
         # 5. Calculate model size in B
         if is_main_process():
@@ -224,14 +224,6 @@ class TomatoViTEngine(Engine):
 
         # 7. Load from a checkpoint if specified
         self.model = parallelized_model
-        load_from_cfg = OmegaConf.select(self.config, "model.load_from", default=None)
-        if load_from_cfg and load_from_cfg.path:
-            self.load(
-                ckpt_path=load_from_cfg.path,
-                only_model=load_from_cfg.only_model,
-                reset_teacher=load_from_cfg.reset_teacher,
-            )
-
         return parallelized_model
 
     def prepare_optimizer(self):
@@ -290,9 +282,8 @@ class TomatoViTEngine(Engine):
             f"iter_{self.step}" if self.loop_policy == "iter" else f"epoch_{self.epoch}"
         )
 
-        parallel_backend = OmegaConf.select(self.config, "parallel.type", default=None)
         rank = get_rank()
-        if parallel_backend in ["ddp", "fsdp2"]:
+        if self.parallel_backend in ["ddp", "fsdp2"]:
             if is_main_process():
                 if self._use_ibot_loss:
                     torch.save(
@@ -310,7 +301,7 @@ class TomatoViTEngine(Engine):
                 )
             if self._use_ibot_loss:
                 save_checkpoint(
-                    parallel_backend, self.device_mesh, cur_checkpoint_dir, self.teacher_model, prefix="teacher_"
+                    self.parallel_backend, self.device_mesh, cur_checkpoint_dir, self.teacher_model, prefix="teacher_"
                 )
 
             torch.save(
@@ -331,9 +322,18 @@ class TomatoViTEngine(Engine):
                 cur_checkpoint_dir / f"optimizer_rgb_head_rank{rank}.pt",
             )
         else:
-            raise NotImplementedError(f"Unsupported parallel backend: {parallel_backend}")
+            raise NotImplementedError(f"Unsupported parallel backend: {self.parallel_backend}")
 
         torch.distributed.barrier()
+
+    def verify_checkpoint(self):
+        load_from_cfg = OmegaConf.select(self.config, "model.load_from", default=None)
+        if load_from_cfg and load_from_cfg.path:
+            self.load(
+                ckpt_path=load_from_cfg.path,
+                only_model=load_from_cfg.only_model,
+                reset_teacher=load_from_cfg.reset_teacher,
+            )
 
     def load(self, ckpt_path: Union[str, os.PathLike], only_model: bool = False, reset_teacher: bool = True) -> None:
         """Load training checkpoint from disk.
@@ -342,9 +342,8 @@ class TomatoViTEngine(Engine):
             ckpt_path: Path to checkpoint directory.
         """
 
-        parallel_backend = OmegaConf.select(self.config, "parallel.type", default=None)
         if only_model:
-            if parallel_backend == "ddp":
+            if self.parallel_backend == "ddp":
                 misalign = self.model.module.load_state_dict(
                     torch.load(Path(ckpt_path) / "model.pt", map_location="cpu"), strict=False
                 )
@@ -356,7 +355,7 @@ class TomatoViTEngine(Engine):
             super().load(ckpt_path)
 
         ckpt_path = Path(ckpt_path)
-        if parallel_backend in ["ddp", "fsdp2"]:
+        if self.parallel_backend in ["ddp", "fsdp2"]:
             ibot_loss_path = ckpt_path / "ibot_loss.pt"
             rank = get_rank()
             world_size = get_world_size()
@@ -379,7 +378,7 @@ class TomatoViTEngine(Engine):
 
             if self._use_ibot_loss:
                 load_checkpoint(
-                    parallel_backend, self.device_mesh, str(ckpt_path), self.teacher_model, prefix="teacher_"
+                    self.parallel_backend, self.device_mesh, str(ckpt_path), self.teacher_model, prefix="teacher_"
                 )
 
             depth_partial_fc_dict = repartition_fc(ckpt_path, world_size, rank, data_type="depth")
@@ -407,7 +406,7 @@ class TomatoViTEngine(Engine):
                 for param_q, param_k in zip(self.unwrapped_model.parameters(), self.teacher_model.parameters()):
                     param_k.data.copy_(param_q.detach().data)
         else:
-            raise NotImplementedError(f"Unsupported parallel backend: {parallel_backend}")
+            raise NotImplementedError(f"Unsupported parallel backend: {self.parallel_backend}")
 
     def run_train(self):
         self.rgb_head.train()

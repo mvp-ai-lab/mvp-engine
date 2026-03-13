@@ -1,6 +1,6 @@
 # Skills
 
-Skills are a **second kind of interface** in this repo, alongside code interfaces (functions, classes).  
+Skills are a **second kind of interface** in this repo, alongside code interfaces (functions, classes).
 **中文：** [README.md](../zh-cn/README.md)
 
 ---
@@ -35,7 +35,7 @@ Is there a fixed pattern to follow? ─── yes ──→ Implement as a Skill
     Keep it in recipe/ as experiment-specific code
 ```
 
-**Code interface** examples: checkpoint I/O, logging utilities, config parsing, distributed primitives.  
+**Code interface** examples: checkpoint I/O, logging utilities, config parsing, distributed primitives.
 **Skill interface** examples: gradient checkpointing adaptation, FSDP wrap policy, adding a new model, adding a new dataset.
 
 ## Directory Layout
@@ -45,11 +45,11 @@ skills/
 ├── README.md             ← overview (this repo)
 ├── en/                   ← English docs
 │   ├── README.md
-│   ├── training/, parallel/, model/, data/, debug/, recipe/
+│   ├── training/, parallel/, model/, data/, debug/, recipe/, config/, git/
 │   └── ...
 └── zh-cn/                   ← 中文文档
     ├── README.md
-    ├── training/, parallel/, model/, data/, debug/, recipe/
+    ├── training/, parallel/, model/, data/, debug/, recipe/, config/, git/
     └── ...
 ```
 
@@ -78,9 +78,19 @@ Use @skills/en/<category>/<skill-name>/SKILL.md
 
 The agent will follow the skill and generate the adapted code and tests.
 
+Example:
+
+```
+Use @skills/en/git/pr-gate/SKILL.md
+```
+
 ## Skill List
 
+- `training/gradient-checkpointing`: [training/gradient-checkpointing/SKILL.md](training/gradient-checkpointing/SKILL.md)
 - `model/model-migration`: [model/model-migration/SKILL.md](model/model-migration/SKILL.md)
+- `git/pr-gate`: [git/pr-gate/SKILL.md](git/pr-gate/SKILL.md)
+- `git/pr-feedback`: [git/pr-feedback/SKILL.md](git/pr-feedback/SKILL.md)
+- `git/pr-skill-review`: [git/pr-skill-review/SKILL.md](git/pr-skill-review/SKILL.md)
 
 ## Adding a New Skill
 

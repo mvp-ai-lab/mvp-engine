@@ -1,0 +1,61 @@
+dev_mode: false
+engine: ViTClassificationEngine
+project:
+  name: "vit_classification"
+
+data:
+  # The template defaults to fake data so users can read or smoke-test the recipe
+  # without preparing the real ImageNet directory first.
+  use_fake_data: true
+  train_path: "./data/imagenet/train"
+  val_path: "./data/imagenet/val"
+  fake_train_size: 1024
+  fake_val_size: 256
+  num_classes: 1000
+  image_size: 224
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+  batch_size: 64
+  num_workers: 4
+
+model:
+  pretrained_model_name_or_path: "google/vit-base-patch16-224"
+  # Keep downloads optional in the template recipe. Switch to true when you
+  # want to initialize from the HuggingFace checkpoint.
+  load_pretrained_weights: false
+  num_classes: 1000
+  image_size: 224
+  hidden_dropout_prob: 0.0
+  attention_dropout_prob: 0.0
+
+optim:
+  lr: 0.0001
+  weight_decay: 0.05
+  gradient_accumulation_steps: 1
+  mixed_precision: "bf16"
+  warmup_ratio: 0.05
+  clip_grad_norm: 1.0
+  compile: false
+  compile_backend: "inductor"
+  compile_mode: "default"
+
+loop:
+  policy: "iter"
+  total_steps: 1000
+  checkpoint:
+    keep_n: 3
+    interval: 500
+
+parallel:
+  mesh:
+    replicate: -1
+    shard: 4
+    tensor: 2
+  backend_kwargs:
+    fsdp2:
+      reshard_after_forward: true
+      mp_policy:
+        param_dtype: bfloat16
+        reduce_dtype: float32
+        output_dtype: bfloat16
+      high_precision_modules: ["LayerNorm", "RMSNorm"]
