@@ -108,7 +108,7 @@ for layer in self.layers:
 
 参考测试：
 
-- `references/vit_classification/tests/test_vit_gradient_checkpointing.py`
+- `references/vit_classification/tests/test_vit_gradient_checkpointing_zh.py`
 
 ## 常见陷阱
 
