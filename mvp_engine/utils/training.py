@@ -7,6 +7,7 @@ from typing import Generator, Union
 
 import torch
 import torch.nn as nn
+from torch.distributed.fsdp import FSDPModule
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 try:
@@ -49,17 +50,29 @@ def accumulate_gradients(
     processes (normal backward behavior).
 
     Args:
-        model: The model (possibly wrapped in DDP).
+        model: The model (possibly wrapped in DDP or FSDP2).
         sync: Whether to synchronize gradients across processes.
 
     Yields:
         None
     """
-    if isinstance(model, DDP) and not sync:
-        with model.no_sync():
+    # DDP
+    if isinstance(model, DDP):
+        if sync:
             yield
-    else:
+        else:
+            with model.no_sync():
+                yield
+        return
+
+    # FSDP2
+    if isinstance(model, FSDPModule):
+        model.set_requires_gradient_sync(sync)
         yield
+        return
+
+    # Non-parallel
+    yield
 
 
 class GradientScaler:
