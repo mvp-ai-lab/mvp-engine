@@ -56,18 +56,20 @@ def accumulate_gradients(
     Yields:
         None
     """
+    base_model = getattr(model, "_orig_mod", model)
+
     # DDP
-    if isinstance(model, DDP):
+    if isinstance(base_model, DDP):
         if sync:
             yield
         else:
-            with model.no_sync():
+            with base_model.no_sync():
                 yield
         return
 
     # FSDP2
-    if isinstance(model, FSDPModule):
-        model.set_requires_gradient_sync(sync)
+    if isinstance(base_model, FSDPModule):
+        base_model.set_requires_gradient_sync(sync)
         yield
         return
 
