@@ -604,7 +604,6 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
         Returns:
             `torch.Tensor`: hidden_states.
         """
-
         if self.anyres:
             raise NotImplementedError("Anyres is not supported yet.")
         else:

@@ -204,9 +204,10 @@ class Engine(ABC):
         config.git_info = f"<{git_info['branch']}> {git_info['commit_hash']}"
 
         # 2. Set run ID
-        local_run_id = f"{OmegaConf.select(config, 'project.name', default='mvp-engine')}_{
-            time.strftime('%Y%m%d%H%M%S', time.localtime())
-        }"
+        local_run_id = (
+            f"{OmegaConf.select(config, 'project.name', default='mvp-engine')}_"
+            f"{time.strftime('%Y%m%d%H%M%S', time.localtime())}"
+        )
         config.project.run_id = broadcast_from_main(local_run_id)
 
         # 3. Set output directory

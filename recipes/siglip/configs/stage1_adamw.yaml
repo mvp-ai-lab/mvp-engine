@@ -1,5 +1,6 @@
 dev_mode: false
 engine: SigLipEngine
+test_only: false
 project:
   name: "siglip"
 data:
@@ -41,3 +42,8 @@ loop:
   checkpoint:
     keep_n: 5
     interval: 5000
+eval:
+  imagenet_path: null
+  batch_size: 256
+  num_workers: 4
+  checkpoint_path: null
