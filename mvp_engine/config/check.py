@@ -48,13 +48,8 @@ def check_config(config: DictConfig) -> None:
     if not isinstance(grad_steps, int) or isinstance(grad_steps, bool) or grad_steps < 1:
         raise ValueError("`optim.gradient_accumulation_steps` must be an integer >= 1.")
 
-    compile_mode = config.optim.compile_mode
-    if (
-        compile_mode == "max-autotune"
-        and grad_steps > 1
-        and "shard" in mesh_cfg.keys()
-        and mesh_cfg["shard"].size() > 1
-    ):
+    compile_mode = config.optim.compile_mode if config.optim.compile else None
+    if compile_mode == "max-autotune" and grad_steps > 1 and "shard" in mesh_cfg.keys() and mesh_cfg["shard"] > 1:
         raise ValueError(
             "`compile_mode=max-autotune` is not supported with FSDP2 gradient accumulation. Use `compile_mode=default`."
         )
