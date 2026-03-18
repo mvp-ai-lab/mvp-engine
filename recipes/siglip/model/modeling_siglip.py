@@ -47,6 +47,26 @@ from transformers.utils import ModelOutput, auto_docstring, can_return_tuple
 from ..model.potato_ascend import Qwen2_5_VisionTransformerPretrainedModel
 
 
+class CustomSiglipConfig(SiglipConfig):
+    model_type = "custom_siglip"
+
+    def __init__(
+        self,
+        loss="sigmoid",
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.loss = loss
+
+    @classmethod
+    def from_text_vision_configs(cls, text_config, vision_config, **kwargs):
+        return cls(
+            text_config=text_config.to_dict(),
+            vision_config=vision_config.to_dict(),
+            **kwargs,
+        )
+
+
 def _trunc_normal_(tensor, mean, std, a, b):
     # Cut & paste from PyTorch official master until it's in a few official releases - RW
     # Method based on https://people.sc.fsu.edu/~jburkardt/presentations/truncated_normal.pdf
@@ -723,6 +743,7 @@ class SiglipModel(SiglipPreTrainedModel):
 
         text_config = config.text_config
         vision_config = config.vision_config
+        self.loss_fn_type = config.loss
 
         # First, initialize the text and vision models with proper attention implementation
         text_model = SiglipTextModel._from_config(text_config)
@@ -894,7 +915,18 @@ class SiglipModel(SiglipPreTrainedModel):
             # Adapted from https://github.com/google-research/big_vision/blob/01edb81a4716f93a48be43b3a4af14e29cdb3a7f/big_vision/trainers/proj/image_text/siglip.py#L287
             eye = torch.eye(logits_per_text.size(0), device=logits_per_text.device)
             m1_diag1 = -torch.ones_like(logits_per_text) + 2 * eye
-            loglik = torch.nn.functional.logsigmoid(m1_diag1 * logits_per_text)
+            if self.loss_fn_type == "sigmoid":
+                loglik = torch.nn.functional.logsigmoid(m1_diag1 * logits_per_text)
+            elif self.loss_fn_type == "softmax":
+                loglik = (
+                    torch.nn.functional.log_softmax(logits_per_text, dim=-1) * eye
+                    + torch.nn.functional.log_softmax(logits_per_text, dim=-2) * eye
+                ) / 2
+            elif self.loss_fn_type == "gumbel":
+                loglik = -torch.exp(-m1_diag1 * logits_per_text)
+            else:
+                raise ValueError(f"Unsupported loss type: {self.loss_fn_type}")
+
             nll = -torch.sum(loglik, dim=-1)
             loss = nll.mean()
 

@@ -25,7 +25,7 @@ model:
     num_heads: 8
     intermediate_size: 3072
     temporal_patch_size: 1
-    hidden_act: "gelu"
+    hidden_act: "uni"
     fullatt_block_indexes: [2, 5, 8, 11]
   text_config:
     hidden_size: 768

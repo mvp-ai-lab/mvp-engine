@@ -3,6 +3,8 @@ engine: SigLipEngine
 test_only: false
 project:
   name: "siglip"
+  dir: "./outputs"
+  output_dir: "gumbel"
 data:
   dataset_type: "webdataset"
   data_path: "/mnt/data-alpha-sg-01/team-camera/shared/SigLIP/data/"
@@ -22,13 +24,14 @@ model:
     num_heads: 8
     intermediate_size: 3072
     temporal_patch_size: 1
-    hidden_act: "gelu"
+    hidden_act: "uni"
     fullatt_block_indexes: [2, 5, 8, 11]
   text_config:
     hidden_size: 768
     intermediate_size: 3072
+  loss: "gumbel"
 optim:
-  name: adamw
+  name: muon
   lr: 0.001
   weight_decay: 0.05
   gradient_accumulation_steps: 1
@@ -38,12 +41,12 @@ optim:
   compile: False
 loop:
   policy: "iter"
-  total_steps: 10000
+  total_steps: 20000
   checkpoint:
     keep_n: 5
     interval: 5000
 eval:
-  imagenet_path: null
+  imagenet_path: /home/k00885418/data/imagenet/val
   batch_size: 256
   num_workers: 4
   checkpoint_path: null

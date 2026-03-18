@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
-from transformers import AutoTokenizer, SiglipConfig, SiglipTextConfig
+from transformers import AutoTokenizer, SiglipTextConfig
 from transformers.utils.logging import disable_progress_bar
 from webdataset import WebLoader
 
@@ -23,7 +23,11 @@ from mvp_engine.utils.log import logger
 
 from ..dataset import caption_dataset as cpt_dset
 from ..evals.imagenet_zeroshot_data import imagenet_classnames, openai_imagenet_template
-from ..model.modeling_siglip import Qwen2_5_VLVisionConfig, SiglipModel
+from ..model.modeling_siglip import (
+    CustomSiglipConfig,
+    Qwen2_5_VLVisionConfig,
+    SiglipModel,
+)
 
 
 @ENGINE_REGISTRY.register()
@@ -93,7 +97,9 @@ class SigLipEngine(Engine):
             fullatt_block_indexes=self.config.model.vision_config.fullatt_block_indexes,
         )
 
-        siglip_config = SiglipConfig.from_text_vision_configs(text_config, vision_config)
+        siglip_config = CustomSiglipConfig.from_text_vision_configs(
+            text_config, vision_config, loss=self.config.model.loss
+        )
 
         model = SiglipModel(siglip_config).to(self.device)
         logger.info(f" - Model name: {model.__class__.__name__}")
