@@ -211,10 +211,16 @@ class Engine(ABC):
         config.project.run_id = broadcast_from_main(local_run_id)
 
         # 3. Set output directory
-        config.project.output_dir = str(
-            Path(OmegaConf.select(config, "project.dir", default="./outputs"))
-            / OmegaConf.select(config, "project.run_id", default="default")
-        )
+        if OmegaConf.select(config, "project.output_dir", default=""):
+            config.project.output_dir = str(
+                Path(OmegaConf.select(config, "project.dir", default="./outputs"))
+                / OmegaConf.select(config, "project.output_dir", default="")
+            )
+        else:
+            config.project.output_dir = str(
+                Path(OmegaConf.select(config, "project.dir", default="./outputs"))
+                / OmegaConf.select(config, "project.run_id", default="default")
+            )
 
         return config
 
