@@ -1,11 +1,8 @@
 dev_mode: false
 engine: MinimalVlmEngine
-git_info: ""
 project:
   name: "minimal-vlm"
   dir: "./outputs"
-  run_id: ""
-  output_dir: ""
   seed: 42
   deterministic: false
   log:
@@ -13,26 +10,30 @@ project:
     backends: ["terminal", "file"]
 parallel:
   mesh:
-    replicate: 1
-    shard: 8
+    replicate: -1
+    shard: 1
     tensor: 1
   backend_kwargs:
 data:
-  batch_size: 0
+  train_path: "./data/minimal_vlm/demo.jsonl"
+  eval_path: null
+  max_seq_len: 2048
+  batch_size: 1
   num_workers: 0
 model:
-  name: "MinimalVLM"
+  pretrained_model_name_or_path: "Qwen/Qwen3-VL-2B-Instruct"
+  trust_remote_code: true
+  freeze_visual: true
 optim:
-  lr: 0.001
+  lr: 1.0e-5
   weight_decay: 0.05
   gradient_accumulation_steps: 1
   mixed_precision: "bf16"
   warmup_ratio: 0.1
-  clip_grad_norm: 5
-  compile: False
+  clip_grad_norm: 1.0
 loop:
   policy: "iter"
-  total_steps: 10000
+  total_steps: 100
   checkpoint:
-    keep_n: 5
-    interval: 5000
+    keep_n: 3
+    interval: 50

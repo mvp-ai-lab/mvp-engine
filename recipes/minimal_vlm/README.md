@@ -1,26 +1,46 @@
 # minimal-vlm
 
-This recipe is a minimal starting point for training a vision-language model with `mvp-engine`.
+This recipe fine-tunes `Qwen/Qwen3-VL-2B-Instruct` on the local demo dataset at `data/minimal_vlm/demo.jsonl`.
 
-## Task Summary
+## What it does
 
-A minimal recipe that shows how to use `mvp-engine` to train a vision-language model (VLM).
+- Loads multi-turn multimodal conversations from JSONL.
+- Rewrites `<image>` placeholders into the Hugging Face chat format expected by Qwen3-VL.
+- Builds supervised labels from assistant-token masks so all assistant turns contribute to loss.
+- Freezes the visual stack by default and trains the language model plus `lm_head`.
 
-The scaffold keeps the engine, dataset, and model code explicit so you can see where image inputs, text inputs, loss computation, and optimizer setup belong.
+## Dataset format
 
-## What you still need to fill in
+Each JSONL row must contain:
 
-- `dataset/`: dataset construction and multimodal batch collation
-- `model/`: VLM definition or wrapper around an existing model
-- `engine/minimal_vlm_engine.py`: image/text preprocessing, forward pass, loss, and logging
-- `configs/train.yaml`: recipe-specific overrides for the minimal VLM setup
+- `messages`: a list of chat messages with `role` and string `content`
+- `images`: a list of image paths relative to the JSONL file
+
+The total number of image paths must exactly match the total number of `<image>` placeholders across the conversation.
+
+Example:
+
+```json
+{
+  "messages": [
+    {"role": "user", "content": "<image>Who is this?"},
+    {"role": "assistant", "content": "This is an example response."}
+  ],
+  "images": ["images/1.jpg"]
+}
+```
 
 ## Run
 
-After filling in the stubs, launch with:
+Launch with:
 
 ```bash
 torchrun --nproc_per_node=8 -m mvp_engine.launch --config ./recipes/minimal_vlm/configs/train.yaml
 ```
 
-Use existing recipes as references once you are ready to implement the concrete VLM pieces.
+Key defaults in [`configs/train.yaml`](/home/c84391361/projects/mvp-engine/recipes/minimal_vlm/configs/train.yaml):
+
+- `model.pretrained_model_name_or_path: Qwen/Qwen3-VL-2B-Instruct`
+- `model.freeze_visual: true`
+- `data.train_path: ./data/minimal_vlm/demo.jsonl`
+- `data.eval_path: null` so evaluation dataset construction falls back to the training file
