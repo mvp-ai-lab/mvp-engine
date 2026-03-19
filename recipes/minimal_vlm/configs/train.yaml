@@ -1,0 +1,38 @@
+dev_mode: false
+engine: MinimalVlmEngine
+git_info: ""
+project:
+  name: "minimal-vlm"
+  dir: "./outputs"
+  run_id: ""
+  output_dir: ""
+  seed: 42
+  deterministic: false
+  log:
+    interval: 20
+    backends: ["terminal", "file"]
+parallel:
+  mesh:
+    replicate: 1
+    shard: 8
+    tensor: 1
+  backend_kwargs:
+data:
+  batch_size: 0
+  num_workers: 0
+model:
+  name: "MinimalVLM"
+optim:
+  lr: 0.001
+  weight_decay: 0.05
+  gradient_accumulation_steps: 1
+  mixed_precision: "bf16"
+  warmup_ratio: 0.1
+  clip_grad_norm: 5
+  compile: False
+loop:
+  policy: "iter"
+  total_steps: 10000
+  checkpoint:
+    keep_n: 5
+    interval: 5000
