@@ -273,7 +273,7 @@ class Engine(ABC):
             force: If True, save regardless of save_interval.
         """
         save_interval = OmegaConf.select(self.config, "loop.checkpoint.interval", default=1000)
-        if not force and (self.step % save_interval != 0):
+        if not force and ((self.step % save_interval != 0) or self.config.dev_mode):
             return
         logger.info(f"Saving checkpoint for step {self.step}...")
 
