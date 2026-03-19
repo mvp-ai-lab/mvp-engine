@@ -19,9 +19,15 @@ Point the agent at a skill under `en/` or `zh-cn/` by language, e.g.
 
 ## Skill List
 
+- `training/gradient-checkpointing`
+  - English: [en/training/gradient-checkpointing/SKILL.md](en/training/gradient-checkpointing/SKILL.md)
+  - 中文： [zh-cn/training/gradient-checkpointing/SKILL.md](zh-cn/training/gradient-checkpointing/SKILL.md)
 - `model/model-migration`
   - English: [en/model/model-migration/SKILL.md](en/model/model-migration/SKILL.md)
   - 中文： [zh-cn/model/model-migration/SKILL.md](zh-cn/model/model-migration/SKILL.md)
+- `training/model-compile`
+  - English: [en/training/model-compile/SKILL.md](en/training/model-compile/SKILL.md)
+  - 中文： [zh-cn/training/model-compile/SKILL.md](zh-cn/training/model-compile/SKILL.md)
 - `git/pr-gate`
   - English: [en/git/pr-gate/SKILL.md](en/git/pr-gate/SKILL.md)
   - 中文： [zh-cn/git/pr-gate/SKILL.md](zh-cn/git/pr-gate/SKILL.md)

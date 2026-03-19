@@ -71,11 +71,12 @@ class ViTClassificationEngine(Engine):
         model = build_vit_model(self.config.model).to(self.device)
         logger.info(f" - Model name: {model.__class__.__name__}")
 
-        if bool(OmegaConf.select(self.config, "optim.compile", default=False)):
-            model.compile(
-                backend=OmegaConf.select(self.config, "optim.compile_backend", default="inductor"),
-                mode=OmegaConf.select(self.config, "optim.compile_mode", default="default"),
-            )
+        # HuggingFace ViT already routes per-layer calls through
+        # GradientCheckpointingLayer, so the recipe only needs to enable it.
+        gc_enabled = OmegaConf.select(self.config, "model.gradient_checkpointing.enabled", default=False)
+        gc_use_reentrant = OmegaConf.select(self.config, "model.gradient_checkpointing.use_reentrant", default=False)
+        if gc_enabled:
+            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": gc_use_reentrant})
 
         parallelized_model = parallelize_model(
             model,
@@ -87,6 +88,13 @@ class ViTClassificationEngine(Engine):
             model_size, trainable_size = calculate_model_size(parallelized_model)
             logger.info(f" - Model size: {model_size / 1e9:.4f} B")
             logger.info(f" - Trainable model size: {trainable_size / 1e9:.4f} B")
+
+        if self.config.optim.compile:
+            parallelized_model = torch.compile(
+                parallelized_model,
+                backend=OmegaConf.select(self.config, "optim.compile_backend", default="inductor"),
+                mode=OmegaConf.select(self.config, "optim.compile_mode", default="default"),
+            )
 
         return parallelized_model
 
