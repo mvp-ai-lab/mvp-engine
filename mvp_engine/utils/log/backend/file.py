@@ -79,6 +79,12 @@ class FileBackend(Backend):
         if self.enable and self.log_file is not None:
             self.log_file.close()
 
+    def debug(self, message: str) -> None:
+        """Write a debug-level message to the log file."""
+        if self.enable and self.log_file:
+            self.log_file.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {self.id} | DEBUG | {message}\n")
+            self.log_file.flush()
+
     def info(self, message: str) -> None:
         """Write an info-level message to the log file."""
         if self.enable and self.log_file:

@@ -228,6 +228,24 @@ class TestLogger:
         mock_backend.error.assert_called_once_with("error message")
 
     @patch("mvp_engine.utils.log.logger.get_world_size", return_value=1)
+    def test_logger_level_filters_messages(self, mock_world_size):
+        """Test logger-level filtering for debug/info/warn/error methods."""
+        from mvp_engine.utils.log.logger import Logger, LogLevel
+
+        mock_backend = MagicMock()
+        logger = Logger(backends=[mock_backend], level=LogLevel.WARNING)
+
+        logger.debug("debug message")
+        logger.info("info message")
+        logger.warning("warning message")
+        logger.error("error message")
+
+        mock_backend.debug.assert_not_called()
+        mock_backend.info.assert_not_called()
+        mock_backend.warning.assert_called_once_with("warning message")
+        mock_backend.error.assert_called_once_with("error message")
+
+    @patch("mvp_engine.utils.log.logger.get_world_size", return_value=1)
     def test_destroy(self, mock_world_size):
         """Test logger destruction."""
         from mvp_engine.utils.log.logger import Logger
@@ -390,6 +408,97 @@ class TestWandbBackend:
         assert not backend.enable
         backend.log_metrics({"acc": 1.0}, step=1)
         backend.destroy()
+
+
+class TestLoggerInitAndSimpleInfo:
+    """Test cases for init_logger and simple_info helpers."""
+
+    @patch.dict("os.environ", {"LOG_LEVEL": "error"}, clear=False)
+    @patch("mvp_engine.utils.log.logger.get_world_size", return_value=1)
+    def test_init_logger_reads_env_level(self, mock_world_size):
+        """Test init_logger picks level from LOG_LEVEL when level arg is omitted."""
+        from mvp_engine.utils.log import init_logger
+        from mvp_engine.utils.log.logger import LogLevel
+
+        mock_backend = MagicMock()
+        logger = init_logger([mock_backend])
+
+        assert logger.level == LogLevel.ERROR
+        logger.destroy()
+
+    @patch.dict("os.environ", {"LOG_LEVEL": "invalid_level"}, clear=False)
+    @patch("mvp_engine.utils.log.Console")
+    @patch("mvp_engine.utils.log.logger.get_world_size", return_value=1)
+    def test_init_logger_invalid_env_level_falls_back_to_info(self, mock_world_size, mock_console_cls):
+        """Test invalid LOG_LEVEL env value falls back to info and emits warning."""
+        from mvp_engine.utils.log import init_logger
+        from mvp_engine.utils.log.logger import LogLevel
+
+        mock_console = MagicMock()
+        mock_console_cls.return_value = mock_console
+
+        mock_backend = MagicMock()
+        logger = init_logger([mock_backend])
+
+        assert logger.level == LogLevel.INFO
+        assert mock_console.print.called
+        logger.destroy()
+
+    @patch.dict("os.environ", {"LOG_LEVEL": "error"}, clear=False)
+    @patch("mvp_engine.utils.log.logger.get_world_size", return_value=1)
+    def test_init_logger_level_arg_overrides_env(self, mock_world_size):
+        """Test init_logger level argument overrides LOG_LEVEL env value."""
+        from mvp_engine.utils.log import init_logger
+        from mvp_engine.utils.log.logger import LogLevel
+
+        mock_backend = MagicMock()
+        logger = init_logger([mock_backend], level="debug")
+
+        assert logger.level == LogLevel.DEBUG
+        logger.destroy()
+
+    @patch("mvp_engine.utils.log.logger.get_world_size", return_value=1)
+    def test_init_logger_invalid_level_keeps_existing_logger(self, mock_world_size):
+        """Test invalid explicit level does not destroy existing logger instance."""
+        from mvp_engine.utils.log import get_logger, init_logger
+
+        first_backend = MagicMock()
+        first_logger = init_logger([first_backend], level="info")
+
+        with pytest.raises(ValueError):
+            init_logger([MagicMock()], level="invalid_level")
+
+        assert get_logger() is first_logger
+        first_backend.destroy.assert_not_called()
+        first_logger.destroy()
+
+    @patch.dict("os.environ", {"LOG_LEVEL": "invalid_level"}, clear=False)
+    @patch("mvp_engine.utils.log.Console")
+    def test_simple_info_invalid_env_level_falls_back_to_info(self, mock_console_cls):
+        """Test simple_info fallback handles invalid LOG_LEVEL by warning and using info."""
+        from mvp_engine.utils.log import simple_info
+
+        mock_console = MagicMock()
+        mock_console_cls.return_value = mock_console
+
+        simple_info("visible", level="info")
+
+        # First print is warning for invalid env, second is the actual info log.
+        assert mock_console.print.call_count == 2
+
+    @patch.dict("os.environ", {"LOG_LEVEL": "error"}, clear=False)
+    @patch("mvp_engine.utils.log.Console")
+    def test_simple_info_respects_env_without_logger(self, mock_console_cls):
+        """Test simple_info fallback console output is filtered by LOG_LEVEL."""
+        from mvp_engine.utils.log import simple_info
+
+        mock_console = MagicMock()
+        mock_console_cls.return_value = mock_console
+
+        simple_info("hidden", level="info")
+        simple_info("shown", level="error")
+
+        assert mock_console.print.call_count == 1
 
 
 if __name__ == "__main__":

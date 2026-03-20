@@ -164,7 +164,9 @@ cython_debug/
 #.idea/
 
 data/
-scripts/
+!skills/en/data/
+!skills/cn/data/
+/scripts/
 wandb/
 playground/
 .deepspeed_env
@@ -181,6 +183,9 @@ slurmlogs
 .DS_Store
 .vscode
 .idea
+
+# AI
+CUSTOM.md
 
 slurm/*
 batch_files/*

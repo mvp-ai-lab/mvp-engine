@@ -409,10 +409,18 @@ class TomatoViTAttention(nn.Module):
         key_states = self.k_proj(hidden_states)
         value_states = self.v_proj(hidden_states)
 
+        local_embed_dim = query_states.size(-1)
+        if local_embed_dim % self.head_dim != 0:
+            raise ValueError(
+                "Local embed dim must be divisible by head_dim "
+                f"(got local_embed_dim={local_embed_dim}, head_dim={self.head_dim})."
+            )
+        num_heads = local_embed_dim // self.head_dim
+
         # (B, L, H, D) -> Transpose to (B, H, L, D)
-        query_states = query_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        key_states = key_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        query_states = query_states.view(batch_size, q_len, num_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(batch_size, q_len, num_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(batch_size, q_len, num_heads, self.head_dim).transpose(1, 2)
 
         if rotary_pos_emb is not None:
             query_states, key_states = apply_rotary_pos_emb(query_states, key_states, rotary_pos_emb)
@@ -433,7 +441,7 @@ class TomatoViTAttention(nn.Module):
         attn_output = torch.matmul(attn_weights, value_states)
 
         attn_output = attn_output.transpose(1, 2).contiguous()
-        attn_output = attn_output.reshape(batch_size, q_len, self.embed_dim)
+        attn_output = attn_output.reshape(batch_size, q_len, local_embed_dim)
 
         attn_output = self.out_proj(attn_output)
 
@@ -487,9 +495,16 @@ class TomatoViTFlashAttention2(nn.Module):
         value_states = self.v_proj(hidden_states)
 
         # Flash Attention requires (B, L, H, D) format
-        query_states = query_states.view(batch_size, q_len, self.num_heads, self.head_dim)
-        key_states = key_states.view(batch_size, q_len, self.num_heads, self.head_dim)
-        value_states = value_states.view(batch_size, q_len, self.num_heads, self.head_dim)
+        local_embed_dim = query_states.size(-1)
+        if local_embed_dim % self.head_dim != 0:
+            raise ValueError(
+                "Local embed dim must be divisible by head_dim "
+                f"(got local_embed_dim={local_embed_dim}, head_dim={self.head_dim})."
+            )
+        num_heads = local_embed_dim // self.head_dim
+        query_states = query_states.view(batch_size, q_len, num_heads, self.head_dim)
+        key_states = key_states.view(batch_size, q_len, num_heads, self.head_dim)
+        value_states = value_states.view(batch_size, q_len, num_heads, self.head_dim)
 
         # Apply RoPE if provided
         if rotary_pos_emb is not None:
@@ -516,7 +531,7 @@ class TomatoViTFlashAttention2(nn.Module):
         )
 
         # Reshape to (B, L, embed_dim)
-        attn_output = attn_output.reshape(batch_size, q_len, self.embed_dim)
+        attn_output = attn_output.reshape(batch_size, q_len, local_embed_dim)
 
         # No extra casting here.
         attn_output = self.out_proj(attn_output)
@@ -602,13 +617,26 @@ class TomatoViTMoTFlashAttention2(nn.Module):
         v_b = self.v_proj_b(hidden_states_b)
 
         # Reshape for attention: (B, L, H, D)
-        q_a = q_a.view(batch_size, seq_len_a, self.num_heads, self.head_dim)
-        k_a = k_a.view(batch_size, seq_len_a, self.num_heads, self.head_dim)
-        v_a = v_a.view(batch_size, seq_len_a, self.num_heads, self.head_dim)
+        local_embed_dim_a = q_a.size(-1)
+        local_embed_dim_b = q_b.size(-1)
+        if local_embed_dim_a != local_embed_dim_b:
+            raise ValueError(
+                f"Local embed dims for branches must match (got a={local_embed_dim_a}, b={local_embed_dim_b})."
+            )
+        if local_embed_dim_a % self.head_dim != 0:
+            raise ValueError(
+                "Local embed dim must be divisible by head_dim "
+                f"(got local_embed_dim={local_embed_dim_a}, head_dim={self.head_dim})."
+            )
+        num_heads = local_embed_dim_a // self.head_dim
 
-        q_b = q_b.view(batch_size, seq_len_b, self.num_heads, self.head_dim)
-        k_b = k_b.view(batch_size, seq_len_b, self.num_heads, self.head_dim)
-        v_b = v_b.view(batch_size, seq_len_b, self.num_heads, self.head_dim)
+        q_a = q_a.view(batch_size, seq_len_a, num_heads, self.head_dim)
+        k_a = k_a.view(batch_size, seq_len_a, num_heads, self.head_dim)
+        v_a = v_a.view(batch_size, seq_len_a, num_heads, self.head_dim)
+
+        q_b = q_b.view(batch_size, seq_len_b, num_heads, self.head_dim)
+        k_b = k_b.view(batch_size, seq_len_b, num_heads, self.head_dim)
+        v_b = v_b.view(batch_size, seq_len_b, num_heads, self.head_dim)
 
         # Apply RoPE if provided
         if rotary_pos_emb_a is not None:
@@ -653,8 +681,8 @@ class TomatoViTMoTFlashAttention2(nn.Module):
         )
 
         # Reshape outputs: (B, L, H, D) -> (B, L, embed_dim)
-        attn_output_a = attn_output_a.reshape(batch_size, seq_len_a, self.embed_dim)
-        attn_output_b = attn_output_b.reshape(batch_size, seq_len_b, self.embed_dim)
+        attn_output_a = attn_output_a.reshape(batch_size, seq_len_a, local_embed_dim_a)
+        attn_output_b = attn_output_b.reshape(batch_size, seq_len_b, local_embed_dim_b)
 
         # Apply output projections (branch-specific)
         attn_output_a = self.out_proj_a(attn_output_a)

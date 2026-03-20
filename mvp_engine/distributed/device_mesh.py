@@ -1,5 +1,4 @@
-from typing import Optional, Tuple
-
+import torch
 import torch.distributed as dist
 from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 
@@ -7,51 +6,43 @@ from mvp_engine.utils.log import simple_info
 
 
 def initialize_device_mesh(
-    device_type: str = "cuda",
-    mesh_shape: Optional[Tuple[int, ...]] = None,
-    mesh_dim_names: Optional[Tuple[str, ...]] = None,
+    device_type: str,
+    mesh_cfg: dict[str, int],
 ) -> DeviceMesh:
     """
     Initialize device mesh for distributed training, compatible with both DDP and FSDP2.
 
     Args:
         device_type: Device type, "cuda" or "cpu"
-        mesh_shape: Shape of the device mesh. If None, will create a 1D mesh with world_size.
-                   For FSDP2, can use 2D mesh like (dp_size, fsdp_size).
-        mesh_dim_names: Names for each mesh dimension, e.g., ("dp", "fsdp") for 2D mesh.
+        mesh_cfg: Dictionary specifying mesh dimensions and their sizes, e.g. {"replicate": world_size} for DDP.
 
     Returns:
         DeviceMesh: Initialized device mesh
-
-    Examples:
-        # DDP mode (1D mesh)
-        mesh = initialize_device_mesh("cuda")
-
-        # FSDP2 mode (1D mesh)
-        mesh = initialize_device_mesh("cuda", mesh_shape=(8,), mesh_dim_names=("fsdp",))
     """
     world_size = dist.get_world_size()
 
-    # Default to 1D mesh with world_size for DDP compatibility
-    if mesh_shape is None:
-        mesh_shape = (world_size,)
-
-    # Validate mesh shape
-    mesh_size = 1
-    for dim in mesh_shape:
-        mesh_size *= dim
-
-    if mesh_size != world_size:
-        raise ValueError(f"Product of mesh_shape {mesh_shape} must equal world_size {world_size}")
-
-    # Create device mesh
-    if mesh_dim_names is None:
-        if len(mesh_shape) == 1:
-            mesh_dim_names = ("dp",)  # Default name for 1D mesh
+    others = []
+    to_be_infered_name = ""
+    for dim_name, dim_size in mesh_cfg.items():
+        if dim_size != -1:
+            others.append(dim_size)
         else:
-            raise ValueError("mesh_dim_names must be provided for multi-dimensional meshes")
+            to_be_infered_name = dim_name
+    if len(others) < len(mesh_cfg) - 1:
+        raise ValueError(
+            "Insufficient dimension sizes specified for device mesh initialization, only one dimension can be inferred."
+        )
 
-    simple_info(f"Device Mesh initializing: {mesh_dim_names} ({mesh_shape})...")
+    if to_be_infered_name:
+        inferred_size = world_size // (1 if not others else torch.prod(torch.tensor(others)).item())
+        mesh_cfg[to_be_infered_name] = inferred_size
+
+    mesh_shape = list(mesh_cfg.values())
+    mesh_dim_names = list(mesh_cfg.keys())
+
+    simple_info(
+        f"Device Mesh initializing: {' / '.join(mesh_dim_names)} ({' / '.join([str(x) for x in mesh_shape])})..."
+    )
 
     device_mesh = init_device_mesh(
         device_type=device_type,

@@ -1,10 +1,41 @@
 """Training utilities for gradient accumulation and mixed precision."""
 
+import math
+from collections.abc import Iterable
 from contextlib import contextmanager
 from typing import Generator, Union
 
 import torch
+import torch.nn as nn
+from torch.distributed.fsdp import FSDPModule
 from torch.nn.parallel import DistributedDataParallel as DDP
+
+try:
+    from torch.distributed.tensor import DTensor
+except Exception:  # pragma: no cover - runtime-dependent
+    DTensor = ()
+
+
+def _materialize_total_norm(total_norm: torch.Tensor) -> torch.Tensor:
+    """Convert DTensor total norms to local tensors so they can be combined safely."""
+    if isinstance(total_norm, DTensor):
+        total_norm = total_norm.full_tensor()
+    return total_norm
+
+
+def _get_grad_mesh_key(grad: torch.Tensor) -> tuple:
+    """Group gradients by DTensor mesh so mixed-mesh clipping can be reduced safely."""
+    if not isinstance(grad, DTensor):
+        return ("local",)
+
+    mesh = grad.device_mesh
+    return (
+        "dtensor",
+        mesh.device_type,
+        tuple(mesh.mesh.shape),
+        tuple(mesh.mesh.reshape(-1).tolist()),
+        tuple(mesh.mesh_dim_names or ()),
+    )
 
 
 @contextmanager
@@ -19,17 +50,31 @@ def accumulate_gradients(
     processes (normal backward behavior).
 
     Args:
-        model: The model (possibly wrapped in DDP).
+        model: The model (possibly wrapped in DDP or FSDP2).
         sync: Whether to synchronize gradients across processes.
 
     Yields:
         None
     """
-    if isinstance(model, DDP) and not sync:
-        with model.no_sync():
+    base_model = getattr(model, "_orig_mod", model)
+
+    # DDP
+    if isinstance(base_model, DDP):
+        if sync:
             yield
-    else:
+        else:
+            with base_model.no_sync():
+                yield
+        return
+
+    # FSDP2
+    if isinstance(base_model, FSDPModule):
+        base_model.set_requires_gradient_sync(sync)
         yield
+        return
+
+    # Non-parallel
+    yield
 
 
 class GradientScaler:
@@ -146,7 +191,7 @@ class GradientScaler:
 
 
 def clip_grad_norm_(
-    parameters,
+    parameters: nn.Module | Iterable[torch.Tensor] | torch.Tensor,
     max_norm: float,
     norm_type: float = 2.0,
 ) -> torch.Tensor:
@@ -163,11 +208,42 @@ def clip_grad_norm_(
     Returns:
         Total norm of the gradients before clipping.
     """
+    if isinstance(parameters, nn.Module):
+        parameters = parameters.parameters()
+
     if isinstance(parameters, torch.Tensor):
         parameters = [parameters]
+    else:
+        parameters = list(parameters)
+
     parameters = [p for p in parameters if p.grad is not None]
 
     if len(parameters) == 0:
         return torch.tensor(0.0)
 
-    return torch.nn.utils.clip_grad_norm_(parameters, max_norm=max_norm, norm_type=norm_type)
+    grouped_parameters: dict[tuple, list[torch.Tensor]] = {}
+    for param in parameters:
+        group_key = _get_grad_mesh_key(param.grad)
+        grouped_parameters.setdefault(group_key, []).append(param)
+
+    group_total_norms: list[torch.Tensor] = []
+    for group_parameters in grouped_parameters.values():
+        group_grads = [param.grad for param in group_parameters]
+        group_total_norm = torch.nn.utils.get_total_norm(group_grads, norm_type)
+        group_total_norm = _materialize_total_norm(group_total_norm)
+        group_total_norms.append(group_total_norm.to(device=group_grads[0].device, dtype=torch.float32))
+
+    if math.isinf(norm_type):
+        total_norm = torch.stack(group_total_norms).amax()
+    else:
+        total_norm = torch.linalg.vector_norm(torch.stack(group_total_norms), ord=norm_type)
+
+    for group_parameters in grouped_parameters.values():
+        torch.nn.utils.clip_grads_with_norm_(
+            group_parameters,
+            max_norm,
+            total_norm,
+            foreach=False,
+        )
+
+    return total_norm

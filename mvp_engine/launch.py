@@ -7,6 +7,48 @@ from omegaconf import DictConfig, OmegaConf
 
 from mvp_engine.engine import ENGINE_REGISTRY
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+RECIPES_ROOT = PROJECT_ROOT / "recipes"
+
+
+def _find_recipe_dir(config_path: Path) -> Path | None:
+    """Resolve the top-level recipe package for a config path under ``recipes/``."""
+    config_path = config_path.resolve()
+    try:
+        relative_path = config_path.relative_to(RECIPES_ROOT)
+    except ValueError:
+        return None
+
+    if len(relative_path.parts) < 2:
+        return None
+
+    recipe_dir = RECIPES_ROOT / relative_path.parts[0]
+    if not recipe_dir.is_dir():
+        return None
+
+    return recipe_dir
+
+
+def _import_recipe_modules(recipe_dir: Path) -> None:
+    """Import all Python modules under a recipe so its engine/model registries are populated."""
+    has_package_entry = (RECIPES_ROOT / "__init__.py").exists() and (recipe_dir / "__init__.py").exists()
+    import_root = PROJECT_ROOT if has_package_entry else recipe_dir.parent
+    relative_root = PROJECT_ROOT if has_package_entry else recipe_dir.parent
+
+    import_root_str = str(import_root)
+    if import_root_str not in sys.path:
+        sys.path.insert(0, import_root_str)
+
+    import importlib
+
+    for py_file in sorted(recipe_dir.glob("**/*.py")):
+        if py_file.name.startswith("_"):
+            continue
+
+        relative_path = py_file.relative_to(relative_root)
+        module_name = ".".join(relative_path.with_suffix("").parts)
+        importlib.import_module(module_name)
+
 
 @hydra.main(version_base=None)
 def main(config: DictConfig) -> None:
@@ -39,23 +81,9 @@ if __name__ == "__main__":
     config_dir = str(config_path.parent)
     config_name = config_path.stem
 
-    recipe_dir = config_path.parent.parent
-    if recipe_dir.exists() and recipe_dir.is_dir():
-        # Add recipe_dir's parent to sys.path so relative imports work
-        recipe_parent = str(recipe_dir.parent)
-        if recipe_parent not in sys.path:
-            sys.path.insert(0, recipe_parent)
-
-        recipe_name = recipe_dir.name
-        import importlib
-
-        for py_file in sorted(recipe_dir.glob("**/*.py")):
-            if py_file.name.startswith("_"):
-                continue
-            # Build the full module name relative to recipe_parent
-            relative_path = py_file.relative_to(recipe_dir.parent)
-            module_name = str(relative_path.with_suffix("")).replace("/", ".")
-            importlib.import_module(module_name)
+    recipe_dir = _find_recipe_dir(config_path)
+    if recipe_dir is not None:
+        _import_recipe_modules(recipe_dir)
 
     sys.argv = [
         sys.argv[0],
