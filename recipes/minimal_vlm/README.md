@@ -43,4 +43,3 @@ Key defaults in [`configs/train.yaml`](/home/c84391361/projects/mvp-engine/recip
 - `model.pretrained_model_name_or_path: Qwen/Qwen3-VL-2B-Instruct`
 - `model.freeze_visual: true`
 - `data.train_path: ./data/minimal_vlm/demo.jsonl`
-- `data.eval_path: null` so evaluation dataset construction falls back to the training file

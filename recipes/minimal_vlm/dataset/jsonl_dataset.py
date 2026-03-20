@@ -7,7 +7,6 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from omegaconf import OmegaConf
 from torch.utils.data import Dataset
 
 IMAGE_PLACEHOLDER = "<image>"
@@ -125,14 +124,10 @@ class MinimalVlmJsonlDataset(Dataset[dict[str, Any]]):
         return self.samples[index]
 
 
-def build_dataset(config: Any, workflow: str = "train") -> MinimalVlmJsonlDataset:
-    """Build the dataset for the requested workflow."""
-    if workflow == "train":
-        dataset_path = OmegaConf.select(config, "data.train_path")
-    else:
-        dataset_path = OmegaConf.select(config, "data.eval_path") or OmegaConf.select(config, "data.train_path")
-
+def build_dataset(config: Any) -> MinimalVlmJsonlDataset:
+    """Build the training dataset for the minimal VLM recipe."""
+    dataset_path = config.data.train_path
     if dataset_path is None:
-        raise ValueError(f"Missing dataset path for workflow={workflow!r}.")
+        raise ValueError("Missing `data.train_path` for the minimal VLM recipe.")
 
     return MinimalVlmJsonlDataset(dataset_path)

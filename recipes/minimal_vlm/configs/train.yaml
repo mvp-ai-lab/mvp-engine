@@ -16,7 +16,6 @@ parallel:
   backend_kwargs:
 data:
   train_path: "./data/minimal_vlm/demo.jsonl"
-  eval_path: null
   max_seq_len: 2048
   batch_size: 1
   num_workers: 0

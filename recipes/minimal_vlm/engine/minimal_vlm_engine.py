@@ -7,7 +7,7 @@ from typing import Any
 import torch
 from omegaconf import OmegaConf
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader
 
 from mvp_engine.distributed.parallelize import parallelize_model
 from mvp_engine.distributed.utils import get_rank, get_world_size, is_main_process
@@ -27,8 +27,10 @@ class MinimalVlmEngine(Engine):
     processor: Any | None = None
 
     def prepare_dataloader(self, workflow: str = "train") -> DataLoader:
-        """Build the dataloader that yields multimodal chat batches."""
-        dataset = build_dataset(self.config, workflow)
+        """Build the train-only dataloader that yields multimodal chat batches."""
+        del workflow  # The shared engine still passes this, but the recipe only supports training.
+
+        dataset = build_dataset(self.config)
         if self.processor is None:
             self.processor = build_qwen3_vl_processor(self.config.model)
 
@@ -37,22 +39,13 @@ class MinimalVlmEngine(Engine):
             max_length=int(self.config.data.max_seq_len),
         )
 
-        is_train = workflow == "train"
-        if is_train:
-            sampler = InfiniteDistributedSampler(
-                dataset,
-                num_replicas=get_world_size(),
-                rank=get_rank(),
-                shuffle=True,
-                seed=int(OmegaConf.select(self.config, "project.seed", default=42)),
-            )
-        else:
-            sampler = DistributedSampler(
-                dataset,
-                num_replicas=get_world_size(),
-                rank=get_rank(),
-                shuffle=False,
-            )
+        sampler = InfiniteDistributedSampler(
+            dataset,
+            num_replicas=get_world_size(),
+            rank=get_rank(),
+            shuffle=True,
+            seed=int(OmegaConf.select(self.config, "project.seed", default=42)),
+        )
 
         return DataLoader(
             dataset,
@@ -61,7 +54,7 @@ class MinimalVlmEngine(Engine):
             collate_fn=collate_fn,
             num_workers=int(self.config.data.num_workers),
             pin_memory=self.device.type == "cuda",
-            drop_last=is_train,
+            drop_last=True,
             persistent_workers=int(self.config.data.num_workers) > 0,
         )
 
