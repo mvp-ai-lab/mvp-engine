@@ -102,6 +102,11 @@ class SigLipEngine(Engine):
         )
 
         model = SiglipModel(siglip_config).to(self.device)
+
+        if self.config.model.compile:
+            logger.info("Compiling the model with torch.compile...")
+            model = torch.compile(model)
+
         logger.info(f" - Model name: {model.__class__.__name__}")
 
         # 5. Parallelize student and teacher

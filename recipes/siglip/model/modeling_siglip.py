@@ -44,6 +44,7 @@ from transformers.models.siglip.configuration_siglip import (
 )
 from transformers.utils import ModelOutput, auto_docstring, can_return_tuple
 
+from ..model.apa import UniRect
 from ..model.potato_ascend import Qwen2_5_VisionTransformerPretrainedModel
 
 
@@ -369,7 +370,7 @@ class SiglipMLP(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.activation_fn = ACT2FN[config.hidden_act]
+        self.activation_fn = UniRect() if config.hidden_act == "uni" else ACT2FN[config.hidden_act]
         self.fc1 = nn.Linear(config.hidden_size, config.intermediate_size)
         self.fc2 = nn.Linear(config.intermediate_size, config.hidden_size)
 
@@ -920,7 +921,7 @@ class SiglipModel(SiglipPreTrainedModel):
             elif self.loss_fn_type == "softmax":
                 loglik = (
                     torch.nn.functional.log_softmax(logits_per_text, dim=-1) * eye
-                    + torch.nn.functional.log_softmax(logits_per_text, dim=-2) * eye
+                    + torch.nn.functional.log_softmax(logits_per_text, dim=-1) * eye
                 ) / 2
             elif self.loss_fn_type == "gumbel":
                 loglik = -torch.exp(-m1_diag1 * logits_per_text)
