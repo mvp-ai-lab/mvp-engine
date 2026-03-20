@@ -10,7 +10,7 @@ Structured task guidance for coding agents. Documentation is split by language:
 ```
 skills/
 ├── README.md     ← this file (overview)
-├── en/           ← English docs (README, training/, parallel/, model/, data/, debug/, recipe/, git/)
+├── en/           ← English docs (README, training/, parallel/, model/, data/, debug/, recipe/, experiment/, git/)
 └── zh-cn/           ← 中文文档（结构同 en/）
 ```
 
@@ -40,3 +40,6 @@ Point the agent at a skill under `en/` or `zh-cn/` by language, e.g.
 - `git/pr-skill-review`
   - English: [en/git/pr-skill-review/SKILL.md](en/git/pr-skill-review/SKILL.md)
   - 中文： [zh-cn/git/pr-skill-review/SKILL.md](zh-cn/git/pr-skill-review/SKILL.md)
+- `experiment/analysis`
+  - English: [en/experiment/analysis/SKILL.md](en/experiment/analysis/SKILL.md)
+  - 中文： [zh-cn/experiment/analysis/SKILL.md](zh-cn/experiment/analysis/SKILL.md)
