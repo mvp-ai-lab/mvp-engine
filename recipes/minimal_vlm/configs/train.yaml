@@ -1,5 +1,5 @@
 dev_mode: false
-engine: MinimalVlmEngine
+engine: MinimalVLMEngine
 project:
   name: "minimal-vlm"
   dir: "./outputs"
@@ -16,6 +16,9 @@ parallel:
   backend_kwargs:
 data:
   train_path: "./data/minimal_vlm/demo.jsonl"
+  jsonl_num_shards: null
+  shuffle_buffer: 128
+  loader_prefetch_factor: 2
   max_seq_len: 2048
   batch_size: 1
   num_workers: 0
@@ -23,6 +26,9 @@ model:
   pretrained_model_name_or_path: "Qwen/Qwen3-VL-2B-Instruct"
   trust_remote_code: true
   freeze_visual: true
+  freeze_vit: true
+  freeze_projector: true
+  freeze_llm: false
 optim:
   lr: 1.0e-5
   weight_decay: 0.05

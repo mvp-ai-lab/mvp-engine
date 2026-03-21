@@ -5,61 +5,70 @@ from __future__ import annotations
 from typing import Any
 
 import torch
+from mvp_dataset import TorchLoader
 from omegaconf import OmegaConf
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
-from torch.utils.data import DataLoader
 
 from mvp_engine.distributed.parallelize import parallelize_model
-from mvp_engine.distributed.utils import get_rank, get_world_size, is_main_process
+from mvp_engine.distributed.utils import is_main_process
 from mvp_engine.engine import ENGINE_REGISTRY, Engine
 from mvp_engine.utils.log import logger
 from mvp_engine.utils.misc import calculate_model_size
 
-from ..dataset import InfiniteDistributedSampler, MinimalVlmCollator, build_dataset
-from ..model import build_qwen3_vl_model, build_qwen3_vl_processor
+from ..dataset import MinimalVLMCollator, build_dataset, build_qwen3_vl_processor
+from ..model import build_qwen3_vl_model
 from ..types import TrainBatch
 
 
 @ENGINE_REGISTRY.register()
-class MinimalVlmEngine(Engine):
+class MinimalVLMEngine(Engine):
     """Recipe-local engine for supervised Qwen3-VL fine-tuning."""
 
     processor: Any | None = None
 
-    def prepare_dataloader(self, workflow: str = "train") -> DataLoader:
-        """Build the train-only dataloader that yields multimodal chat batches."""
+    def prepare_dataloader(self, workflow: str = "train"):
+        """Build the train-only dataloader over preprocessed multimodal samples.
+
+        Args:
+            workflow: Workflow name passed by the shared engine. Only ``train``
+                is supported by this recipe.
+
+        Returns:
+            A ``TorchLoader`` pipeline that yields padded multimodal batches.
+        """
         del workflow  # The shared engine still passes this, but the recipe only supports training.
 
-        dataset = build_dataset(self.config)
         if self.processor is None:
             self.processor = build_qwen3_vl_processor(self.config.model)
+        dataset = build_dataset(self.config, processor=self.processor)
 
-        collate_fn = MinimalVlmCollator(
-            processor=self.processor,
-            max_length=int(self.config.data.max_seq_len),
+        collate_fn = MinimalVLMCollator(
+            pad_token_id=int(self.processor.tokenizer.pad_token_id),
         )
 
-        sampler = InfiniteDistributedSampler(
+        loader = TorchLoader(
             dataset,
-            num_replicas=get_world_size(),
-            rank=get_rank(),
-            shuffle=True,
-            seed=int(OmegaConf.select(self.config, "project.seed", default=42)),
-        )
-
-        return DataLoader(
-            dataset,
-            batch_size=int(self.config.data.batch_size),
-            sampler=sampler,
-            collate_fn=collate_fn,
             num_workers=int(self.config.data.num_workers),
             pin_memory=self.device.type == "cuda",
-            drop_last=True,
             persistent_workers=int(self.config.data.num_workers) > 0,
+            prefetch_factor=int(OmegaConf.select(self.config, "data.loader_prefetch_factor", default=2)),
+        )
+        loader = loader.shuffle(buffer_size=int(OmegaConf.select(self.config, "data.shuffle_buffer", default=128)))
+        return loader.batch(
+            batch_size=int(self.config.data.batch_size),
+            drop_last=True,
+            collate_fn=collate_fn,
         )
 
     def prepare_model(self) -> torch.nn.Module:
-        """Build, freeze, and parallelize the Qwen3-VL model."""
+        """Build the recipe model and wrap it for distributed training.
+
+        Args:
+            None.
+
+        Returns:
+            The distributed-ready Qwen3-VL model.
+        """
         model = build_qwen3_vl_model(self.config.model).to(self.device)
         logger.info(f" - Model name: {model.__class__.__name__}")
 
@@ -77,7 +86,14 @@ class MinimalVlmEngine(Engine):
         return parallelized_model
 
     def prepare_optimizer(self) -> torch.optim.Optimizer:
-        """Build AdamW over trainable parameters only."""
+        """Construct AdamW over the subset of trainable model parameters.
+
+        Args:
+            None.
+
+        Returns:
+            The optimizer used by this recipe.
+        """
         trainable_parameters = [parameter for parameter in self.model.parameters() if parameter.requires_grad]
         if not trainable_parameters:
             raise ValueError("No trainable parameters found for the minimal VLM recipe.")
@@ -89,7 +105,14 @@ class MinimalVlmEngine(Engine):
         )
 
     def prepare_scheduler(self) -> SequentialLR | CosineAnnealingLR:
-        """Build the warmup plus cosine decay learning-rate schedule."""
+        """Construct the learning-rate schedule used by this recipe.
+
+        Args:
+            None.
+
+        Returns:
+            The warmup-plus-cosine scheduler for the current optimizer.
+        """
         warmup_steps = int(self.total_steps * float(self.config.optim.warmup_ratio))
         if warmup_steps <= 0:
             return CosineAnnealingLR(self.optimizer, T_max=self.total_steps)
@@ -111,7 +134,14 @@ class MinimalVlmEngine(Engine):
         )
 
     def train_pre_step(self, data: dict[str, Any]) -> TrainBatch:
-        """Move the collated batch onto the current device."""
+        """Move the collated batch to the local device and normalize keys.
+
+        Args:
+            data: Raw batch emitted by the dataloader.
+
+        Returns:
+            A normalized batch dictionary ready for the model forward pass.
+        """
         batch: dict[str, Any] = {}
         for key, value in data.items():
             if isinstance(value, torch.Tensor):
@@ -119,16 +149,17 @@ class MinimalVlmEngine(Engine):
             else:
                 batch[key] = value
 
-        return {
-            "input_ids": batch["input_ids"],
-            "attention_mask": batch["attention_mask"],
-            "labels": batch["labels"],
-            "pixel_values": batch.get("pixel_values"),
-            "image_grid_thw": batch.get("image_grid_thw"),
-        }
+        return batch
 
     def train_one_step(self, data: TrainBatch) -> dict[str, Any]:
-        """Run one Qwen3-VL forward pass and collect training metrics."""
+        """Run one forward pass and collect training metrics.
+
+        Args:
+            data: Normalized multimodal batch on the local device.
+
+        Returns:
+            A dictionary containing the loss tensor and logging scalars.
+        """
         with torch.autocast(
             device_type=self.device_type,
             dtype=self.dtype,

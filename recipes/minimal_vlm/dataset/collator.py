@@ -5,93 +5,58 @@ from __future__ import annotations
 from typing import Any
 
 import torch
+from torch.nn.utils.rnn import pad_sequence
 
 
-class MinimalVlmCollator:
-    """Collate conversation samples with a Hugging Face multimodal processor."""
+class MinimalVLMCollator:
+    """Pad and merge preprocessed multimodal samples."""
 
-    def __init__(self, processor: Any, max_length: int, *, ignore_index: int = -100) -> None:
-        self.processor = processor
-        self.max_length = max_length
+    def __init__(self, pad_token_id: int, *, ignore_index: int = -100) -> None:
+        """Store padding values used during batch collation.
+
+        Args:
+            pad_token_id: Token id used to pad ``input_ids``.
+            ignore_index: Label value used to pad masked loss positions.
+
+        Returns:
+            None.
+        """
+        self.pad_token_id = pad_token_id
         self.ignore_index = ignore_index
 
-    def _tokenize_conversation(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        add_generation_prompt: bool,
-    ) -> torch.Tensor:
-        tokenized = self.processor.apply_chat_template(
-            [messages],
-            tokenize=True,
-            add_generation_prompt=add_generation_prompt,
-            return_dict=True,
-            return_tensors="pt",
-            truncation=True,
-            max_length=self.max_length,
-        )
-        return tokenized["input_ids"][0]
-
-    def _build_labels_for_sample(
-        self,
-        messages: list[dict[str, Any]],
-        input_ids: torch.Tensor,
-    ) -> torch.Tensor:
-        """Supervise assistant response tokens by comparing message prefixes."""
-        labels = torch.full_like(input_ids, self.ignore_index)
-
-        for message_index, message in enumerate(messages):
-            if message.get("role") != "assistant":
-                continue
-
-            prefix_length = 0
-            if message_index > 0:
-                prefix_ids = self._tokenize_conversation(
-                    messages[:message_index],
-                    add_generation_prompt=True,
-                )
-                prefix_length = int(prefix_ids.size(0))
-
-            upto_ids = self._tokenize_conversation(
-                messages[: message_index + 1],
-                add_generation_prompt=False,
-            )
-            upto_length = int(upto_ids.size(0))
-
-            start = min(prefix_length, input_ids.size(0))
-            end = min(upto_length, input_ids.size(0))
-            if start < end:
-                labels[start:end] = input_ids[start:end]
-
-        return labels
-
     def __call__(self, batch: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
-        conversations = [sample["messages"] for sample in batch]
-        model_inputs = self.processor.apply_chat_template(
-            conversations,
-            tokenize=True,
-            add_generation_prompt=False,
-            return_dict=True,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=self.max_length,
-        )
+        """Pad token tensors and concatenate optional vision tensors.
 
-        input_ids = model_inputs["input_ids"]
-        attention_mask = model_inputs["attention_mask"]
-        labels = torch.full_like(input_ids, self.ignore_index)
+        Args:
+            batch: List of processed samples emitted by ``process_sample``.
 
-        for batch_index, sample in enumerate(batch):
-            valid_length = int(attention_mask[batch_index].sum().item())
-            if valid_length <= 0:
-                continue
+        Returns:
+            A batched tensor dictionary ready for model forward passes.
+        """
+        model_inputs = {
+            "input_ids": pad_sequence(
+                [sample["input_ids"] for sample in batch],
+                batch_first=True,
+                padding_value=self.pad_token_id,
+            ),
+            "attention_mask": pad_sequence(
+                [sample["attention_mask"] for sample in batch],
+                batch_first=True,
+                padding_value=0,
+            ),
+            "labels": pad_sequence(
+                [sample["labels"] for sample in batch],
+                batch_first=True,
+                padding_value=self.ignore_index,
+            ),
+        }
 
-            labels[batch_index, :valid_length] = self._build_labels_for_sample(
-                sample["messages"],
-                input_ids[batch_index, :valid_length],
-            )
+        pixel_values = [sample["pixel_values"] for sample in batch if sample.get("pixel_values") is not None]
+        if pixel_values:
+            model_inputs["pixel_values"] = torch.cat(pixel_values, dim=0)
 
-        model_inputs["labels"] = labels
+        image_grid_thw = [sample["image_grid_thw"] for sample in batch if sample.get("image_grid_thw") is not None]
+        if image_grid_thw:
+            model_inputs["image_grid_thw"] = torch.cat(image_grid_thw, dim=0)
 
         return model_inputs
