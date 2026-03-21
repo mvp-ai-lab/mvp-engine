@@ -18,8 +18,18 @@ class BaseProjectConfig(BaseModel):
 
     name: str = "mvp-engine"
     dir: str = "./outputs"
+
+
+class BaseRuntimeInfo(BaseModel):
+    model_config = ConfigDict(frozen=False)
+
+    git_info: str = ""
     run_id: str = ""
     output_dir: str = ""
+    world_size: int = 1
+    hostname: str = ""
+    python_version: str = ""
+    torch_version: str = ""
 
 
 class BaseMeshConfig(BaseModel):
@@ -103,10 +113,10 @@ class BaseEngineConfig(BaseModel):
 
     dev_mode: bool = False
     engine: str = "Engine"
-    git_info: str = ""
     seed: int = 42
     deterministic: bool = False
     project: BaseProjectConfig = Field(default_factory=BaseProjectConfig)
+    runtime: BaseRuntimeInfo = Field(default_factory=BaseRuntimeInfo)
     log: BaseLogConfig = Field(default_factory=BaseLogConfig)
     parallel: BaseParallelConfig = Field(default_factory=BaseParallelConfig)
     optim: BaseOptimConfig = Field(default_factory=BaseOptimConfig)

@@ -98,17 +98,25 @@ class Engine(ABC):
         """Convert OmegaConf config to a validated Pydantic model, injecting runtime values."""
         d = OmegaConf.to_container(config, resolve=True)
 
-        # 0. Inject git info
+        # 0. Inject runtime environment info
+        import platform
+        import socket
+
         git_info = get_git_info()
-        d["git_info"] = f"<{git_info['branch']}> {git_info['commit_hash']}"
+        runtime = d.setdefault("runtime", {})
+        runtime["git_info"] = f"<{git_info['branch']}> {git_info['commit_hash']}"
+        runtime["world_size"] = int(os.environ.get("WORLD_SIZE", os.environ.get("SLURM_NTASKS", 1)))
+        runtime["hostname"] = socket.gethostname()
+        runtime["python_version"] = platform.python_version()
+        runtime["torch_version"] = torch.__version__
 
         # 1. Generate a unique run ID, broadcast from main to all ranks
         name = d.get("project", {}).get("name", "mvp-engine")
         local_run_id = f"{name}_{time.strftime('%Y%m%d%H%M%S', time.localtime())}_{secrets.token_hex(2)}"
-        d.setdefault("project", {})["run_id"] = broadcast_from_main(local_run_id)
+        runtime["run_id"] = broadcast_from_main(local_run_id)
 
         # 2. Derive output directory from project dir + run ID
-        d["project"]["output_dir"] = str(Path(d["project"].get("dir", "./outputs")) / d["project"]["run_id"])
+        runtime["output_dir"] = str(Path(d.get("project", {}).get("dir", "./outputs")) / runtime["run_id"])
 
         return self.ConfigClass.model_validate(d)
 
@@ -156,12 +164,12 @@ class Engine(ABC):
     @property
     def project_dir(self) -> Path:
         """Root directory for outputs and checkpoints."""
-        return Path(self.config.project.output_dir)
+        return Path(self.config.runtime.output_dir)
 
     @property
     def run_id(self) -> str:
         """Unique identifier for this training run."""
-        return self.config.project.run_id
+        return self.config.runtime.run_id
 
     @property
     def loop_policy(self) -> str:
@@ -194,19 +202,19 @@ class Engine(ABC):
         """Initialize logging backends based on configuration."""
         logger_backends = []
         if self.config.dev_mode:
-            logger_backends = [TerminalBackend(id=self.config.project.run_id)]
+            logger_backends = [TerminalBackend(id=self.config.runtime.run_id)]
         else:
             logger_backends = []
             config_backends = self.config.log.backends
 
             for backend in config_backends:
                 if backend == "terminal":
-                    logger_backends.append(TerminalBackend(id=self.config.project.run_id))
+                    logger_backends.append(TerminalBackend(id=self.config.runtime.run_id))
                 elif backend == "file":
                     logger_backends.append(
                         FileBackend(
                             id=self.run_id,
-                            path=Path(self.config.project.output_dir),
+                            path=Path(self.config.runtime.output_dir),
                         )
                     )
                 elif backend == "wandb":
@@ -214,7 +222,7 @@ class Engine(ABC):
                         WandbBackend(
                             id=self.run_id,
                             project=self.config.project.name,
-                            path=Path(self.config.project.output_dir),
+                            path=Path(self.config.runtime.output_dir),
                         )
                     )
                 else:
