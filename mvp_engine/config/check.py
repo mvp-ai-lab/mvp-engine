@@ -66,9 +66,9 @@ def check_config(config: DictConfig) -> None:
     if log_backends is not None:
         if not isinstance(log_backends, (list, tuple, ListConfig)):
             raise TypeError("`project.log.backends` must be a list of backend names.")
-        invalid_backends = [backend for backend in log_backends if backend not in {"terminal", "file"}]
+        invalid_backends = [backend for backend in log_backends if backend not in {"terminal", "file", "wandb"}]
         if invalid_backends:
             raise ValueError(
                 f"`project.log.backends` contains invalid values: {invalid_backends}. "
-                "Supported backends are ['terminal', 'file']."
+                "Supported backends are ['terminal', 'file', 'wandb']."
             )

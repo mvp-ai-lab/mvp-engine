@@ -25,7 +25,7 @@ from mvp_engine.utils.checkpointing.parallel_sl_util import (
     save_checkpoint,
 )
 from mvp_engine.utils.log import init_logger, logger
-from mvp_engine.utils.log.backend import FileBackend, TerminalBackend
+from mvp_engine.utils.log.backend import FileBackend, TerminalBackend, WandbBackend
 from mvp_engine.utils.misc import Timer, get_device, get_git_info
 from mvp_engine.utils.training import (
     GradientScaler,
@@ -241,6 +241,14 @@ class Engine(ABC):
                             path=Path(self.config.project.output_dir),
                         )
                     )
+                elif backend == "wandb":
+                    logger_backends.append(
+                        WandbBackend(
+                            id=self.run_id,
+                            project=self.config.project.name,
+                            path=Path(self.config.project.output_dir),
+                        )
+                    )
                 else:
                     raise ValueError(f"Invalid log backend: {backend}")
 
@@ -394,7 +402,7 @@ class Engine(ABC):
         logger.info("Initializing Timer...")
         self.timer = Timer(
             total_batches=self.total_steps,
-            window_size=OmegaConf.select(self.config, "log.timer_window_size", default=100),
+            window_size=OmegaConf.select(self.config, "project.log.timer_window_size", default=100),
         )
 
     def run_train(self) -> None:
