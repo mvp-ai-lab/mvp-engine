@@ -383,7 +383,7 @@ class TestWandbBackend:
     @patch("mvp_engine.utils.log.backend.wandb_log.is_main_process", return_value=True)
     def test_wandb_backend_init(self, mock_is_main):
         """Test WandbBackend initialization."""
-        from mvp_engine.utils.log.backend.wandb_log import WandbBackend
+        from mvp_engine.utils.log.backend.wandb import WandbBackend
 
         backend = WandbBackend(id="test_run_1", project="test_project")
         assert backend.enable
@@ -392,7 +392,7 @@ class TestWandbBackend:
     @patch("mvp_engine.utils.log.backend.wandb_log.is_main_process", return_value=True)
     def test_wandb_backend_log_metrics(self, mock_is_main):
         """Test WandbBackend log_metrics."""
-        from mvp_engine.utils.log.backend.wandb_log import WandbBackend
+        from mvp_engine.utils.log.backend.wandb import WandbBackend
 
         backend = WandbBackend(id="test_run_2", project="test_project")
         metrics = {"loss": 0.5, "accuracy": 0.9, "eta": "1h"}
@@ -402,7 +402,7 @@ class TestWandbBackend:
     @patch("mvp_engine.utils.log.backend.wandb_log.is_main_process", return_value=False)
     def test_wandb_backend_disabled_on_non_main_process(self, mock_is_main):
         """Test WandbBackend is disabled on non-main process."""
-        from mvp_engine.utils.log.backend.wandb_log import WandbBackend
+        from mvp_engine.utils.log.backend.wandb import WandbBackend
 
         backend = WandbBackend(id="test_run_3", project="test_project")
         assert not backend.enable

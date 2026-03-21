@@ -14,7 +14,7 @@ except ImportError:
 
 from numbers import Number
 
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf  # DictConfig kept for __init__ compat
 
 from mvp_engine.distributed.utils import is_main_process
 
@@ -60,11 +60,10 @@ class WandbBackend(Backend):
                 mode=wandb_mode,
             )
 
-    def log_config(self, config: DictConfig) -> None:
-        """Update wandb config with provided DictConfig."""
+    def log_config(self, config: dict) -> None:
+        """Update wandb config with provided config dict."""
         if self.enable:
-            conf_dict = OmegaConf.to_container(config, resolve=True)
-            wandb.config.update(conf_dict, allow_val_change=True)
+            wandb.config.update(config, allow_val_change=True)
 
     def log_metrics(
         self,
