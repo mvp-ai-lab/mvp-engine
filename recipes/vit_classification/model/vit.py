@@ -2,7 +2,7 @@
 
 from transformers import ViTConfig, ViTForImageClassification
 
-from ..vit_classification.configs.schema import ViTModelConfig
+from ..configs.schema import ViTModelConfig
 
 
 def build_vit_model(model_config: ViTModelConfig) -> ViTForImageClassification:
