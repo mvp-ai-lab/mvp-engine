@@ -380,7 +380,7 @@ class TestTerminalBackend:
 class TestWandbBackend:
     """Test cases for the WandbBackend class."""
 
-    @patch("mvp_engine.utils.log.backend.wandb_log.is_main_process", return_value=True)
+    @patch("mvp_engine.utils.log.backend.wandb.is_main_process", return_value=True)
     def test_wandb_backend_init(self, mock_is_main):
         """Test WandbBackend initialization."""
         from mvp_engine.utils.log.backend.wandb import WandbBackend
@@ -389,7 +389,7 @@ class TestWandbBackend:
         assert backend.enable
         backend.destroy()
 
-    @patch("mvp_engine.utils.log.backend.wandb_log.is_main_process", return_value=True)
+    @patch("mvp_engine.utils.log.backend.wandb.is_main_process", return_value=True)
     def test_wandb_backend_log_metrics(self, mock_is_main):
         """Test WandbBackend log_metrics."""
         from mvp_engine.utils.log.backend.wandb import WandbBackend
@@ -399,7 +399,7 @@ class TestWandbBackend:
         backend.log_metrics(metrics, step=100, epoch=2)
         backend.destroy()
 
-    @patch("mvp_engine.utils.log.backend.wandb_log.is_main_process", return_value=False)
+    @patch("mvp_engine.utils.log.backend.wandb.is_main_process", return_value=False)
     def test_wandb_backend_disabled_on_non_main_process(self, mock_is_main):
         """Test WandbBackend is disabled on non-main process."""
         from mvp_engine.utils.log.backend.wandb import WandbBackend

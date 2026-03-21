@@ -1,7 +1,9 @@
 import logging
 import os
+import platform
 import secrets
 import shutil
+import socket
 import time
 from abc import ABC, abstractmethod
 from os import PathLike
@@ -90,34 +92,14 @@ class Engine(ABC):
 
     def __init__(self, config: DictConfig):
         self.config = self.prepare_config(config)
-        self.set_seed(self.config.seed, self.config.deterministic)
         self.prepare_parallel()
+        self.prepare_runtime_info()
+        self.set_seed(self.config.seed, self.config.deterministic)
         self.prepare_logger()
 
     def prepare_config(self, config: DictConfig) -> BaseEngineConfig:
-        """Convert OmegaConf config to a validated Pydantic model, injecting runtime values."""
+        """Convert an OmegaConf config into the validated Pydantic config model."""
         d = OmegaConf.to_container(config, resolve=True)
-
-        # 0. Inject runtime environment info
-        import platform
-        import socket
-
-        git_info = get_git_info()
-        runtime = d.setdefault("runtime", {})
-        runtime["git_info"] = f"<{git_info['branch']}> {git_info['commit_hash']}"
-        runtime["world_size"] = int(os.environ.get("WORLD_SIZE", os.environ.get("SLURM_NTASKS", 1)))
-        runtime["hostname"] = socket.gethostname()
-        runtime["python_version"] = platform.python_version()
-        runtime["torch_version"] = torch.__version__
-
-        # 1. Generate a unique run ID, broadcast from main to all ranks
-        name = d.get("project", {}).get("name", "mvp-engine")
-        local_run_id = f"{name}_{time.strftime('%Y%m%d%H%M%S', time.localtime())}_{secrets.token_hex(2)}"
-        runtime["run_id"] = broadcast_from_main(local_run_id)
-
-        # 2. Derive output directory from project dir + run ID
-        runtime["output_dir"] = str(Path(d.get("project", {}).get("dir", "./outputs")) / runtime["run_id"])
-
         return self.ConfigClass.model_validate(d)
 
     @property
@@ -197,6 +179,24 @@ class Engine(ABC):
         initialize_process_group()
         mesh_cfg = self.config.parallel.mesh.model_dump()
         self.device_mesh = initialize_device_mesh(self.device.type, mesh_cfg)
+
+    def prepare_runtime_info(self) -> None:
+        """Inject runtime metadata that depends on the initialized distributed state."""
+        git_info = get_git_info()
+        runtime = self.config.runtime
+        runtime.git_info = f"<{git_info['branch']}> {git_info['commit_hash']}"
+        runtime.world_size = torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
+        runtime.hostname = socket.gethostname()
+        runtime.python_version = platform.python_version()
+        runtime.torch_version = torch.__version__
+
+        if not runtime.run_id:
+            local_run_id = (
+                f"{self.config.project.name}_{time.strftime('%Y%m%d%H%M%S', time.localtime())}_{secrets.token_hex(2)}"
+            )
+            runtime.run_id = broadcast_from_main(local_run_id)
+
+        runtime.output_dir = str(Path(self.config.project.dir) / runtime.run_id)
 
     def prepare_logger(self) -> None:
         """Initialize logging backends based on configuration."""
