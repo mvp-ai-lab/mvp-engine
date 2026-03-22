@@ -37,8 +37,8 @@ Use this path when the repeated compute blocks do not already checkpoint themsel
 - In `prepare_model()`, enable checkpointing after building the model and before FSDP/DDP/TP wrapping:
 
 ```python
-gc_enabled = OmegaConf.select(self.config, "model.gradient_checkpointing.enabled", default=False)
-gc_use_reentrant = OmegaConf.select(self.config, "model.gradient_checkpointing.use_reentrant", default=False)
+gc_enabled = self.config.model.gradient_checkpointing.enabled
+gc_use_reentrant = self.config.model.gradient_checkpointing.use_reentrant
 if gc_enabled:
     model.gradient_checkpointing_enable(
         gradient_checkpointing_kwargs={"use_reentrant": gc_use_reentrant}
@@ -53,6 +53,8 @@ model:
     enabled: false
     use_reentrant: false
 ```
+
+- Under the new config system, add `model.gradient_checkpointing` to the recipe's `ConfigClass` / schema, then read it via typed attribute access in the engine.
 
 - Prefer `use_reentrant: false` unless the target model specifically requires reentrant checkpointing.
 

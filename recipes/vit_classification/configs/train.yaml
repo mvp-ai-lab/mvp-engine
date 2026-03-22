@@ -36,9 +36,6 @@ optim:
   mixed_precision: "bf16"
   warmup_ratio: 0.05
   clip_grad_norm: 1.0
-  compile: false
-  compile_backend: "inductor"
-  compile_mode: "default"
 
 loop:
   policy: "iter"

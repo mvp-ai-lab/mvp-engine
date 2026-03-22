@@ -74,12 +74,6 @@ class ViTClassificationEngine(Engine):
         model = build_vit_model(self.config.model).to(self.device)
         logger.info(f" - Model name: {model.__class__.__name__}")
 
-        if self.config.optim.compile:
-            model.compile(
-                backend=self.config.optim.compile_backend,
-                mode=self.config.optim.compile_mode,
-            )
-
         parallelized_model = parallelize_model(
             model,
             device_mesh=self.device_mesh,

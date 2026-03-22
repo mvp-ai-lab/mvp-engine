@@ -1,8 +1,15 @@
-"""Pydantic v2 schema for the ViT image classification recipe."""
+"""Pydantic v2 schema for the archived ViT gradient-checkpointing reference."""
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from mvp_engine.config.schema import BaseEngineConfig, BaseOptimConfig
+
+
+class ViTGradientCheckpointingConfig(BaseModel):
+    model_config = ConfigDict(frozen=False)
+
+    enabled: bool = False
+    use_reentrant: bool = False
 
 
 class ViTDataConfig(BaseModel):
@@ -36,6 +43,7 @@ class ViTModelConfig(BaseModel):
     num_attention_heads: int = Field(12, ge=1)
     hidden_dropout_prob: float = Field(0.0, ge=0.0, le=1.0)
     attention_dropout_prob: float = Field(0.0, ge=0.0, le=1.0)
+    gradient_checkpointing: ViTGradientCheckpointingConfig = Field(default_factory=ViTGradientCheckpointingConfig)
 
 
 class ViTClassificationConfig(BaseEngineConfig):

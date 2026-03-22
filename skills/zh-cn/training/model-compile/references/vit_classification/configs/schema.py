@@ -1,4 +1,4 @@
-"""Pydantic v2 schema for the ViT image classification recipe."""
+"""Pydantic v2 schema for the archived ViT model-compile reference."""
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -36,6 +36,9 @@ class ViTModelConfig(BaseModel):
     num_attention_heads: int = Field(12, ge=1)
     hidden_dropout_prob: float = Field(0.0, ge=0.0, le=1.0)
     attention_dropout_prob: float = Field(0.0, ge=0.0, le=1.0)
+    compile: bool = False
+    compile_backend: str = "inductor"
+    compile_mode: str = "default"
 
 
 class ViTClassificationConfig(BaseEngineConfig):

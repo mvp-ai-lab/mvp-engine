@@ -26,10 +26,10 @@ STEP_RE = re.compile(r"(?:Epoch (?P<epoch>\d+)\s*-\s*)?Step\s+(?P<step>\d+)")
 SUMMARY_KEYS = (
     "workflow",
     "engine",
-    "git_info",
+    "runtime.git_info",
     "project.name",
-    "project.run_id",
-    "project.output_dir",
+    "runtime.run_id",
+    "runtime.output_dir",
     "model.name",
     "data.batch_size",
     "data.num_workers",
@@ -37,8 +37,8 @@ SUMMARY_KEYS = (
     "optim.weight_decay",
     "loop.policy",
     "loop.total_steps",
-    "loop.checkpoint.interval",
-    "loop.checkpoint.keep_n",
+    "checkpoint.interval",
+    "checkpoint.keep_n",
 )
 
 

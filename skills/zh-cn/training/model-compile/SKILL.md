@@ -14,10 +14,10 @@ description: 为 recipe 接入或调整 model.compile，判断 compile 范围与
 
 ## 本仓库约定
 
-- 配置键放在 `optim` 下：
-  - `optim.compile`
-  - `optim.compile_backend`
-  - `optim.compile_mode`
+- 配置键放在 `model` 下：
+  - `model.compile`
+  - `model.compile_backend`
+  - `model.compile_mode`
 - compile 逻辑通常放在 `prepare_model()`。
 - 不要编译 optimizer、scheduler、dataloader。
 
@@ -30,7 +30,7 @@ description: 为 recipe 接入或调整 model.compile，判断 compile 范围与
 - 搜索仓库内相近 recipe 作为补充先例：
 
 ```bash
-rg -n "torch\\.compile|optim\\.compile|compile_backend|compile_mode" recipes
+rg -n "torch\\.compile|model\\.compile|compile_backend|compile_mode" recipes
 ```
 
 对于当前 skill，`references/vit_classification/configs/train.yaml` 和
@@ -57,16 +57,16 @@ rg -n "torch\\.compile|optim\\.compile|compile_backend|compile_mode" recipes
 推荐模式：
 
 ```python
-if bool(OmegaConf.select(self.config, "optim.compile", default=False)):
+if self.config.model.compile:
     model.compile(
-        backend=OmegaConf.select(self.config, "optim.compile_backend", default="inductor"),
-        mode=OmegaConf.select(self.config, "optim.compile_mode", default="default"),
+        backend=self.config.model.compile_backend,
+        mode=self.config.model.compile_mode,
     )
 ```
 
 规则：
-- `optim.compile` 必须有 `False` 默认值。
-- `backend` 和 `mode` 用 `OmegaConf.select(..., default=...)` 读取。
+- `model.compile` 必须有 `False` 默认值。
+- 新配置系统下，recipe 要通过自己的 Pydantic `ConfigClass` 暴露 `model.compile*` 字段，并使用属性访问读取。
 - teacher/EMA 等额外模块分别 compile，不要隐式绑在主模型逻辑里。
 - 如果需要为了 compile 抽 recipe 专属的 encoder/core 子模块，优先编译一个较大的核心目标，而不是把几十个 block 分别 compile。
 - 不要为了 compile 改写 checkpoint 格式、参数命名或模型对外接口。
@@ -88,7 +88,7 @@ if bool(OmegaConf.select(self.config, "optim.compile", default=False)):
 
 ## 验收清单
 
-- [ ] `optim.compile`、`optim.compile_backend`、`optim.compile_mode` 已接入 config。
+- [ ] `model.compile`、`model.compile_backend`、`model.compile_mode` 已接入 config。
 - [ ] compile 目标模块与训练真实热路径一致。
 - [ ] compile 目标没有被切得过碎；优先一个 compile-friendly core，而不是很多零散 compiled 子模块。
 - [ ] compile 顺序有明确依据；若是例外顺序，已注明原因。
