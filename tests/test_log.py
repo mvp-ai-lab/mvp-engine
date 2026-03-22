@@ -380,29 +380,29 @@ class TestTerminalBackend:
 class TestWandbBackend:
     """Test cases for the WandbBackend class."""
 
-    @patch("mvp_engine.utils.log.backend.wandb_log.is_main_process", return_value=True)
+    @patch("mvp_engine.utils.log.backend.wandb.is_main_process", return_value=True)
     def test_wandb_backend_init(self, mock_is_main):
         """Test WandbBackend initialization."""
-        from mvp_engine.utils.log.backend.wandb_log import WandbBackend
+        from mvp_engine.utils.log.backend.wandb import WandbBackend
 
         backend = WandbBackend(id="test_run_1", project="test_project")
         assert backend.enable
         backend.destroy()
 
-    @patch("mvp_engine.utils.log.backend.wandb_log.is_main_process", return_value=True)
+    @patch("mvp_engine.utils.log.backend.wandb.is_main_process", return_value=True)
     def test_wandb_backend_log_metrics(self, mock_is_main):
         """Test WandbBackend log_metrics."""
-        from mvp_engine.utils.log.backend.wandb_log import WandbBackend
+        from mvp_engine.utils.log.backend.wandb import WandbBackend
 
         backend = WandbBackend(id="test_run_2", project="test_project")
         metrics = {"loss": 0.5, "accuracy": 0.9, "eta": "1h"}
         backend.log_metrics(metrics, step=100, epoch=2)
         backend.destroy()
 
-    @patch("mvp_engine.utils.log.backend.wandb_log.is_main_process", return_value=False)
+    @patch("mvp_engine.utils.log.backend.wandb.is_main_process", return_value=False)
     def test_wandb_backend_disabled_on_non_main_process(self, mock_is_main):
         """Test WandbBackend is disabled on non-main process."""
-        from mvp_engine.utils.log.backend.wandb_log import WandbBackend
+        from mvp_engine.utils.log.backend.wandb import WandbBackend
 
         backend = WandbBackend(id="test_run_3", project="test_project")
         assert not backend.enable
@@ -443,34 +443,6 @@ class TestLoggerInitAndSimpleInfo:
         assert logger.level == LogLevel.INFO
         assert mock_console.print.called
         logger.destroy()
-
-    @patch.dict("os.environ", {"LOG_LEVEL": "error"}, clear=False)
-    @patch("mvp_engine.utils.log.logger.get_world_size", return_value=1)
-    def test_init_logger_level_arg_overrides_env(self, mock_world_size):
-        """Test init_logger level argument overrides LOG_LEVEL env value."""
-        from mvp_engine.utils.log import init_logger
-        from mvp_engine.utils.log.logger import LogLevel
-
-        mock_backend = MagicMock()
-        logger = init_logger([mock_backend], level="debug")
-
-        assert logger.level == LogLevel.DEBUG
-        logger.destroy()
-
-    @patch("mvp_engine.utils.log.logger.get_world_size", return_value=1)
-    def test_init_logger_invalid_level_keeps_existing_logger(self, mock_world_size):
-        """Test invalid explicit level does not destroy existing logger instance."""
-        from mvp_engine.utils.log import get_logger, init_logger
-
-        first_backend = MagicMock()
-        first_logger = init_logger([first_backend], level="info")
-
-        with pytest.raises(ValueError):
-            init_logger([MagicMock()], level="invalid_level")
-
-        assert get_logger() is first_logger
-        first_backend.destroy.assert_not_called()
-        first_logger.destroy()
 
     @patch.dict("os.environ", {"LOG_LEVEL": "invalid_level"}, clear=False)
     @patch("mvp_engine.utils.log.Console")

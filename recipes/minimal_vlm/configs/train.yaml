@@ -1,19 +1,23 @@
 dev_mode: false
 engine: MinimalVLMEngine
+
+seed: 42
+deterministic: false
+
 project:
   name: "minimal-vlm"
   dir: "./outputs"
-  seed: 42
-  deterministic: false
-  log:
-    interval: 20
-    backends: ["terminal", "file"]
+
+log:
+  interval: 20
+  backends: ["terminal", "file"]
+
 parallel:
   mesh:
     replicate: -1
     shard: 1
     tensor: 1
-  backend_kwargs:
+  backend_kwargs: {}
 data:
   train_path: "./data/minimal_vlm/demo.jsonl"
   jsonl_num_shards: null
@@ -25,7 +29,6 @@ data:
 model:
   pretrained_model_name_or_path: "Qwen/Qwen3-VL-2B-Instruct"
   trust_remote_code: true
-  freeze_visual: true
   freeze_vit: true
   freeze_projector: true
   freeze_llm: false
@@ -39,6 +42,7 @@ optim:
 loop:
   policy: "iter"
   total_steps: 100
-  checkpoint:
-    keep_n: 3
-    interval: 50
+
+checkpoint:
+  keep_n: 3
+  interval: 50

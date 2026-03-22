@@ -6,7 +6,6 @@ from typing import Any
 
 import torch
 from mvp_dataset import TorchLoader
-from omegaconf import OmegaConf
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
 from mvp_engine.distributed.parallelize import parallelize_model
@@ -15,6 +14,7 @@ from mvp_engine.engine import ENGINE_REGISTRY, Engine
 from mvp_engine.utils.log import logger
 from mvp_engine.utils.misc import calculate_model_size
 
+from ..configs.schema import MinimalVLMConfig
 from ..dataset import MinimalVLMCollator, build_dataset, build_qwen3_vl_processor
 from ..model import build_qwen3_vl_model
 from ..types import TrainBatch
@@ -23,6 +23,9 @@ from ..types import TrainBatch
 @ENGINE_REGISTRY.register()
 class MinimalVLMEngine(Engine):
     """Recipe-local engine for supervised Qwen3-VL fine-tuning."""
+
+    ConfigClass = MinimalVLMConfig
+    config: MinimalVLMConfig
 
     processor: Any | None = None
 
@@ -51,9 +54,9 @@ class MinimalVLMEngine(Engine):
             num_workers=int(self.config.data.num_workers),
             pin_memory=self.device.type == "cuda",
             persistent_workers=int(self.config.data.num_workers) > 0,
-            prefetch_factor=int(OmegaConf.select(self.config, "data.loader_prefetch_factor", default=2)),
+            prefetch_factor=int(self.config.data.loader_prefetch_factor),
         )
-        loader = loader.shuffle(buffer_size=int(OmegaConf.select(self.config, "data.shuffle_buffer", default=128)))
+        loader = loader.shuffle(buffer_size=int(self.config.data.shuffle_buffer))
         return loader.batch(
             batch_size=int(self.config.data.batch_size),
             drop_last=True,
@@ -75,7 +78,7 @@ class MinimalVLMEngine(Engine):
         parallelized_model = parallelize_model(
             model,
             device_mesh=self.device_mesh,
-            backend_kwargs=self.config.parallel.get("backend_kwargs", {}),
+            backend_kwargs=self.config.parallel.backend_kwargs.model_dump(),
         )
 
         if is_main_process():

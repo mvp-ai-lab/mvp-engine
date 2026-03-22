@@ -81,11 +81,13 @@ def test_torch_loader_batches_rendered_samples(tmp_path: Path) -> None:
 
     config = OmegaConf.create(
         {
-            "project": {"dir": str(tmp_path / "outputs"), "seed": 42},
+            "project": {"dir": str(tmp_path / "outputs")},
+            "seed": 42,
             "data": {
                 "train_path": str(dataset_path),
                 "num_workers": 0,
                 "jsonl_num_shards": 1,
+                "shuffle_buffer": 128,
                 "max_seq_len": 16,
             },
         }

@@ -2,9 +2,10 @@
 
 from pathlib import Path
 
-from omegaconf import DictConfig
 from torchvision import datasets, transforms
 from torchvision.datasets import VisionDataset
+
+from ..configs.schema import ViTClassificationConfig
 
 IMAGENET_DEFAULT_MEAN: list[float] = [0.485, 0.456, 0.406]
 IMAGENET_DEFAULT_STD: list[float] = [0.229, 0.224, 0.225]
@@ -41,7 +42,7 @@ def build_transforms(
     return transforms.Compose(transform_list)
 
 
-def build_dataset(config: DictConfig, workflow: str) -> VisionDataset:
+def build_dataset(config: ViTClassificationConfig, workflow: str) -> VisionDataset:
     """Build either a fake ImageNet-like dataset or a real ImageFolder dataset."""
     is_train = workflow == "train"
     image_size = int(config.data.image_size)

@@ -68,9 +68,8 @@ def build_qwen3_vl_model(model_config: Any):
     Returns:
         The initialized Qwen3-VL model.
     """
-    freeze_visual = bool(getattr(model_config, "freeze_visual", True))
-    freeze_vit = bool(getattr(model_config, "freeze_vit", freeze_visual))
-    freeze_projector = bool(getattr(model_config, "freeze_projector", freeze_visual))
+    freeze_vit = bool(getattr(model_config, "freeze_vit", True))
+    freeze_projector = bool(getattr(model_config, "freeze_projector", True))
     freeze_llm = bool(getattr(model_config, "freeze_llm", False))
 
     model = AutoModelForImageTextToText.from_pretrained(

@@ -54,21 +54,17 @@ def _parse_env_log_level() -> LogLevel:
         return LogLevel.INFO
 
 
-def init_logger(backends: list[Backend], interval: int = 20, level: Optional[str] = None) -> Logger:
+def init_logger(backends: list[Backend], interval: int = 20) -> Logger:
     """Initialize the global logger with the given backends.
 
     Args:
         backends: List of logging backends to use.
         interval: Logging interval in iterations.
-        level: Optional log level override. Falls back to ``LOG_LEVEL`` env var, then ``info``.
 
     Returns:
         The initialized Logger instance.
     """
-    if level is None:
-        parsed_level = _parse_env_log_level()
-    else:
-        parsed_level = parse_log_level(level)
+    parsed_level = _parse_env_log_level()
 
     if logger._instance is not None:
         logger._instance.destroy()

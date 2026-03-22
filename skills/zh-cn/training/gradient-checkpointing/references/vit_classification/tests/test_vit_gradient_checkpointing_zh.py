@@ -2,29 +2,27 @@ import copy
 
 import pytest
 import torch
-from omegaconf import OmegaConf
 
 pytest.importorskip("transformers")
 
+from recipes.vit_classification.configs.schema import ViTModelConfig
 from recipes.vit_classification.model.vit import build_vit_model
 
 
 def _build_test_config():
-    return OmegaConf.create(
-        {
-            "pretrained_model_name_or_path": "google/vit-base-patch16-224",
-            "load_pretrained_weights": False,
-            "num_classes": 3,
-            "image_size": 16,
-            "patch_size": 8,
-            "num_channels": 3,
-            "hidden_size": 32,
-            "intermediate_size": 64,
-            "num_hidden_layers": 2,
-            "num_attention_heads": 4,
-            "hidden_dropout_prob": 0.0,
-            "attention_dropout_prob": 0.0,
-        }
+    return ViTModelConfig(
+        pretrained_model_name_or_path="google/vit-base-patch16-224",
+        load_pretrained_weights=False,
+        num_classes=3,
+        image_size=16,
+        patch_size=8,
+        num_channels=3,
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        hidden_dropout_prob=0.0,
+        attention_dropout_prob=0.0,
     )
 
 

@@ -3,7 +3,6 @@
 from typing import TypedDict
 
 import torch
-from omegaconf import OmegaConf
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader, DistributedSampler
 
@@ -13,6 +12,7 @@ from mvp_engine.engine import ENGINE_REGISTRY, Engine
 from mvp_engine.utils.log import logger
 from mvp_engine.utils.misc import calculate_model_size
 
+from ..configs.schema import ViTClassificationConfig
 from ..dataset import build_dataset
 from ..dataset.sampler import InfiniteDistributedSampler
 from ..model import build_vit_model
@@ -36,6 +36,9 @@ class TrainStepOutput(TypedDict):
 class ViTClassificationEngine(Engine):
     """Minimal ImageNet classification engine for the ViT recipe template."""
 
+    ConfigClass = ViTClassificationConfig
+    config: ViTClassificationConfig
+
     def prepare_dataloader(self, workflow: str = "train") -> DataLoader:
         """Build the dataloader for the requested workflow."""
         dataset = build_dataset(self.config, workflow)
@@ -46,7 +49,7 @@ class ViTClassificationEngine(Engine):
                 num_replicas=get_world_size(),
                 rank=get_rank(),
                 shuffle=True,
-                seed=int(OmegaConf.select(self.config, "project.seed", default=42)),
+                seed=self.config.seed,
             )
         else:
             sampler = DistributedSampler(
@@ -71,16 +74,16 @@ class ViTClassificationEngine(Engine):
         model = build_vit_model(self.config.model).to(self.device)
         logger.info(f" - Model name: {model.__class__.__name__}")
 
-        if bool(OmegaConf.select(self.config, "optim.compile", default=False)):
+        if self.config.model.compile:
             model.compile(
-                backend=OmegaConf.select(self.config, "optim.compile_backend", default="inductor"),
-                mode=OmegaConf.select(self.config, "optim.compile_mode", default="default"),
+                backend=self.config.model.compile_backend,
+                mode=self.config.model.compile_mode,
             )
 
         parallelized_model = parallelize_model(
             model,
             device_mesh=self.device_mesh,
-            backend_kwargs=self.config.parallel.get("backend_kwargs", {}),
+            backend_kwargs=self.config.parallel.backend_kwargs.model_dump(),
         )
 
         if is_main_process():

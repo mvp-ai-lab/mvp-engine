@@ -71,7 +71,9 @@ def _annotate_sample(record: dict, dataset_path: Path, *, index_in_file: int = 0
     }
 
 
-def test_process_sample_resolves_relative_image_paths_and_renders_messages(tmp_path: Path) -> None:
+def test_process_sample_resolves_relative_image_paths_and_renders_messages(
+    tmp_path: Path,
+) -> None:
     image_dir = tmp_path / "images"
     image_dir.mkdir()
     for image_name in ["1.jpg", "2.jpg"]:
@@ -101,14 +103,19 @@ def test_process_sample_resolves_relative_image_paths_and_renders_messages(tmp_p
     assert first_message["content"][1] == {"type": "text", "text": "Who are they?"}
 
     third_message = full_conversation[2]
-    assert third_message["content"][0] == {"type": "text", "text": "What are they doing?"}
+    assert third_message["content"][0] == {
+        "type": "text",
+        "text": "What are they doing?",
+    }
     assert third_message["content"][1]["type"] == "image"
     assert third_message["content"][1]["image"] == str((image_dir / "2.jpg").resolve())
     assert torch.equal(sample["input_ids"], torch.tensor([10, 11, 12, 13, 14, 15]))
     assert torch.equal(sample["labels"], torch.tensor([-100, -100, 12, 13, -100, -100]))
 
 
-def test_process_sample_rejects_placeholder_and_image_count_mismatch(tmp_path: Path) -> None:
+def test_process_sample_rejects_placeholder_and_image_count_mismatch(
+    tmp_path: Path,
+) -> None:
     image_dir = tmp_path / "images"
     image_dir.mkdir()
     (image_dir / "1.jpg").write_bytes(b"test")
@@ -123,7 +130,11 @@ def test_process_sample_rejects_placeholder_and_image_count_mismatch(tmp_path: P
     }
 
     with pytest.raises(ValueError, match="image placeholders"):
-        process_sample(_annotate_sample(record, dataset_path), processor=DummyProcessor(), max_length=16)
+        process_sample(
+            _annotate_sample(record, dataset_path),
+            processor=DummyProcessor(),
+            max_length=16,
+        )
 
 
 def test_build_dataset_returns_rendered_mvp_dataset_samples(tmp_path: Path) -> None:
@@ -149,11 +160,13 @@ def test_build_dataset_returns_rendered_mvp_dataset_samples(tmp_path: Path) -> N
 
     config = OmegaConf.create(
         {
-            "project": {"dir": str(tmp_path / "outputs"), "seed": 42},
+            "project": {"dir": str(tmp_path / "outputs")},
+            "seed": 42,
             "data": {
                 "train_path": str(dataset_path),
                 "num_workers": 0,
                 "jsonl_num_shards": 1,
+                "shuffle_buffer": 128,
                 "max_seq_len": 16,
             },
         }
@@ -170,7 +183,10 @@ def test_build_dataset_returns_rendered_mvp_dataset_samples(tmp_path: Path) -> N
         if len(conversations[0]) == 2 and not kwargs["add_generation_prompt"]
     )
     assert full_conversation[0]["content"][0]["type"] == "image"
-    assert full_conversation[0]["content"][1] == {"type": "text", "text": "Who is this?"}
+    assert full_conversation[0]["content"][1] == {
+        "type": "text",
+        "text": "Who is this?",
+    }
     assert full_conversation[1]["content"] == [{"type": "text", "text": "An example."}]
     assert torch.equal(sample["input_ids"], torch.tensor([10, 11, 12, 13]))
     assert torch.equal(sample["labels"], torch.tensor([-100, -100, 12, 13]))

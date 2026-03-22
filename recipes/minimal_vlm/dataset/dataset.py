@@ -10,7 +10,6 @@ from typing import Any
 import torch
 from mvp_dataset import Dataset
 from mvp_dataset.core import RuntimeContext
-from omegaconf import OmegaConf
 
 from mvp_engine.distributed.utils import get_world_size
 
@@ -277,12 +276,12 @@ def build_dataset(config: Any, *, processor: Any):
     dataset_path = Path(dataset_path_value).expanduser().resolve()
 
     num_workers = int(config.data.num_workers)
-    jsonl_num_shards = OmegaConf.select(config, "data.jsonl_num_shards")
+    jsonl_num_shards = config.data.jsonl_num_shards
     if jsonl_num_shards is None:
         jsonl_num_shards = max(get_world_size() * max(num_workers, 1), 1)
 
     output_dir = dataset_path.parent / ".jsonl_shards"
-    context = RuntimeContext.from_runtime(seed=int(OmegaConf.select(config, "project.seed", default=42)))
+    context = RuntimeContext.from_runtime(seed=int(config.seed))
 
     return (
         Dataset.from_jsonl(
@@ -299,5 +298,5 @@ def build_dataset(config: Any, *, processor: Any):
                 max_length=int(config.data.max_seq_len),
             )
         )
-        .shuffle(buffer_size=int(OmegaConf.select(config, "data.shuffle_buffer", default=128)))
+        .shuffle(buffer_size=int(config.data.shuffle_buffer))
     )
