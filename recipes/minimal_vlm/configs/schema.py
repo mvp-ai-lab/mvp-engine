@@ -1,6 +1,6 @@
 """Pydantic schema for the minimal VLM recipe."""
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,6 +13,10 @@ class MinimalVLMDataConfig(BaseModel):
     train_path: Optional[str] = "./data/minimal_vlm/demo.jsonl"
     jsonl_num_shards: Optional[int] = Field(default=None, ge=1)
     shuffle_buffer: int = Field(128, ge=1)
+    packing: bool = False
+    packing_selection_strategy: Literal["random", "best_fit"] = "best_fit"
+    packing_open_pack_limit: int = Field(8, ge=1)
+    packing_buffer_size: int = Field(64, ge=-1)
     loader_prefetch_factor: int = Field(2, ge=1)
     max_seq_len: int = Field(2048, ge=1)
     batch_size: int = Field(1, ge=1)

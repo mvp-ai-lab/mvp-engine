@@ -1,4 +1,4 @@
-"""JSONL dataset utilities for the minimal VLM recipe."""
+"""JSONL dataset processing utilities for the minimal VLM recipe."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ from mvp_dataset import Dataset
 from mvp_dataset.core import RuntimeContext
 
 from mvp_engine.distributed.utils import get_world_size
+
+from .packing import PackedSampleAssembler
 
 IMAGE_PLACEHOLDER = "<image>"
 
@@ -283,7 +285,7 @@ def build_dataset(config: Any, *, processor: Any):
     output_dir = dataset_path.parent / ".jsonl_shards"
     context = RuntimeContext.from_runtime(seed=int(config.seed))
 
-    return (
+    dataset = (
         Dataset.from_jsonl(
             dataset_path,
             context=context,
@@ -300,3 +302,16 @@ def build_dataset(config: Any, *, processor: Any):
         )
         .shuffle(buffer_size=int(config.data.shuffle_buffer))
     )
+
+    if bool(getattr(config.data, "packing", False)):
+        dataset = dataset.assemble(
+            lambda assemble_context: PackedSampleAssembler(
+                max_length=int(config.data.max_seq_len),
+                selection_strategy=str(getattr(config.data, "packing_selection_strategy", "best_fit")),
+                open_pack_limit=int(getattr(config.data, "packing_open_pack_limit", 8)),
+                pack_buffer_size=int(getattr(config.data, "packing_buffer_size", 64)),
+                seed=int(assemble_context.sample_shuffle_seed),
+            )
+        )
+
+    return dataset
