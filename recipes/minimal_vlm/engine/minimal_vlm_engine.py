@@ -17,6 +17,10 @@ from mvp_engine.utils.misc import calculate_model_size
 from ..configs.schema import MinimalVLMConfig
 from ..dataset import MinimalVLMCollator, build_dataset, build_qwen3_vl_processor
 from ..model import build_qwen3_vl_model
+from ..model.packing import (
+    prepare_packed_model_inputs,
+    segmented_flash_attention_patches,
+)
 from ..types import TrainBatch
 
 
@@ -28,6 +32,7 @@ class MinimalVLMEngine(Engine):
     config: MinimalVLMConfig
 
     processor: Any | None = None
+    _attention_patch_context: Any | None = None
 
     def prepare_dataloader(self, workflow: str = "train"):
         """Build the train-only dataloader over preprocessed multimodal samples.
@@ -73,6 +78,12 @@ class MinimalVLMEngine(Engine):
             The distributed-ready Qwen3-VL model.
         """
         model = build_qwen3_vl_model(self.config.model).to(self.device)
+        if (
+            bool(self.config.data.packing)
+            and getattr(model.config, "_attn_implementation", None) == "flash_attention_2"
+        ):
+            self._attention_patch_context = segmented_flash_attention_patches()
+            self._attention_patch_context.__enter__()
         logger.info(f" - Model name: {model.__class__.__name__}")
 
         parallelized_model = parallelize_model(
@@ -152,6 +163,13 @@ class MinimalVLMEngine(Engine):
             else:
                 batch[key] = value
 
+        model = getattr(self.model, "module", self.model)
+        batch = prepare_packed_model_inputs(
+            batch,
+            model_config=model.config,
+            attn_implementation=getattr(model.config, "_attn_implementation", None),
+            mask_dtype=self.dtype if self.dtype.is_floating_point else torch.float32,
+        )
         return batch
 
     def train_one_step(self, data: TrainBatch) -> dict[str, Any]:
@@ -179,3 +197,12 @@ class MinimalVLMEngine(Engine):
                 "train/supervised_tokens": float(supervised_tokens.item()),
             },
         }
+
+    def after_train(self) -> None:
+        """Finalize training and restore any recipe-local patches."""
+        try:
+            super().after_train()
+        finally:
+            if self._attention_patch_context is not None:
+                self._attention_patch_context.__exit__(None, None, None)
+                self._attention_patch_context = None

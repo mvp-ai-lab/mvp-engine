@@ -32,6 +32,7 @@ data:
   num_workers: 0
 model:
   pretrained_model_name_or_path: "Qwen/Qwen3-VL-2B-Instruct"
+  attn_implementation: null
   trust_remote_code: true
   freeze_vit: true
   freeze_projector: true

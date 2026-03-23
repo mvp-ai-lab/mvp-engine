@@ -16,6 +16,7 @@ def test_minimal_vlm_train_config_validates() -> None:
     assert validated.engine == "MinimalVLMEngine"
     assert validated.data.loader_prefetch_factor == 2
     assert validated.data.packing is False
+    assert validated.model.attn_implementation is None
     assert validated.parallel.mesh.replicate == -1
 
 
@@ -38,3 +39,14 @@ def test_minimal_vlm_schema_rejects_removed_optimal_packing_strategy() -> None:
                 "data": {"packing_selection_strategy": "optimal"},
             }
         )
+
+
+def test_minimal_vlm_schema_accepts_explicit_attention_implementation() -> None:
+    validated = MinimalVLMConfig.model_validate(
+        {
+            "engine": "MinimalVLMEngine",
+            "model": {"attn_implementation": "flash_attention_2"},
+        }
+    )
+
+    assert validated.model.attn_implementation == "flash_attention_2"

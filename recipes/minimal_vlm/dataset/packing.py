@@ -73,7 +73,7 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any]]):
             return []
 
         if sample_length >= self.max_length:
-            return [sample]
+            return [self._pack_samples([sample])]
 
         pending = _PendingSample(sample=sample, length=sample_length)
         if not self.keep_pending_sorted:
@@ -276,12 +276,21 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any]]):
 
     def _pack_samples(self, samples: list[dict[str, Any]]) -> dict[str, Any]:
         if len(samples) == 1:
-            return samples[0]
+            sample = dict(samples[0])
+            sample["pack_segment_ids"] = torch.ones_like(sample["input_ids"], dtype=torch.long)
+            return sample
 
         packed_sample: dict[str, Any] = {
             "input_ids": torch.cat([sample["input_ids"] for sample in samples], dim=0),
             "attention_mask": torch.cat([sample["attention_mask"] for sample in samples], dim=0),
             "labels": torch.cat([sample["labels"] for sample in samples], dim=0),
+            "pack_segment_ids": torch.cat(
+                [
+                    torch.full_like(sample["input_ids"], fill_value=index + 1, dtype=torch.long)
+                    for index, sample in enumerate(samples)
+                ],
+                dim=0,
+            ),
         }
 
         pixel_values = [sample["pixel_values"] for sample in samples if sample.get("pixel_values") is not None]

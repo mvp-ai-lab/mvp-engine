@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 import torch
 
@@ -13,5 +13,7 @@ class TrainBatch(TypedDict):
     input_ids: torch.Tensor
     attention_mask: torch.Tensor
     labels: torch.Tensor
-    pixel_values: torch.Tensor | None
-    image_grid_thw: torch.Tensor | None
+    pack_segment_ids: NotRequired[torch.Tensor]
+    position_ids: NotRequired[torch.Tensor]
+    pixel_values: NotRequired[torch.Tensor]
+    image_grid_thw: NotRequired[torch.Tensor]

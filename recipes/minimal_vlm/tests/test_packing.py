@@ -90,8 +90,24 @@ def test_packed_sample_assembler_best_fit_packs_samples() -> None:
     assert torch.equal(packed["input_ids"], torch.tensor([1, 2, 3, 4, 5, 6, 7]))
     assert torch.equal(packed["attention_mask"], torch.tensor([1, 1, 1, 1, 1, 1, 1]))
     assert torch.equal(packed["labels"], torch.tensor([1, 2, 3, 4, 5, 6, 7]))
+    assert torch.equal(packed["pack_segment_ids"], torch.tensor([1, 1, 1, 1, 2, 2, 2]))
     assert packed["pixel_values"].shape == (1, 3, 4, 4)
     assert torch.equal(packed["image_grid_thw"], torch.tensor([[1, 1, 1]]))
+
+
+def test_packed_sample_assembler_single_sample_uses_all_one_segment_ids() -> None:
+    assembler = PackedSampleAssembler(
+        max_length=8,
+        selection_strategy="best_fit",
+        open_pack_limit=2,
+        pack_buffer_size=4,
+        seed=0,
+    )
+
+    emitted = _run_assembler(assembler, [_sample([1, 2, 3])])
+
+    assert len(emitted) == 1
+    assert torch.equal(emitted[0]["pack_segment_ids"], torch.tensor([1, 1, 1]))
 
 
 def test_packed_sample_assembler_random_is_deterministic_with_seed() -> None:
@@ -214,6 +230,7 @@ def test_build_dataset_assembles_packed_samples(tmp_path: Path) -> None:
         [30, 31, 32, -100, -100, 12, 13],
         [-100, -100, 12, 13, 30, 31, 32],
     )
+    assert packed["pack_segment_ids"].tolist() in ([1, 1, 1, 2, 2, 2, 2], [1, 1, 1, 1, 2, 2, 2])
     assert packed["pixel_values"].shape == (1, 3, 4, 4)
 
 

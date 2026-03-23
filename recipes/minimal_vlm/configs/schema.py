@@ -27,6 +27,7 @@ class MinimalVLMModelConfig(BaseModel):
     model_config = ConfigDict(frozen=False, extra="allow")
 
     pretrained_model_name_or_path: str = "Qwen/Qwen3-VL-2B-Instruct"
+    attn_implementation: Literal["eager", "sdpa", "flash_attention_2"] | None = None
     trust_remote_code: bool = True
     freeze_vit: bool = True
     freeze_projector: bool = True

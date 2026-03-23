@@ -71,12 +71,21 @@ def build_qwen3_vl_model(model_config: Any):
     freeze_vit = bool(getattr(model_config, "freeze_vit", True))
     freeze_projector = bool(getattr(model_config, "freeze_projector", True))
     freeze_llm = bool(getattr(model_config, "freeze_llm", False))
+    attn_implementation = getattr(model_config, "attn_implementation", None)
+
+    model_kwargs = {
+        "trust_remote_code": bool(getattr(model_config, "trust_remote_code", True)),
+        "torch_dtype": "auto",
+    }
+    if attn_implementation is not None:
+        model_kwargs["attn_implementation"] = attn_implementation
 
     model = AutoModelForImageTextToText.from_pretrained(
         model_config.pretrained_model_name_or_path,
-        trust_remote_code=bool(getattr(model_config, "trust_remote_code", True)),
-        torch_dtype="auto",
+        **model_kwargs,
     )
+    if attn_implementation is not None:
+        model.config._attn_implementation = attn_implementation
     apply_freeze_policy(
         model,
         freeze_vit=freeze_vit,
