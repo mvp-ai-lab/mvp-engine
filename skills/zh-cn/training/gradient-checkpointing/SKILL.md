@@ -37,8 +37,8 @@ description: 为本仓库中的 recipe 添加 gradient checkpointing（activatio
 - 在 `prepare_model()` 中，于模型构建完成后、FSDP/DDP/TP wrap 前启用 checkpointing：
 
 ```python
-gc_enabled = OmegaConf.select(self.config, "model.gradient_checkpointing.enabled", default=False)
-gc_use_reentrant = OmegaConf.select(self.config, "model.gradient_checkpointing.use_reentrant", default=False)
+gc_enabled = self.config.model.gradient_checkpointing.enabled
+gc_use_reentrant = self.config.model.gradient_checkpointing.use_reentrant
 if gc_enabled:
     model.gradient_checkpointing_enable(
         gradient_checkpointing_kwargs={"use_reentrant": gc_use_reentrant}
@@ -53,6 +53,8 @@ model:
     enabled: false
     use_reentrant: false
 ```
+
+- 新配置系统下，为目标 recipe 的 `ConfigClass` / schema 增加 `model.gradient_checkpointing` 字段，再在 engine 中通过属性访问读取。
 
 - 除非目标模型明确要求 reentrant checkpointing，否则优先使用 `use_reentrant: false`。
 

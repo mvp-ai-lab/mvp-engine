@@ -2,7 +2,7 @@ import inspect
 from datetime import datetime
 from typing import Mapping, Optional
 
-from omegaconf import DictConfig, OmegaConf
+import yaml
 from rich.console import Console
 
 from mvp_engine.distributed.utils import is_main_process
@@ -59,12 +59,12 @@ class TerminalBackend(Backend):
         if self.enable:
             self.console = Console(color_system="auto")
 
-    def log_config(self, config: DictConfig) -> None:
+    def log_config(self, config: dict) -> None:
         """Pretty-print configuration when running on main process."""
         if self.enable:
             self.info("=" * 80)
             self.info("Configurations:")
-            for line in f"{OmegaConf.to_yaml(config)}".splitlines():
+            for line in yaml.dump(config, default_flow_style=False, allow_unicode=True).splitlines():
                 self.info(" " * 4 + line)
             self.info("=" * 80)
 

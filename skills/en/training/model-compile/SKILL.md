@@ -14,10 +14,10 @@ Add or adjust `model.compile` support for a training recipe under `recipes/<reci
 
 ## Repo conventions
 
-- Put config keys under `optim`:
-  - `optim.compile`
-  - `optim.compile_backend`
-  - `optim.compile_mode`
+- Put config keys under `model`:
+  - `model.compile`
+  - `model.compile_backend`
+  - `model.compile_mode`
 - Put compile logic in `prepare_model()` in most cases.
 - Do not compile the optimizer, scheduler, or dataloader.
 
@@ -30,7 +30,7 @@ Add or adjust `model.compile` support for a training recipe under `recipes/<reci
 - Search the repo for similar recipes as additional precedents:
 
 ```bash
-rg -n "torch\\.compile|optim\\.compile|compile_backend|compile_mode" recipes
+rg -n "torch\\.compile|model\\.compile|compile_backend|compile_mode" recipes
 ```
 
 For this skill, `references/vit_classification/configs/train.yaml` and
@@ -57,16 +57,16 @@ Hard requirement:
 Recommended pattern:
 
 ```python
-if bool(OmegaConf.select(self.config, "optim.compile", default=False)):
+if self.config.model.compile:
     model.compile(
-        backend=OmegaConf.select(self.config, "optim.compile_backend", default="inductor"),
-        mode=OmegaConf.select(self.config, "optim.compile_mode", default="default"),
+        backend=self.config.model.compile_backend,
+        mode=self.config.model.compile_mode,
     )
 ```
 
 Rules:
-- `optim.compile` must have a default of `False`.
-- Read `backend` and `mode` through `OmegaConf.select(..., default=...)`.
+- `model.compile` must have a default of `False`.
+- Under the new config system, expose `model.compile*` through the recipe's Pydantic `ConfigClass` and read them via attribute access.
 - Compile extra modules such as teacher or EMA separately; do not hide them inside the main-model logic.
 - If you need a recipe-specific encoder/core submodule just for compile, prefer one larger target over compiling dozens of blocks individually.
 - Do not change checkpoint format, parameter names, or the model's public interface just to fit compile.
@@ -88,7 +88,7 @@ Good to record:
 
 ## Acceptance checklist
 
-- [ ] `optim.compile`, `optim.compile_backend`, and `optim.compile_mode` are wired into config.
+- [ ] `model.compile`, `model.compile_backend`, and `model.compile_mode` are wired into config.
 - [ ] The compiled target module matches the real training hot path.
 - [ ] The compile target is not over-fragmented; one compile-friendly core is preferred over many tiny compiled children.
 - [ ] Compile placement has a clear rationale; exception order is documented.
