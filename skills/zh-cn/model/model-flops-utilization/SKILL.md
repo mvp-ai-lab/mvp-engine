@@ -1,204 +1,282 @@
 ---
 name: model-flops-utilization
-description: 为当前模型新增或修正 `calculate_model_flops(...)`，并验证该方法是否可调用、是否满足返回协议、以及在 Transformer 和 ViT 架构上的泛化方式。适用于需要真正实现 MFU 支持，而不是只写公式说明的场景。
+description: 为当前模型和 engine 真正实现 MFU 支持，包括模型 FLOPs 估算、硬件峰值算力查询、运行时 MFU 计算与日志打印。适用于需要把 MFU 接到真实训练流程里，而不是只停留在 FLOPs 公式说明的场景。
 ---
 
 # Model FLOPs Utilization
 
-为目标模型真正实现 `calculate_model_flops(...)`。不要停留在公式解释或伪代码。
-**English:** [SKILL.md](../../../en/model/model-flops-utilization/SKILL.md)
+> 中文版：`skills/zh-cn/model/model-flops-utilization/SKILL.md`
+> English version: `skills/en/model/model-flops-utilization/SKILL.md`
 
-## 目标
+## Goal
 
-- 在当前模型或它的本地适配类上新增 `calculate_model_flops(...) -> float`。
-- 使用显式形状参数，而不是依赖隐式运行时状态。
-- 验证该方法可以被调用、返回 `float`，并正确处理边界输入。
-- 在 `references/` 中保留 Transformer 与 ViT 两类可复用示例。
+- 用注入方式为当前模型实例添加 `calculate_model_flops(...) -> float`，而不是替换整个模型类。
+- 在 engine 中新增或接入 `calculate_mfu(...) -> float`，基于模型 FLOPs、step 时间、单卡峰值算力、精度和 `world_size` 计算真实 MFU。
+- 检测当前硬件，从 `references/hardware_peak_flops.csv` 中查峰值算力，并把 `mfu=...` 打印到训练日志里。
+- 如果当前环境只有 CPU，先在工作目录的 `*.md` 文件里查 GPU / 集群训练 instruction；如果找不到，再询问 user。
 
-## 1. 修改前先判断目标模型属于哪条路径
+## Required Inputs
 
-- 如果模型类定义在当前仓库并且由当前 recipe 直接持有，优先走“原地实现”路径。
-- 如果运行时模型类来自 `transformers` 等三方包，走“本地适配类”路径。
-- 选择与真实重复计算结构一致的架构模板，不要硬套错误公式。
+- 创建运行时模型实例的入口位置。
+- 能拿到 step 时间与 logger 的 engine 或训练循环位置。
+- 当前模型的真实架构：ViT、Decoder-only Transformer，或由视觉分支与语言分支组合而成的 VLM。
+- MFU 计算需要的运行时信息：
+  - 训练精度，例如 `bf16`、`fp16`、`fp32`
+  - `world_size`
+  - step 时间（秒）或 engine 里已有的等价计时来源
+  - 当前设备名称，来自 `nvidia-smi` 或 user 提供
+- 当前工作目录，因为 CPU-only 分流需要扫描本地 `*.md` 文件。
 
-### 原地实现路径
+## Workflow
 
-满足以下条件时走这条路径：
+### 1. 先确认运行环境
 
-- 模型类定义在本仓库内。
-- recipe 直接实例化这个类。
-- 只加一个方法不会引入额外大规模重构。
+- 先判断当前训练是否已经在 GPU 上运行。
+- 如果 GPU 可用，用 `nvidia-smi` 识别当前设备名称，后续据此查峰值算力。
+- 如果当前环境是 CPU-only：
+  - 扫描当前工作目录下的 `*.md` 文件
+  - 查找 GPU、Slurm、cluster、`torchrun` 或其他训练启动 instruction
+  - 如果找到了，就 follow 这些 instruction，把流程切到 GPU 环境后再继续
+  - 如果没找到，再询问 user 该如何在 GPU 上运行训练
+- 只有在硬件身份、精度或启动方式无法从环境中可靠得到时，才询问 user。
 
-### 本地适配类路径
+### 2. 以注入方式为当前模型添加 `calculate_model_flops(...)`
 
-满足以下任一条件时走这条路径：
+- 不要把“替换模型类为子类”作为默认方案。
+- 增加一个 `inject_model_flops_calculation(model)` helper，用 `types.MethodType` 把 `calculate_model_flops` 动态挂到当前实例上。
+- 方法签名只保留当前架构真正需要的最小参数集。
+- 不要把无用参数留在签名里。
+- 返回单个 `float`：当前进程、当前 step 的模型 FLOPs。
 
-- 模型类来自第三方包。
-- 不适合修改 vendor 源码。
-- recipe 已经有本地薄封装，或者能安全替换成一个本地子类。
-
-对这条路径，定义一个本地子类，在子类中实现 `calculate_model_flops(...)`，并把实例化位置切换到该子类。
-
-## 2. 交付的是方法实现，不只是公式
-
-每次正确使用这个 skill，都必须产出一个可运行的方法，满足以下统一契约：
-
-```python
-def calculate_model_flops(
-    self,
-    *,
-    batch_size: int,
-    seq_len: int | None = None,
-    image_size: int | tuple[int, int] | None = None,
-    patch_size: int | tuple[int, int] | None = None,
-    is_training: bool = True,
-) -> float:
-    ...
-```
-
-规则：
-
-- Transformer：必须显式接收 `batch_size`、`seq_len`、`is_training`。
-- ViT：必须显式接收 `batch_size`、`image_size`、`patch_size`、`is_training`。
-- 缺失架构必需输入时，抛出 `ValueError`。
-- 返回单个 `float`：单进程每 step FLOPs。
-- 如果内部为了调试计算了 breakdown dict，也不要把它替代 `float` 返回。
-
-## 3. 选择匹配的实现模板
-
-### Transformer 模板
-
-适用于 dense encoder、decoder-only、encoder-decoder 这类 FLOPs 主要由 attention 和 MLP block 决定的模型。
+使用这种注入模式：
 
 ```python
-def calculate_model_flops(
-    self,
-    *,
-    batch_size: int,
-    seq_len: int | None = None,
-    image_size: int | tuple[int, int] | None = None,
-    patch_size: int | tuple[int, int] | None = None,
-    is_training: bool = True,
-) -> float:
-    if seq_len is None:
-        raise ValueError("Transformer FLOPs requires seq_len.")
+import types
 
-    B = int(batch_size)
-    S = int(seq_len)
-    L = int(self.config.num_hidden_layers)
-    H = int(self.config.hidden_size)
-    I = int(self.config.intermediate_size)
 
-    per_layer = 8 * B * S * H * H + 4 * B * S * S * H + 4 * B * S * H * I
-    transformer_flops = L * per_layer
-
-    lm_head_flops = 0.0
-    if hasattr(self.config, "vocab_size"):
-        V = int(self.config.vocab_size)
-        lm_head_flops = 2 * B * S * H * V
-
-    forward_flops = float(transformer_flops + lm_head_flops)
-    return forward_flops * 3.0 if is_training else forward_flops
-```
-
-### ViT 模板
-
-适用于 patch embedding + transformer block + classification head 结构的 Vision Transformer。
-
-```python
-def calculate_model_flops(
-    self,
-    *,
-    batch_size: int,
-    seq_len: int | None = None,
-    image_size: int | tuple[int, int] | None = None,
-    patch_size: int | tuple[int, int] | None = None,
-    is_training: bool = True,
-) -> float:
-    if image_size is None or patch_size is None:
-        raise ValueError("ViT FLOPs requires image_size and patch_size.")
-
-    B = int(batch_size)
-    if isinstance(image_size, int):
-        img_h, img_w = image_size, image_size
-    else:
-        img_h, img_w = map(int, image_size)
-    if isinstance(patch_size, int):
-        p_h, p_w = patch_size, patch_size
-    else:
-        p_h, p_w = map(int, patch_size)
-
-    if min(B, img_h, img_w, p_h, p_w) <= 0:
-        raise ValueError("batch_size, image_size, and patch_size must be > 0")
-    if img_h % p_h != 0 or img_w % p_w != 0:
-        raise ValueError("image_size must be divisible by patch_size")
-
-    N = (img_h // p_h) * (img_w // p_w)
-    C = int(getattr(self.config, "num_channels", 3))
-    D = int(self.config.hidden_size)
-    L = int(self.config.num_hidden_layers)
-    I = int(self.config.intermediate_size)
-    K = int(getattr(self.config, "num_labels", 1000))
-
-    patch_embed_flops = 2 * B * N * (C * p_h * p_w) * D
-    block_flops = 8 * B * N * D * D + 4 * B * N * N * D + 4 * B * N * D * I
-    backbone_flops = L * block_flops
-    head_flops = 2 * B * D * K
-
-    forward_flops = float(patch_embed_flops + backbone_flops + head_flops)
-    return forward_flops * 3.0 if is_training else forward_flops
-```
-
-### 外部模型本地适配模板
-
-```python
-class ExternalModelWithFlops(ExternalModel):
-    def calculate_model_flops(... ) -> float:
+def inject_model_flops_calculation(model):
+    def calculate_model_flops(self, *, ..., is_training: bool = True) -> float:
         ...
 
-# 把：
-# model = ExternalModel(config)
-# 替换为：
-# model = ExternalModelWithFlops(config)
+    model.calculate_model_flops = types.MethodType(calculate_model_flops, model)
+    return model
+
+
+model = AutoModel.from_pretrained(...)
+model = inject_model_flops_calculation(model)
 ```
 
-## 4. 实现后立刻验证
+#### ViT 示例
 
-没有实际执行过的方法，不算完成。
+适用于 patch embedding vision transformer。
 
-验证清单：
+```python
+import types
 
-1. 目标模型实例确实暴露 `calculate_model_flops`。
-2. 方法签名包含该架构要求的显式参数。
-3. `is_training=True` 与 `is_training=False` 都可以执行。
-4. 返回类型是 `float`。
-5. FLOPs 为正数。
-6. 训练 FLOPs 大于等于推理 FLOPs。
-7. 缺失必需形状参数时抛 `ValueError` 或 `TypeError`。
 
-## 5. 示例要归档，不要把验证逻辑散落在外面
+def inject_model_flops_calculation(model):
+    def calculate_model_flops(
+        self,
+        *,
+        batch_size: int,
+        image_size: int | tuple[int, int],
+        patch_size: int | tuple[int, int],
+        is_training: bool = True,
+    ) -> float:
+        if isinstance(image_size, int):
+            image_h, image_w = image_size, image_size
+        else:
+            image_h, image_w = map(int, image_size)
+        if isinstance(patch_size, int):
+            patch_h, patch_w = patch_size, patch_size
+        else:
+            patch_h, patch_w = map(int, patch_size)
 
-把示例实现与测试归档到 `references/`，让 skill 可复用。
+        batch = int(batch_size)
+        if min(batch, image_h, image_w, patch_h, patch_w) <= 0:
+            raise ValueError("batch_size, image_size, and patch_size must be > 0")
+        if image_h % patch_h != 0 or image_w % patch_w != 0:
+            raise ValueError("image_size must be divisible by patch_size")
 
-本 skill 的参考内容：
+        num_patches = (image_h // patch_h) * (image_w // patch_w)
+        channels = int(getattr(self.config, "num_channels", 3))
+        hidden = int(self.config.hidden_size)
+        layers = int(self.config.num_hidden_layers)
+        intermediate = int(self.config.intermediate_size)
+        num_labels = int(getattr(self.config, "num_labels", 1000))
 
-- `references/external_vit/`：第三方 ViT 的本地子类接入模式。
-- `references/decoder_transformer/`：decoder 风格 Transformer 的直接方法实现模式。
-- `references/validation_cases.py`：用于验证触发与合同的提示词集合。
-- `references/run_validation.py`：dry-run 模板生成脚本。
-- `references/check_acceptance.py`：验收门槛计算脚本。
+        patch_embed_flops = 2 * batch * num_patches * (channels * patch_h * patch_w) * hidden
+        block_flops = (
+            8 * batch * num_patches * hidden * hidden
+            + 4 * batch * num_patches * num_patches * hidden
+            + 4 * batch * num_patches * hidden * intermediate
+        )
+        head_flops = 2 * batch * hidden * num_labels
+        forward_flops = float(patch_embed_flops + layers * block_flops + head_flops)
+        return forward_flops * 3.0 if is_training else forward_flops
 
-## 常见陷阱
+    model.calculate_model_flops = types.MethodType(calculate_model_flops, model)
+    return model
+```
 
-- 用户明确要“实现”时，不要只返回公式解释。
-- 不要只返回 dict；主协议必须是单个 `float`。
-- 不要把必需形状参数藏到运行时 tensor 里推断；skill 明确要求显式参数。
-- 对第三方模型，不要直接改包源码；优先本地子类。
-- 不要跳过执行验证；方法存在但跑不通，仍然算失败。
-- 不要假设一套公式天然覆盖 MoE、稀疏注意力、fused kernel、activation recomputation；这些要作为边界条件写清楚。
+#### Decoder-only Transformer 示例
 
-## 参考
+适用于 dense decoder-only language model。
 
-- 外部 ViT 示例：`references/external_vit/`
-- Decoder Transformer 示例：`references/decoder_transformer/`
-- 验证提示词：`references/validation_cases.py`
+```python
+import types
+
+
+def inject_model_flops_calculation(model):
+    def calculate_model_flops(
+        self,
+        *,
+        batch_size: int,
+        seq_len: int,
+        is_training: bool = True,
+    ) -> float:
+        batch = int(batch_size)
+        tokens = int(seq_len)
+        if batch <= 0 or tokens <= 0:
+            raise ValueError("batch_size and seq_len must be > 0")
+
+        layers = int(getattr(self.config, "num_hidden_layers", self.config.n_layer))
+        hidden = int(getattr(self.config, "hidden_size", self.config.n_embd))
+        intermediate = int(getattr(self.config, "intermediate_size", 4 * hidden))
+        vocab = int(self.config.vocab_size)
+
+        per_layer = (
+            8 * batch * tokens * hidden * hidden
+            + 4 * batch * tokens * tokens * hidden
+            + 4 * batch * tokens * hidden * intermediate
+        )
+        lm_head_flops = 2 * batch * tokens * hidden * vocab
+        forward_flops = float(layers * per_layer + lm_head_flops)
+        return forward_flops * 3.0 if is_training else forward_flops
+
+    model.calculate_model_flops = types.MethodType(calculate_model_flops, model)
+    return model
+```
+
+#### VLM 示例
+
+适用于运行时模型同时包含 vision encoder 和 decoder-only language model 的情况。不要假设所有 VLM 的字段名都一样。
+
+```python
+import types
+
+
+def inject_model_flops_calculation(model):
+    def calculate_model_flops(
+        self,
+        *,
+        batch_size: int,
+        image_size: int | tuple[int, int],
+        patch_size: int | tuple[int, int],
+        seq_len: int,
+        is_training: bool = True,
+    ) -> float:
+        vision_flops = ...
+        language_flops = ...
+        forward_flops = float(vision_flops + language_flops)
+        return forward_flops * 3.0 if is_training else forward_flops
+
+    model.calculate_model_flops = types.MethodType(calculate_model_flops, model)
+    return model
+```
+
+- 对 VLM，视觉侧和语言侧都要计入。
+- `vision_config`、`text_config`、`hidden_size`、`num_hidden_layers` 这类字段名必须按真实实现调整，不要机械照抄模板。
+
+### 3. 在 engine 中实现真正的 MFU 计算
+
+- 在 engine 侧新增或复用一个 `calculate_mfu(...)` helper。
+- MFU 必须按运行时吞吐计算，不能只用模型 FLOPs 静态比一下。
+- 优先复用 engine 已有的 step 计时来源；如果 engine 已经在记录 iteration duration，不要再平行造一个计时器。
+
+默认公式写成：
+
+```python
+def calculate_mfu(
+    *,
+    model_flops_per_step: float,
+    step_time_seconds: float,
+    device_peak_tflops: float,
+    world_size: int,
+) -> float:
+    if step_time_seconds <= 0:
+        raise ValueError("step_time_seconds must be > 0")
+    if device_peak_tflops <= 0:
+        raise ValueError("device_peak_tflops must be > 0")
+    if world_size <= 0:
+        raise ValueError("world_size must be > 0")
+
+    total_peak_flops = device_peak_tflops * 1e12 * world_size
+    achieved_flops_per_second = model_flops_per_step / step_time_seconds
+    return float(achieved_flops_per_second / total_peak_flops)
+```
+
+- `model_flops_per_step` 使用当前进程视角的模型 FLOPs。
+- `device_peak_tflops` 是单卡、当前精度下的峰值算力。
+- `world_size` 必须反映真正参与训练 step 的设备数。
+- 如果当前 engine 的 step 定义受 gradient accumulation、pipeline parallel 等影响，就按真实 step 边界调整分子和计时来源，并在代码注释里写清楚假设。
+
+### 4. 解析当前硬件的峰值算力
+
+- 优先用 `nvidia-smi` 识别当前 GPU。
+- 将识别出的设备名规范化后，到 `references/hardware_peak_flops.csv` 中匹配最接近的一行。
+- 再按当前精度，例如 `bf16` 或 `fp16`，选取对应峰值。
+- 如果无法可靠匹配，就询问 user 当前用的硬件和精度。
+- 查表逻辑要简单直接，不要静默 fallback 到错误的 GPU 行。
+
+### 5. 把 MFU 打印到训练日志
+
+- 在 engine 已经能访问 step 时间和 logger 的位置计算 MFU。
+- 把 MFU 放到训练日志里，与其他 step 指标一起打印。
+- metric 名称保持显式：`mfu`。
+
+例如：
+
+```python
+mfu = self.calculate_mfu(
+    model_flops_per_step=model_flops,
+    step_time_seconds=step_time,
+    device_peak_tflops=device_peak_tflops,
+    world_size=world_size,
+)
+logger.info("step=%s loss=%.4f mfu=%.4f", step, loss, mfu)
+```
+
+## Validation
+
+- 确认注入后当前模型实例暴露 `calculate_model_flops(...)`。
+- 确认方法签名只包含与当前架构相关的参数。
+- 确认 engine 的 `mfu` 计算同时使用了模型 FLOPs、step 时间、硬件峰值算力和 `world_size`。
+- 确认 `calculate_model_flops(...)` 和 `calculate_mfu(...)` 都返回 `float`。
+- 确认训练日志里能看到 `mfu=...`。
+
+### 6. 最终验收清单
+
+- 当前模型实例已经具备 `calculate_model_flops(...)`，且该方法是通过注入挂到实例上的，而不是通过替换整个模型类得到的。
+- `calculate_model_flops(...)` 的参数只包含当前架构真正需要的最小参数集。
+- engine 中已经存在 `calculate_mfu(...)` 或等价的 MFU 计算接入点。
+- MFU 的计算同时使用了运行时 step 时间、单卡峰值算力、当前精度和 `world_size`。
+- 日志中的 MFU 值是 `float`。
+- 训练日志中可以直接看到 `mfu=...`。
+- 日志中的 MFU 值通过基本 sanity check：
+  - 不是负数
+  - 不会明显大于 `1`
+  - 如果值可疑，需要回头检查模型 FLOPs、硬件查表、精度映射、step 时间来源和 `world_size`
+
+## Output
+
+- 说明 `calculate_model_flops(...)` 被注入到了哪里。
+- 说明 engine 里的 MFU 计算被加到了哪里，或者接入到了哪个现有位置。
+- 说明峰值算力查表使用了哪张 GPU、哪种精度。
+- 说明当前按单卡还是多卡假设计算。
+- 说明 `mfu=...` 会出现在什么日志位置。
+- 如果当前没有 GPU 且本地 `*.md` 中也没有启动 instruction，要明确说明还需要 user 提供 GPU 运行方式，MFU 才能安全完成。
+
+## Read On Demand
+
+- 需要查常见 GPU 在不同精度下的峰值算力时，读 `references/hardware_peak_flops.csv`。
