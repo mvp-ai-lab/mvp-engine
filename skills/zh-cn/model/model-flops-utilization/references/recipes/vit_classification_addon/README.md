@@ -1,42 +1,14 @@
-# ViT Classification Template
+# ViT MFU 参考（仅保留 MFU）
 
-This recipe focuses on a plain ImageNet-style classification example with
-`google/vit-base-patch16-224`.
+这个参考目录只保留与 MFU 直接相关的代码。
 
-## What it includes
+## 保留内容
 
-- `dataset/imagenet.py`: standard ImageNet transforms plus an optional `FakeData`
-  path for smoke runs.
-- `model/vit.py`: builds the HuggingFace ViT classifier. The template defaults to
-  local random initialization so users do not need to download weights up front.
-- `engine/vit_classification_engine.py`: minimal train/evaluate loop on top of the
-  shared `Engine`.
-- `configs/train.yaml`: a small, readable starter config.
+- `model/vit.py`：`inject_model_flops_calculation(...)` 与 `calculate_model_flops(...)`。
+- `engine/vit_classification_engine.py`：`calculate_mfu(...)` 以及 `perf/mfu` 日志写入流程。
+- `configs/schema.py`：MFU 相关 schema（`ViTMFUConfig`、`log.mfu`）。
+- `configs/train.yaml`：MFU 相关配置片段。
 
-## Expected real dataset layout
+## 已隐藏内容
 
-Use the standard `ImageFolder` layout when switching `data.use_fake_data=false`:
-
-```text
-data/imagenet/
-├── train/
-│   ├── n01440764/
-│   └── ...
-└── val/
-    ├── n01440764/
-    └── ...
-```
-
-## Run
-
-```bash
-srun -p camera-long --gres gpu:h200:1 \
-.venv/bin/torchrun --nproc_per_node=1 -m mvp_engine.launch \
-  --config ./recipes/vc_debug/configs/train.yaml \
-  loop.total_steps=2 data.batch_size=8 data.num_workers=0 \
-  parallel.mesh.replicate=1 parallel.mesh.shard=1 parallel.mesh.tensor=1 \
-  log.interval=1
-```
-
-For a real pretrained initialization, set `model.load_pretrained_weights=true`.
-With the default H200 `bf16` config, the training log will include `mfu=...`.
+与 MFU 无关的内容（dataset 流程、完整 engine 训练循环、optimizer/scheduler、完整配置）都已刻意隐藏，避免干扰。

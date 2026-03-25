@@ -12,10 +12,24 @@ description: 为当前模型和 engine 真正实现 MFU 支持，包括模型 FL
 
 - 用注入方式为当前模型实例添加 `calculate_model_flops(...) -> float`，而不是替换整个模型类。
 - 在 engine 中新增或接入 `calculate_mfu(...) -> float`，基于模型 FLOPs、step 时间、单卡峰值算力、精度和 `world_size` 计算真实 MFU。
-- 检测当前硬件，从 `references/hardware_peak_flops.csv` 中查峰值算力，并把 `mfu=...` 打印到训练日志里。
+- 检测当前硬件，从 `references/hardware_peak_flops.csv` 中查峰值算力，并把 MFU 加入训练日志字典，使用键 `perf/mfu`。
 - 如果当前环境只有 CPU，先在工作目录的 `*.md` 文件里查 GPU / 集群训练 instruction；如果找不到，再询问 user。
 
-## 参考
+## Required Inputs
+
+- 创建运行时模型实例的入口位置。
+- 能拿到 step 时间与 logger 的 engine 或训练循环位置。
+- 当前模型的真实架构：ViT、Decoder-only Transformer、Seq2Seq Encoder-Decoder，或由视觉分支与语言分支组合而成的 VLM。
+- MFU 计算需要的运行时信息：
+  - 训练精度，例如 `bf16`、`fp16`、`fp32`
+  - `world_size`
+  - step 时间（秒）或 engine 里已有的等价计时来源
+  - 当前设备名称，来自 `nvidia-smi` 或 user 提供
+- 当前工作目录，因为 CPU-only 分流需要扫描本地 `*.md` 文件。
+
+## Workflow
+
+### 0. 先看参考实现模式
 
 - 如果 `references/recipes/` 下存在 MFU 示例，请先把它当作“实现样例”来看，先理解通常需要改哪些文件和哪一层代码，再开始改当前 recipe。
 - 这个样例只用于识别实现模式，不代表当前模型、字段名、配置层级或训练流程一定相同。
@@ -26,20 +40,7 @@ description: 为当前模型和 engine 真正实现 MFU 支持，包括模型 FL
   - `world_size`、step 时间、硬件峰值算力分别从哪里获取
 - 只有在和当前 recipe 兼容时，才复用样例里的类名、文件名或字段名；否则应该按当前模型和 engine 结构调整。
 - 如果样例和当前 recipe 不一致，优先抽象出“改动位置”和“数据流”，不要机械复制实现。
-
-## Required Inputs
-
-- 创建运行时模型实例的入口位置。
-- 能拿到 step 时间与 logger 的 engine 或训练循环位置。
-- 当前模型的真实架构：ViT、Decoder-only Transformer，或由视觉分支与语言分支组合而成的 VLM。
-- MFU 计算需要的运行时信息：
-  - 训练精度，例如 `bf16`、`fp16`、`fp32`
-  - `world_size`
-  - step 时间（秒）或 engine 里已有的等价计时来源
-  - 当前设备名称，来自 `nvidia-smi` 或 user 提供
-- 当前工作目录，因为 CPU-only 分流需要扫描本地 `*.md` 文件。
-
-## Workflow
+- 讲解或复用样例时，优先引用 `references/recipes/vit_classification_addon/model/vit.py`、`references/recipes/vit_classification_addon/engine/vit_classification_engine.py`、`references/recipes/vit_classification_addon/configs/schema.py`、`references/recipes/vit_classification_addon/configs/train.yaml`。
 
 ### 1. 先确认运行环境
 
@@ -170,6 +171,49 @@ def inject_model_flops_calculation(model):
     return model
 ```
 
+
+#### Seq2Seq Encoder-Decoder 示例
+
+适用于 T5/BART 这类 encoder-decoder 架构。需要分别传入 `encoder_seq_len` 和 `decoder_seq_len`，并显式计入 decoder cross-attention。
+
+```python
+import types
+
+
+def inject_model_flops_calculation(model):
+    def calculate_model_flops(
+        self,
+        *,
+        batch_size: int,
+        encoder_seq_len: int,
+        decoder_seq_len: int,
+        is_training: bool = True,
+    ) -> float:
+        b = int(batch_size)
+        s_enc = int(encoder_seq_len)
+        s_dec = int(decoder_seq_len)
+        if min(b, s_enc, s_dec) <= 0:
+            raise ValueError("batch_size, encoder_seq_len, decoder_seq_len must be > 0")
+
+        cfg = self.config
+        hidden = int(cfg.d_model)
+        ffn = int(cfg.d_ff)
+        enc_layers = int(getattr(cfg, "num_layers", cfg.num_hidden_layers))
+        dec_layers = int(getattr(cfg, "num_decoder_layers", enc_layers))
+        vocab = int(cfg.vocab_size)
+
+        enc_layer = 8 * b * s_enc * hidden * hidden + 4 * b * s_enc * s_enc * hidden + 4 * b * s_enc * hidden * ffn
+        dec_self = 8 * b * s_dec * hidden * hidden + 4 * b * s_dec * s_dec * hidden + 4 * b * s_dec * hidden * ffn
+        dec_cross = 4 * b * s_dec * s_enc * hidden
+        lm_head = 2 * b * s_dec * hidden * vocab
+
+        forward_flops = float(enc_layers * enc_layer + dec_layers * (dec_self + dec_cross) + lm_head)
+        return forward_flops * 3.0 if is_training else forward_flops
+
+    model.calculate_model_flops = types.MethodType(calculate_model_flops, model)
+    return model
+```
+
 #### VLM 示例
 
 适用于运行时模型同时包含 vision encoder 和 decoder-only language model 的情况。不要假设所有 VLM 的字段名都一样。
@@ -241,11 +285,11 @@ def calculate_mfu(
 - 如果无法可靠匹配，就询问 user 当前用的硬件和精度。
 - 查表逻辑要简单直接，不要静默 fallback 到错误的 GPU 行。
 
-### 5. 把 MFU 打印到训练日志
+### 5. 把 MFU 写入日志字典
 
 - 在 engine 已经能访问 step 时间和 logger 的位置计算 MFU。
-- 把 MFU 放到训练日志里，与其他 step 指标一起打印。
-- metric 名称保持显式：`mfu`。
+- 把 MFU 作为 `perf/mfu` 写入日志字典，与其他 step 指标一起上报。
+- metric 键名使用：`perf/mfu`。
 
 例如：
 
@@ -256,25 +300,18 @@ mfu = self.calculate_mfu(
     device_peak_tflops=device_peak_tflops,
     world_size=world_size,
 )
-logger.info("step=%s loss=%.4f mfu=%.4f", step, loss, mfu)
+log_dict["perf/mfu"] = float(mfu)
+logger.log(log_dict, step=step)
 ```
 
-## Validation
-
-- 确认注入后当前模型实例暴露 `calculate_model_flops(...)`。
-- 确认方法签名只包含与当前架构相关的参数。
-- 确认 engine 的 `mfu` 计算同时使用了模型 FLOPs、step 时间、硬件峰值算力和 `world_size`。
-- 确认 `calculate_model_flops(...)` 和 `calculate_mfu(...)` 都返回 `float`。
-- 确认训练日志里能看到 `mfu=...`。
-
-### 6. 最终验收清单
+## Validation and Acceptance Checklist
 
 - 当前模型实例已经具备 `calculate_model_flops(...)`，且该方法是通过注入挂到实例上的，而不是通过替换整个模型类得到的。
 - `calculate_model_flops(...)` 的参数只包含当前架构真正需要的最小参数集。
 - engine 中已经存在 `calculate_mfu(...)` 或等价的 MFU 计算接入点。
 - MFU 的计算同时使用了运行时 step 时间、单卡峰值算力、当前精度和 `world_size`。
 - 日志中的 MFU 值是 `float`。
-- 训练日志中可以直接看到 `mfu=...`。
+- 训练日志中包含 `perf/mfu`。
 - 日志中的 MFU 值通过基本 sanity check：
   - 不是负数
   - 不会明显大于 `1`
