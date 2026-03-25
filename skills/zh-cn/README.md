@@ -45,11 +45,11 @@ skills/
 ├── README.md             ← 本说明（仓库总览）
 ├── en/                   ← 英文文档
 │   ├── README.md
-│   ├── training/, parallel/, model/, data/, debug/, recipe/, config/, git/
+│   ├── training/, parallel/, model/, data/, debug/, recipe/, experiment/, config/, git/
 │   └── ...
 └── zh-cn/                   ← 中文文档
     ├── README.md
-    ├── training/, parallel/, model/, data/, debug/, recipe/, config/, git/
+    ├── training/, parallel/, model/, data/, debug/, recipe/, experiment/, config/, git/
     └── ...
 ```
 
@@ -87,11 +87,14 @@ Agent 会按 skill 工作流生成适配代码和测试。
 
 ## Skill 列表
 
+- `training/model-compile`：[training/model-compile/SKILL.md](training/model-compile/SKILL.md)
 - `training/gradient-checkpointing`：[training/gradient-checkpointing/SKILL.md](training/gradient-checkpointing/SKILL.md)
 - `model/model-migration`：[model/model-migration/SKILL.md](model/model-migration/SKILL.md)
+- `recipe/new-recipe-template`：[recipe/new-recipe-template/SKILL.md](recipe/new-recipe-template/SKILL.md)
 - `git/pr-gate`：[git/pr-gate/SKILL.md](git/pr-gate/SKILL.md)
 - `git/pr-feedback`：[git/pr-feedback/SKILL.md](git/pr-feedback/SKILL.md)
 - `git/pr-skill-review`：[git/pr-skill-review/SKILL.md](git/pr-skill-review/SKILL.md)
+- `experiment/analysis`：[experiment/analysis/SKILL.md](experiment/analysis/SKILL.md)
 
 ## 如何新增 Skill
 

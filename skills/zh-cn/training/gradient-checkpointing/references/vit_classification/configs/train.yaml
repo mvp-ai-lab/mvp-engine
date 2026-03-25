@@ -38,16 +38,14 @@ optim:
   mixed_precision: "bf16"
   warmup_ratio: 0.05
   clip_grad_norm: 1.0
-  compile: false
-  compile_backend: "inductor"
-  compile_mode: "default"
 
 loop:
   policy: "iter"
   total_steps: 1000
-  checkpoint:
-    keep_n: 3
-    interval: 500
+
+checkpoint:
+  keep_n: 3
+  interval: 500
 
 parallel:
   mesh:
