@@ -1,0 +1,13 @@
+# MFU-only config excerpt (non-MFU config intentionally hidden)
+
+model:
+  image_size: 224
+  patch_size: 16
+
+log:
+  mfu:
+    device_name: "NVIDIA H200"
+    peak_tflops: 989.0
+
+optim:
+  mixed_precision: "bf16"
