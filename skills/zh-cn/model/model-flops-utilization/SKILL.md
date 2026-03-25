@@ -15,6 +15,18 @@ description: 为当前模型和 engine 真正实现 MFU 支持，包括模型 FL
 - 检测当前硬件，从 `references/hardware_peak_flops.csv` 中查峰值算力，并把 `mfu=...` 打印到训练日志里。
 - 如果当前环境只有 CPU，先在工作目录的 `*.md` 文件里查 GPU / 集群训练 instruction；如果找不到，再询问 user。
 
+## 参考
+
+- 如果 `references/recipes/` 下存在 MFU 示例，请先把它当作“实现样例”来看，先理解通常需要改哪些文件和哪一层代码，再开始改当前 recipe。
+- 这个样例只用于识别实现模式，不代表当前模型、字段名、配置层级或训练流程一定相同。
+- 对比样例和当前 recipe 时，优先关注这些问题：
+  - 模型 FLOPs 是如何挂到模型实例上的
+  - MFU 配置是如何进入 schema 或 config 的
+  - 训练 step 完成后在哪里计算并打印 `mfu`
+  - `world_size`、step 时间、硬件峰值算力分别从哪里获取
+- 只有在和当前 recipe 兼容时，才复用样例里的类名、文件名或字段名；否则应该按当前模型和 engine 结构调整。
+- 如果样例和当前 recipe 不一致，优先抽象出“改动位置”和“数据流”，不要机械复制实现。
+
 ## Required Inputs
 
 - 创建运行时模型实例的入口位置。

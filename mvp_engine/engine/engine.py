@@ -1,11 +1,14 @@
 import logging
 import os
+import platform
+import secrets
 import shutil
+import socket
 import time
 from abc import ABC, abstractmethod
 from os import PathLike
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, ClassVar, Type, Union
 
 import torch
 from accelerate.utils import set_seed
@@ -16,7 +19,7 @@ from torch.distributed.fsdp import FSDPModule
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
-from mvp_engine.config.check import check_config
+from mvp_engine.config.schema import BaseEngineConfig
 from mvp_engine.distributed.device_mesh import initialize_device_mesh
 from mvp_engine.distributed.init import initialize_process_group
 from mvp_engine.distributed.utils import broadcast_from_main, get_rank, is_main_process
@@ -25,7 +28,7 @@ from mvp_engine.utils.checkpointing.parallel_sl_util import (
     save_checkpoint,
 )
 from mvp_engine.utils.log import init_logger, logger
-from mvp_engine.utils.log.backend import FileBackend, TerminalBackend
+from mvp_engine.utils.log.backend import FileBackend, TerminalBackend, WandbBackend
 from mvp_engine.utils.misc import Timer, get_device, get_git_info
 from mvp_engine.utils.training import (
     GradientScaler,
@@ -56,7 +59,7 @@ class Engine(ABC):
         - evaluate()
 
     Attributes:
-        config: Hydra configuration for the experiment.
+        config: Validated Pydantic configuration for the experiment.
         train_loader: DataLoader for training data.
         evaluate_loader: DataLoader for evaluation data.
         model: Neural network model (possibly wrapped in DDP).
@@ -67,7 +70,8 @@ class Engine(ABC):
         step: Global optimization step counter.
     """
 
-    config: DictConfig
+    ConfigClass: ClassVar[Type[BaseEngineConfig]] = BaseEngineConfig
+    config: BaseEngineConfig
 
     device_mesh: DeviceMesh
 
@@ -87,16 +91,16 @@ class Engine(ABC):
     timer: Timer  # timer for tracking per-batch time and ETA
 
     def __init__(self, config: DictConfig):
-        check_config(config)
-
-        # 0. Prepare the parallel backend
-        self.prepare_parallel(config)
-
-        # 1. Modify the provided configuration
         self.config = self.prepare_config(config)
-
-        # 2. Prepare the logging system
+        self.prepare_parallel()
+        self.prepare_runtime_info()
+        self.set_seed(self.config.seed, self.config.deterministic)
         self.prepare_logger()
+
+    def prepare_config(self, config: DictConfig) -> BaseEngineConfig:
+        """Convert an OmegaConf config into the validated Pydantic config model."""
+        d = OmegaConf.to_container(config, resolve=True)
+        return self.ConfigClass.model_validate(d)
 
     @property
     def device(self) -> torch.device:
@@ -116,7 +120,7 @@ class Engine(ABC):
     @property
     def dtype(self) -> torch.dtype:
         """Compute dtype for mixed precision training."""
-        dtype_str = OmegaConf.select(self.config, "optim.mixed_precision", default="fp32")
+        dtype_str = self.config.optim.mixed_precision
         if dtype_str == "fp32":
             return torch.float32
         elif dtype_str == "fp16":
@@ -129,31 +133,30 @@ class Engine(ABC):
     @property
     def total_steps(self) -> int:
         """Total number of optimization steps for the training run."""
-        loop_policy = OmegaConf.select(self.config, "loop.policy", default="iter")
-        if loop_policy == "iter":
-            return OmegaConf.select(self.config, "loop.total_steps", default=-1)
+        if self.config.loop.policy == "iter":
+            return self.config.loop.total_steps
         else:
-            raise NotImplementedError(f"Unsupported loop policy: {loop_policy}")
+            raise NotImplementedError(f"Unsupported loop policy: {self.config.loop.policy}")
 
     @property
     def max_grad_norm(self) -> float | None:
         """Maximum gradient norm for clipping, or None to disable."""
-        return OmegaConf.select(self.config, "optim.clip_grad_norm", default=None)
+        return self.config.optim.clip_grad_norm
 
     @property
     def project_dir(self) -> Path:
         """Root directory for outputs and checkpoints."""
-        return Path(self.config.project.output_dir)
+        return Path(self.config.runtime.output_dir)
 
     @property
     def run_id(self) -> str:
         """Unique identifier for this training run."""
-        return self.config.project.run_id
+        return self.config.runtime.run_id
 
     @property
     def loop_policy(self) -> str:
         """Training loop policy: 'iter' or 'epoch'."""
-        return OmegaConf.select(self.config, "loop.policy", default="iter")
+        return self.config.loop.policy
 
     @property
     def unwrapped_model(self) -> torch.nn.Module:
@@ -171,73 +174,55 @@ class Engine(ABC):
         """
         set_seed(seed, deterministic)
 
-    def prepare_parallel(self, config: DictConfig) -> None:
-        """Initialize distributed training backend.
-
-        Args:
-            config: Configuration containing parallel backend settings.
-        """
+    def prepare_parallel(self) -> None:
+        """Initialize distributed training backend."""
         initialize_process_group()
+        mesh_cfg = self.config.parallel.mesh.model_dump()
+        self.device_mesh = initialize_device_mesh(self.device.type, mesh_cfg)
 
-        mesh_cfg = OmegaConf.select(config, "parallel.mesh")
-
-        self.device_mesh = initialize_device_mesh(
-            self.device.type,
-            mesh_cfg,
-        )
-
-    def prepare_config(self, config: DictConfig) -> DictConfig:
-        """Augment configuration with runtime values.
-
-        Sets seed, run ID, git info, and output directory.
-
-        Args:
-            config: Base configuration from Hydra.
-
-        Returns:
-            Modified configuration with runtime additions.
-        """
-        # 0. Set random seed
-        self.set_seed(
-            OmegaConf.select(config, "project.seed", default=42),
-            OmegaConf.select(config, "project.deterministic", default=False),
-        )
-
-        # 1. Add git info to config
+    def prepare_runtime_info(self) -> None:
+        """Inject runtime metadata that depends on the initialized distributed state."""
         git_info = get_git_info()
-        config.git_info = f"<{git_info['branch']}> {git_info['commit_hash']}"
+        runtime = self.config.runtime
+        runtime.git_info = f"<{git_info['branch']}> {git_info['commit_hash']}"
+        runtime.world_size = torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
+        runtime.hostname = socket.gethostname()
+        runtime.python_version = platform.python_version()
+        runtime.torch_version = torch.__version__
 
-        # 2. Set run ID
-        local_run_id = f"{OmegaConf.select(config, 'project.name', default='mvp-engine')}_{
-            time.strftime('%Y%m%d%H%M%S', time.localtime())
-        }"
-        config.project.run_id = broadcast_from_main(local_run_id)
+        if not runtime.run_id:
+            local_run_id = (
+                f"{self.config.project.name}_{time.strftime('%Y%m%d%H%M%S', time.localtime())}_{secrets.token_hex(2)}"
+            )
+            runtime.run_id = broadcast_from_main(local_run_id)
 
-        # 3. Set output directory
-        config.project.output_dir = str(
-            Path(OmegaConf.select(config, "project.dir", default="./outputs"))
-            / OmegaConf.select(config, "project.run_id", default="default")
-        )
-
-        return config
+        runtime.output_dir = str(Path(self.config.project.dir) / runtime.run_id)
 
     def prepare_logger(self) -> None:
         """Initialize logging backends based on configuration."""
         logger_backends = []
         if self.config.dev_mode:
-            logger_backends = [TerminalBackend(id=self.config.project.run_id)]
+            logger_backends = [TerminalBackend(id=self.config.runtime.run_id)]
         else:
             logger_backends = []
-            config_backends = OmegaConf.select(self.config, "project.log.backends", default=["terminal", "file"])
+            config_backends = self.config.log.backends
 
             for backend in config_backends:
                 if backend == "terminal":
-                    logger_backends.append(TerminalBackend(id=self.config.project.run_id))
+                    logger_backends.append(TerminalBackend(id=self.config.runtime.run_id))
                 elif backend == "file":
                     logger_backends.append(
                         FileBackend(
                             id=self.run_id,
-                            path=Path(self.config.project.output_dir),
+                            path=Path(self.config.runtime.output_dir),
+                        )
+                    )
+                elif backend == "wandb":
+                    logger_backends.append(
+                        WandbBackend(
+                            id=self.run_id,
+                            project=self.config.project.name,
+                            path=Path(self.config.runtime.output_dir),
                         )
                     )
                 else:
@@ -246,7 +231,7 @@ class Engine(ABC):
         global logger
         logger = init_logger(
             logger_backends,
-            interval=OmegaConf.select(self.config, "project.log.interval", default=20),
+            interval=self.config.log.interval,
         )
 
     @abstractmethod
@@ -271,8 +256,8 @@ class Engine(ABC):
         Args:
             force: If True, save regardless of save_interval.
         """
-        save_interval = OmegaConf.select(self.config, "loop.checkpoint.interval", default=1000)
-        if not force and (self.step % save_interval != 0):
+        save_interval = self.config.checkpoint.interval
+        if not force and ((self.step % save_interval != 0) or self.config.dev_mode):
             return
         logger.info(f"Saving checkpoint for step {self.step}...")
 
@@ -284,14 +269,12 @@ class Engine(ABC):
         # Keep only last N checkpoints
         if is_main_process():
             all_checkpoints = os.listdir(str(checkpoints_dir))
-            if len(all_checkpoints) >= OmegaConf.select(self.config, "loop.checkpoint.keep_n", default=5):
+            if len(all_checkpoints) >= self.config.checkpoint.keep_n:
                 checkpoint_paths = sorted(
                     all_checkpoints,
                     key=lambda dir: int(dir.split("_")[-1]),
                 )
-                delete_n = (
-                    len(checkpoint_paths) - OmegaConf.select(self.config, "loop.checkpoint.keep_n", default=5) + 1
-                )
+                delete_n = len(checkpoint_paths) - self.config.checkpoint.keep_n + 1
                 for delete_path in checkpoint_paths[:delete_n]:
                     shutil.rmtree(checkpoints_dir / delete_path)
 
@@ -341,7 +324,7 @@ class Engine(ABC):
         if not skip_increase:
             self._accumulate_step += 1
 
-        gradient_accumulation_steps = OmegaConf.select(self.config, "optim.gradient_accumulation_steps", default=1)
+        gradient_accumulation_steps = self.config.optim.gradient_accumulation_steps
 
         if self._accumulate_step % gradient_accumulation_steps == 0:
             self._accumulate_step = 0
@@ -367,7 +350,7 @@ class Engine(ABC):
 
     def before_train(self) -> None:
         """Initialize all components before training starts."""
-        logger.log_config(self.config)
+        logger.log_config(self.config.model_dump())
 
         logger.info("Building DataLoader...")
         self.train_loader = self.prepare_dataloader("train")
@@ -393,7 +376,7 @@ class Engine(ABC):
         logger.info("Initializing Timer...")
         self.timer = Timer(
             total_batches=self.total_steps,
-            window_size=OmegaConf.select(self.config, "log.timer_window_size", default=100),
+            window_size=self.config.log.timer_window_size,
         )
 
     def run_train(self) -> None:
@@ -421,10 +404,9 @@ class Engine(ABC):
         self.model.train()
         self.timer.start()
 
-        loop_policy = OmegaConf.select(self.config, "loop.policy", default="iter")
-        if loop_policy == "iter":
+        if self.config.loop.policy == "iter":
             self.run_iter_train()
-        elif loop_policy == "epoch":
+        elif self.config.loop.policy == "epoch":
             self.run_epoch_train()
 
     def run_iter_train(self) -> None:
@@ -488,7 +470,7 @@ class Engine(ABC):
         is_sync = self.accumulate_step()
 
         # Scale loss for gradient accumulation
-        gradient_accumulation_steps = OmegaConf.select(self.config, "optim.gradient_accumulation_steps", default=1)
+        gradient_accumulation_steps = self.config.optim.gradient_accumulation_steps
         loss = outputs["loss"] / gradient_accumulation_steps
 
         # Backward pass with optional DDP no_sync for accumulation
@@ -501,7 +483,7 @@ class Engine(ABC):
             self.scaler.unscale_(self.optimizer)
 
             # Gradient clipping
-            max_grad_norm = OmegaConf.select(self.config, "optim.clip_grad_norm", default=None)
+            max_grad_norm = self.config.optim.clip_grad_norm
             if max_grad_norm is not None:
                 clip_grad_norm_(self.model, max_grad_norm)
 

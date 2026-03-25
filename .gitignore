@@ -166,7 +166,7 @@ cython_debug/
 data/
 !skills/en/data/
 !skills/cn/data/
-scripts/
+/scripts/
 wandb/
 playground/
 .deepspeed_env
@@ -186,7 +186,3 @@ slurmlogs
 
 # AI
 CUSTOM.md
-
-# customized-yunqi
-recipes/vc_debug/
-

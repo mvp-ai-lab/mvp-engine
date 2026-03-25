@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Mapping, Optional, Union
 
-from omegaconf import DictConfig, OmegaConf
+import yaml
 
 from mvp_engine.distributed.utils import is_main_process
 
@@ -40,11 +40,11 @@ class FileBackend(Backend):
                 path.mkdir(parents=True, exist_ok=True)
             self.log_file = open(path / f"log_{id}.log", "w")
 
-    def log_config(self, config: DictConfig) -> None:
+    def log_config(self, config: dict) -> None:
         """Write a YAML dump of `config` to a file."""
         if self.enable:
             with open(self.path / f"config_{self.id}.yaml", "w") as f:
-                f.write(OmegaConf.to_yaml(config))
+                yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
 
     def log_metrics(
         self,
