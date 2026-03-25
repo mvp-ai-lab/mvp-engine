@@ -42,6 +42,19 @@ description: Implement end-to-end MFU support for the current model and engine, 
 
 ## Workflow
 
+### 0. Review reference implementation pattern first
+
+- If `references/recipes/` contains an MFU example, treat it as an implementation sample first. Use it to understand which files and code layers usually need changes before editing the current recipe.
+- The sample is only for pattern recognition. Do not assume the current model, field names, config hierarchy, or training flow match the sample exactly.
+- When comparing the sample with the current recipe, focus on these questions:
+  - how model FLOPs are attached to the model instance
+  - where MFU configuration enters the schema or config
+  - where `mfu` is computed and logged after a training step
+  - where `world_size`, step time, and peak hardware FLOPs come from
+- Reuse the sample's class names, file names, or field names only when they are compatible with the current recipe. Otherwise, adapt them to the current model and engine structure.
+- If the sample and the current recipe differ, prefer extracting the implementation pattern and data flow over copying code verbatim.
+- When citing demo integration flow, point to `references/recipes/vit_classification_addon/model/vit.py`, `references/recipes/vit_classification_addon/engine/vit_classification_engine.py`, `references/recipes/vit_classification_addon/configs/schema.py`, and `references/recipes/vit_classification_addon/configs/train.yaml`.
+
 ### 1. Detect the runtime environment first
 
 - Check whether training is already running on GPU.

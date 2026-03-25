@@ -42,6 +42,19 @@ description: 为当前模型和 engine 真正实现 MFU 支持，包括模型 FL
 
 ## Workflow
 
+### 0. 先看参考实现模式
+
+- 如果 `references/recipes/` 下存在 MFU 示例，请先把它当作“实现样例”来看，先理解通常需要改哪些文件和哪一层代码，再开始改当前 recipe。
+- 这个样例只用于识别实现模式，不代表当前模型、字段名、配置层级或训练流程一定相同。
+- 对比样例和当前 recipe 时，优先关注这些问题：
+  - 模型 FLOPs 是如何挂到模型实例上的
+  - MFU 配置是如何进入 schema 或 config 的
+  - 训练 step 完成后在哪里计算并打印 `mfu`
+  - `world_size`、step 时间、硬件峰值算力分别从哪里获取
+- 只有在和当前 recipe 兼容时，才复用样例里的类名、文件名或字段名；否则应该按当前模型和 engine 结构调整。
+- 如果样例和当前 recipe 不一致，优先抽象出“改动位置”和“数据流”，不要机械复制实现。
+- 讲解或复用样例时，优先引用 `references/recipes/vit_classification_addon/model/vit.py`、`references/recipes/vit_classification_addon/engine/vit_classification_engine.py`、`references/recipes/vit_classification_addon/configs/schema.py`、`references/recipes/vit_classification_addon/configs/train.yaml`。
+
 ### 1. 先确认运行环境
 
 - 先判断当前训练是否已经在 GPU 上运行。
