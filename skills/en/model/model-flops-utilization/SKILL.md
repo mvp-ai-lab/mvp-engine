@@ -10,120 +10,88 @@ description: Implement end-to-end MFU support for the current model and engine, 
 
 ## Goal
 
-- Add `calculate_model_flops(...) -> float` to the current model instance with an injection helper instead of replacing the model class.
-- Add or wire `calculate_mfu(...) -> float` in the engine so MFU is computed during training from model FLOPs, step time, peak device FLOPs, precision, and `world_size`.
-- Detect the current hardware, look up peak FLOPs from `references/hardware_peak_flops.csv`, and print `mfu=...` into the training log.
-- If the current environment is CPU-only, first search local `*.md` files for GPU or cluster instructions and follow them before continuing. If none exist, ask the user how to run on GPU.
-
-## Reference
-
-- If `references/recipes/` contains an MFU example, treat it as an implementation sample first. Use it to understand which files and code layers usually need changes before editing the current recipe.
-- The sample is only for pattern recognition. Do not assume the current model, field names, config hierarchy, or training flow match the sample exactly.
-- When comparing the sample with the current recipe, focus on these questions:
-  - how model FLOPs are attached to the model instance
-  - where MFU configuration enters the schema or config
-  - where `mfu` is computed and logged after a training step
-  - where `world_size`, step time, and peak hardware FLOPs come from
-- Reuse the sample's class names, file names, or field names only when they are compatible with the current recipe. Otherwise, adapt them to the current model and engine structure.
-- If the sample and the current recipe differ, prefer extracting the implementation pattern and data flow over copying code verbatim.
+- Add `calculate_model_flops(...) -> float` to the **current model instance** through injection, instead of replacing model classes.
+- Add or wire `calculate_mfu(...) -> float` in the engine so MFU is computed from model FLOPs, step time, peak device FLOPs, precision, and `world_size`.
+- Log MFU via the existing metrics dictionary using key `perf/mfu`.
+- Reuse the demo implementation in `references/recipes/vit_classification_addon/` as a pattern, then adapt to the current recipe.
 
 ## Required Inputs
 
-- The model entrypoint that creates the runtime model instance.
-- The engine or training loop location where step time and logger access are available.
-- The real model architecture: ViT, decoder-only Transformer, or VLM composed from vision and language stacks.
-- Runtime facts needed for MFU:
-  - training precision such as `bf16`, `fp16`, or `fp32`
+- Model construction entrypoint (where runtime instance is created).
+- Engine/training-loop location with step timing and log dict update.
+- Real architecture: ViT, decoder-only Transformer, seq2seq encoder-decoder, or VLM (vision + decoder-only text).
+- Runtime facts for MFU:
+  - precision (`bf16`, `fp16`, `fp32`, ...)
   - `world_size`
-  - step time in seconds or an equivalent timing source already tracked by the engine
-  - current device name from `nvidia-smi` or user input
-- The current working directory, because CPU-only fallback requires scanning local `*.md` files for GPU training instructions.
+  - step time in seconds
+  - current device name from `nvidia-smi` or user-provided value
 
 ## Workflow
 
-### 1. Detect the runtime environment first
+### 1) Confirm environment and hardware
 
-- Check whether training is already running on GPU.
-- If GPU is available, identify the device name with `nvidia-smi` and use that for peak FLOPs lookup.
-- If the current environment is CPU-only:
-  - scan `*.md` files under the current working directory for GPU, Slurm, cluster, `torchrun`, or launch instructions
-  - if instructions exist, follow them and move the workflow to a GPU-capable run
-  - if no instructions exist, pause and ask the user how GPU training should be launched
-- Ask the user only when hardware identity, precision, or launch method cannot be derived reliably from the environment.
+- Detect whether training runs on GPU.
+- If yes, get active device name with `nvidia-smi`.
+- If CPU-only, scan local `*.md` for cluster/GPU launch instructions; if none are available, ask user how to launch on GPU.
 
-### 2. Add `calculate_model_flops(...)` to the current model instance
+### 2) Inject `calculate_model_flops(...)` into the model instance
 
-- Do not replace the model class with a subclass as the default pattern.
-- Add a helper named `inject_model_flops_calculation(model)` and attach `calculate_model_flops` to the existing instance with `types.MethodType`.
-- Keep only the smallest explicit parameter set required by the real architecture.
-- Do not include unused parameters in the generated method signature.
-- Return one `float`: model FLOPs per training or eval step for the current process.
-
-Use this injection pattern:
+- Create `inject_model_flops_calculation(model)` and attach method using `types.MethodType`.
+- Keep the method signature minimal and architecture-specific.
+- Avoid unused parameters.
 
 ```python
 import types
 
 
 def inject_model_flops_calculation(model):
-    def calculate_model_flops(self, *, ..., is_training: bool = True) -> float:
+    def calculate_model_flops(self, *, batch_size: int, seq_len: int, is_training: bool = True) -> float:
         ...
 
     model.calculate_model_flops = types.MethodType(calculate_model_flops, model)
     return model
+```
 
+Use this in model-building code:
 
+```python
 model = AutoModel.from_pretrained(...)
 model = inject_model_flops_calculation(model)
 ```
 
-#### ViT example
+#### ViT example (no `image_size` / `patch_size` args)
 
-Use this shape when the model is a patch-embedding vision transformer.
+Use model/config attributes (or processor metadata) as the source of token geometry.
 
 ```python
 import types
 
 
 def inject_model_flops_calculation(model):
-    def calculate_model_flops(
-        self,
-        *,
-        batch_size: int,
-        image_size: int | tuple[int, int],
-        patch_size: int | tuple[int, int],
-        is_training: bool = True,
-    ) -> float:
-        if isinstance(image_size, int):
-            image_h, image_w = image_size, image_size
-        else:
-            image_h, image_w = map(int, image_size)
-        if isinstance(patch_size, int):
-            patch_h, patch_w = patch_size, patch_size
-        else:
-            patch_h, patch_w = map(int, patch_size)
-
+    def calculate_model_flops(self, *, batch_size: int, is_training: bool = True) -> float:
         batch = int(batch_size)
-        if min(batch, image_h, image_w, patch_h, patch_w) <= 0:
-            raise ValueError("batch_size, image_size, and patch_size must be > 0")
-        if image_h % patch_h != 0 or image_w % patch_w != 0:
-            raise ValueError("image_size must be divisible by patch_size")
+        if batch <= 0:
+            raise ValueError("batch_size must be > 0")
 
-        num_patches = (image_h // patch_h) * (image_w // patch_w)
-        channels = int(getattr(self.config, "num_channels", 3))
-        hidden = int(self.config.hidden_size)
-        layers = int(self.config.num_hidden_layers)
-        intermediate = int(self.config.intermediate_size)
-        num_labels = int(getattr(self.config, "num_labels", 1000))
+        config = self.config
+        hidden = int(config.hidden_size)
+        layers = int(config.num_hidden_layers)
+        intermediate = int(config.intermediate_size)
+        num_labels = int(getattr(config, "num_labels", 1000))
 
-        patch_embed_flops = 2 * batch * num_patches * (channels * patch_h * patch_w) * hidden
+        image_size = int(config.image_size)
+        patch_size = int(config.patch_size)
+        num_patches = (image_size // patch_size) ** 2
+        channels = int(getattr(config, "num_channels", 3))
+
+        patch_embed = 2 * batch * num_patches * (channels * patch_size * patch_size) * hidden
         block_flops = (
             8 * batch * num_patches * hidden * hidden
             + 4 * batch * num_patches * num_patches * hidden
             + 4 * batch * num_patches * hidden * intermediate
         )
-        head_flops = 2 * batch * hidden * num_labels
-        forward_flops = float(patch_embed_flops + layers * block_flops + head_flops)
+        head = 2 * batch * hidden * num_labels
+        forward_flops = float(patch_embed + layers * block_flops + head)
         return forward_flops * 3.0 if is_training else forward_flops
 
     model.calculate_model_flops = types.MethodType(calculate_model_flops, model)
@@ -132,20 +100,12 @@ def inject_model_flops_calculation(model):
 
 #### Decoder-only Transformer example
 
-Use this shape when the model is a dense decoder-only language model.
-
 ```python
 import types
 
 
 def inject_model_flops_calculation(model):
-    def calculate_model_flops(
-        self,
-        *,
-        batch_size: int,
-        seq_len: int,
-        is_training: bool = True,
-    ) -> float:
+    def calculate_model_flops(self, *, batch_size: int, seq_len: int, is_training: bool = True) -> float:
         batch = int(batch_size)
         tokens = int(seq_len)
         if batch <= 0 or tokens <= 0:
@@ -161,17 +121,17 @@ def inject_model_flops_calculation(model):
             + 4 * batch * tokens * tokens * hidden
             + 4 * batch * tokens * hidden * intermediate
         )
-        lm_head_flops = 2 * batch * tokens * hidden * vocab
-        forward_flops = float(layers * per_layer + lm_head_flops)
+        lm_head = 2 * batch * tokens * hidden * vocab
+        forward_flops = float(layers * per_layer + lm_head)
         return forward_flops * 3.0 if is_training else forward_flops
 
     model.calculate_model_flops = types.MethodType(calculate_model_flops, model)
     return model
 ```
 
-#### VLM example
+#### Seq2seq encoder-decoder example (dedicated template)
 
-Use this pattern when the runtime model combines a vision encoder and a decoder-only language model. Do not assume every VLM uses the same field names.
+Use separate source/target lengths and include decoder cross-attention.
 
 ```python
 import types
@@ -182,30 +142,51 @@ def inject_model_flops_calculation(model):
         self,
         *,
         batch_size: int,
-        image_size: int | tuple[int, int],
-        patch_size: int | tuple[int, int],
-        seq_len: int,
+        encoder_seq_len: int,
+        decoder_seq_len: int,
         is_training: bool = True,
     ) -> float:
-        vision_flops = ...
-        language_flops = ...
-        forward_flops = float(vision_flops + language_flops)
+        b = int(batch_size)
+        s_enc = int(encoder_seq_len)
+        s_dec = int(decoder_seq_len)
+        if min(b, s_enc, s_dec) <= 0:
+            raise ValueError("batch_size, encoder_seq_len, decoder_seq_len must be > 0")
+
+        cfg = self.config
+        hidden = int(cfg.d_model)
+        ffn = int(cfg.d_ff)
+        enc_layers = int(getattr(cfg, "num_layers", cfg.num_hidden_layers))
+        dec_layers = int(getattr(cfg, "num_decoder_layers", enc_layers))
+        vocab = int(cfg.vocab_size)
+
+        enc_layer = 8 * b * s_enc * hidden * hidden + 4 * b * s_enc * s_enc * hidden + 4 * b * s_enc * hidden * ffn
+        dec_self = 8 * b * s_dec * hidden * hidden + 4 * b * s_dec * s_dec * hidden + 4 * b * s_dec * hidden * ffn
+        dec_cross = 4 * b * s_dec * s_enc * hidden
+        lm_head = 2 * b * s_dec * hidden * vocab
+
+        forward_flops = float(enc_layers * enc_layer + dec_layers * (dec_self + dec_cross) + lm_head)
         return forward_flops * 3.0 if is_training else forward_flops
 
     model.calculate_model_flops = types.MethodType(calculate_model_flops, model)
     return model
 ```
 
-- For VLMs, include both the vision-side and language-side compute.
-- Adapt field names such as `vision_config`, `text_config`, `hidden_size`, and `num_hidden_layers` to the real implementation instead of copying template names blindly.
+#### VLM example
 
-### 3. Implement MFU in the engine
+VLM FLOPs should include both visual and textual stacks.
 
-- Add or reuse an engine-side helper named `calculate_mfu(...)`.
-- MFU must be computed from runtime throughput, not from model FLOPs alone.
-- Prefer the real step timing source already used by the engine. If the engine already tracks iteration duration, reuse it instead of adding a parallel timer.
+```python
+def calculate_model_flops(...):
+    vision_flops = ...
+    language_flops = ...
+    return float((vision_flops + language_flops) * 3.0 if is_training else (vision_flops + language_flops))
+```
 
-Use this formula unless the current engine already has a stronger established convention:
+### 3) Integrate MFU in engine and recipe logs
+
+- Add/reuse `calculate_mfu(...)`.
+- Compute MFU at the same step boundary as the engine timing metric.
+- Add MFU to the log dict with key `perf/mfu` instead of direct standalone printing.
 
 ```python
 def calculate_mfu(
@@ -225,69 +206,45 @@ def calculate_mfu(
     total_peak_flops = device_peak_tflops * 1e12 * world_size
     achieved_flops_per_second = model_flops_per_step / step_time_seconds
     return float(achieved_flops_per_second / total_peak_flops)
+
+
+metrics = {
+    "train/loss": float(loss),
+    "perf/step_time": float(step_time_seconds),
+    "perf/mfu": float(mfu),
+}
+logger.log(metrics, step=global_step)
 ```
 
-- `model_flops_per_step` should use the model method from the current process perspective.
-- `device_peak_tflops` is the single-device peak for the active precision.
-- `world_size` must reflect the number of training devices that contribute to the step.
-- If gradient accumulation or pipeline parallel timing changes the effective step definition in the current engine, adapt the numerator and timing source to that real step boundary and state the assumption in code comments.
+### 4) Resolve peak FLOPs from hardware table
 
-### 4. Resolve hardware peak FLOPs
+- Detect GPU via `nvidia-smi`.
+- Normalize device name.
+- Match precision column in `references/hardware_peak_flops.csv`.
+- Ask user when matching is ambiguous.
 
-- First try to detect the active GPU with `nvidia-smi`.
-- Normalize the detected device name to the closest row in `references/hardware_peak_flops.csv`.
-- Match the active precision such as `bf16` or `fp16`.
-- If the device cannot be matched reliably, ask the user which hardware and precision should be used for MFU.
-- Keep the lookup logic simple and explicit. Do not hide a fallback that silently picks the wrong GPU row.
+### 5) Validate end-to-end behavior
 
-### 5. Write MFU to training logs
+- Method exists after injection: `hasattr(model, "calculate_model_flops")`.
+- Signature only contains required architecture arguments.
+- `calculate_model_flops(...)` and `calculate_mfu(...)` return `float`.
+- Engine writes MFU to logs under `perf/mfu`.
+- MFU sanity check: non-negative and typically not far above `1`.
+- For skill behavior checks, verify both routing trigger and contract check pass.
 
-- Compute MFU inside the engine where step timing and logger access already exist.
-- Print MFU into the training log in the same place where the engine reports step metrics.
-- Keep the metric name explicit: `mfu`.
+## Reference demo implementation
 
-Example:
+Cite these files when explaining or mirroring the integration path:
 
-```python
-mfu = self.calculate_mfu(
-    model_flops_per_step=model_flops,
-    step_time_seconds=step_time,
-    device_peak_tflops=device_peak_tflops,
-    world_size=world_size,
-)
-logger.info("step=%s loss=%.4f mfu=%.4f", step, loss, mfu)
-```
-
-## Validation
-
-- Confirm the current model instance exposes `calculate_model_flops(...)` after injection.
-- Confirm the generated method signature contains only architecture-relevant parameters.
-- Confirm the engine computes `mfu` from model FLOPs, step time, peak hardware FLOPs, and `world_size`.
-- Confirm both `calculate_model_flops(...)` and `calculate_mfu(...)` return `float`.
-- Confirm training logs show `mfu=...`.
-
-### 6. Final Acceptance Checklist
-
-- The current model instance has `calculate_model_flops(...)` and the method was added by injection instead of replacing the model class.
-- `calculate_model_flops(...)` keeps only the parameters required by the current architecture.
-- The engine has `calculate_mfu(...)` or an equivalent MFU integration point.
-- MFU uses runtime step time, single-device peak FLOPs, active precision, and `world_size`.
-- The MFU value written to logs is a `float`.
-- Training logs visibly include `mfu=...`.
-- The logged MFU value passes a sanity check:
-  - it is not negative
-  - it is not implausibly larger than `1`
-  - if it is suspicious, re-check model FLOPs, hardware lookup, precision mapping, timing source, and `world_size`
+- `references/recipes/vit_classification_addon/model/vit.py`
+- `references/recipes/vit_classification_addon/engine/vit_classification_engine.py`
+- `references/recipes/vit_classification_addon/configs/schema.py`
+- `references/recipes/vit_classification_addon/configs/train.yaml`
 
 ## Output
 
-- Summarize where `calculate_model_flops(...)` was injected.
-- Summarize where engine-side MFU was added or updated.
-- State which GPU and precision were used for peak FLOPs lookup.
-- State whether the current run used single-GPU or multi-GPU assumptions.
-- State where `mfu=...` is logged.
-- If GPU access was not available and no local launch instructions were found, state that user input is still required before MFU can be completed safely.
-
-## Read On Demand
-
-- Read `references/hardware_peak_flops.csv` when you need a peak FLOPs lookup for a known GPU and precision.
+- Where `inject_model_flops_calculation(model)` is called.
+- Where `calculate_mfu(...)` is integrated in the engine.
+- Which GPU + precision row was selected from the hardware table.
+- Whether MFU assumes single- or multi-GPU (`world_size`).
+- Which log dict location carries `perf/mfu`.
