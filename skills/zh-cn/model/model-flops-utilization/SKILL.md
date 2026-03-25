@@ -15,6 +15,19 @@ description: 为当前模型和 engine 真正实现 MFU 支持，包括模型 FL
 - 检测当前硬件，从 `references/hardware_peak_flops.csv` 中查峰值算力，并把 MFU 加入训练日志字典，使用键 `perf/mfu`。
 - 如果当前环境只有 CPU，先在工作目录的 `*.md` 文件里查 GPU / 集群训练 instruction；如果找不到，再询问 user。
 
+## 参考
+
+- 如果 `references/recipes/` 下存在 MFU 示例，请先把它当作“实现样例”来看，先理解通常需要改哪些文件和哪一层代码，再开始改当前 recipe。
+- 这个样例只用于识别实现模式，不代表当前模型、字段名、配置层级或训练流程一定相同。
+- 对比样例和当前 recipe 时，优先关注这些问题：
+  - 模型 FLOPs 是如何挂到模型实例上的
+  - MFU 配置是如何进入 schema 或 config 的
+  - 训练 step 完成后在哪里计算并打印 `mfu`
+  - `world_size`、step 时间、硬件峰值算力分别从哪里获取
+- 只有在和当前 recipe 兼容时，才复用样例里的类名、文件名或字段名；否则应该按当前模型和 engine 结构调整。
+- 如果样例和当前 recipe 不一致，优先抽象出“改动位置”和“数据流”，不要机械复制实现。
+- 讲解或复用样例时，优先引用 `references/recipes/vit_classification_addon/model/vit.py`、`references/recipes/vit_classification_addon/engine/vit_classification_engine.py`、`references/recipes/vit_classification_addon/configs/schema.py`、`references/recipes/vit_classification_addon/configs/train.yaml`。
+
 ## Required Inputs
 
 - 创建运行时模型实例的入口位置。
@@ -92,33 +105,22 @@ def inject_model_flops_calculation(model):
         self,
         *,
         batch_size: int,
-        image_size: int | tuple[int, int],
-        patch_size: int | tuple[int, int],
         is_training: bool = True,
     ) -> float:
-        if isinstance(image_size, int):
-            image_h, image_w = image_size, image_size
-        else:
-            image_h, image_w = map(int, image_size)
-        if isinstance(patch_size, int):
-            patch_h, patch_w = patch_size, patch_size
-        else:
-            patch_h, patch_w = map(int, patch_size)
-
         batch = int(batch_size)
-        if min(batch, image_h, image_w, patch_h, patch_w) <= 0:
-            raise ValueError("batch_size, image_size, and patch_size must be > 0")
-        if image_h % patch_h != 0 or image_w % patch_w != 0:
-            raise ValueError("image_size must be divisible by patch_size")
+        if batch <= 0:
+            raise ValueError("batch_size must be > 0")
 
-        num_patches = (image_h // patch_h) * (image_w // patch_w)
+        image_size = int(self.config.image_size)
+        patch_size = int(self.config.patch_size)
+        num_patches = (image_size // patch_size) ** 2
         channels = int(getattr(self.config, "num_channels", 3))
         hidden = int(self.config.hidden_size)
         layers = int(self.config.num_hidden_layers)
         intermediate = int(self.config.intermediate_size)
         num_labels = int(getattr(self.config, "num_labels", 1000))
 
-        patch_embed_flops = 2 * batch * num_patches * (channels * patch_h * patch_w) * hidden
+        patch_embed_flops = 2 * batch * num_patches * (channels * patch_size * patch_size) * hidden
         block_flops = (
             8 * batch * num_patches * hidden * hidden
             + 4 * batch * num_patches * num_patches * hidden

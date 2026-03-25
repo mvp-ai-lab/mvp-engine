@@ -15,6 +15,19 @@ description: Implement end-to-end MFU support for the current model and engine, 
 - Detect the current hardware, look up peak FLOPs from `references/hardware_peak_flops.csv`, and add MFU into the training metrics dict with key `perf/mfu`.
 - If the current environment is CPU-only, first search local `*.md` files for GPU or cluster instructions and follow them before continuing. If none exist, ask the user how to run on GPU.
 
+## Reference
+
+- If `references/recipes/` contains an MFU example, treat it as an implementation sample first. Use it to understand which files and code layers usually need changes before editing the current recipe.
+- The sample is only for pattern recognition. Do not assume the current model, field names, config hierarchy, or training flow match the sample exactly.
+- When comparing the sample with the current recipe, focus on these questions:
+  - how model FLOPs are attached to the model instance
+  - where MFU configuration enters the schema or config
+  - where `mfu` is computed and logged after a training step
+  - where `world_size`, step time, and peak hardware FLOPs come from
+- Reuse the sample's class names, file names, or field names only when they are compatible with the current recipe. Otherwise, adapt them to the current model and engine structure.
+- If the sample and the current recipe differ, prefer extracting the implementation pattern and data flow over copying code verbatim.
+- When citing demo integration flow, point to `references/recipes/vit_classification_addon/model/vit.py`, `references/recipes/vit_classification_addon/engine/vit_classification_engine.py`, `references/recipes/vit_classification_addon/configs/schema.py`, and `references/recipes/vit_classification_addon/configs/train.yaml`.
+
 ## Required Inputs
 
 - The model entrypoint that creates the runtime model instance.
@@ -91,33 +104,22 @@ def inject_model_flops_calculation(model):
         self,
         *,
         batch_size: int,
-        image_size: int | tuple[int, int],
-        patch_size: int | tuple[int, int],
         is_training: bool = True,
     ) -> float:
-        if isinstance(image_size, int):
-            image_h, image_w = image_size, image_size
-        else:
-            image_h, image_w = map(int, image_size)
-        if isinstance(patch_size, int):
-            patch_h, patch_w = patch_size, patch_size
-        else:
-            patch_h, patch_w = map(int, patch_size)
-
         batch = int(batch_size)
-        if min(batch, image_h, image_w, patch_h, patch_w) <= 0:
-            raise ValueError("batch_size, image_size, and patch_size must be > 0")
-        if image_h % patch_h != 0 or image_w % patch_w != 0:
-            raise ValueError("image_size must be divisible by patch_size")
+        if batch <= 0:
+            raise ValueError("batch_size must be > 0")
 
-        num_patches = (image_h // patch_h) * (image_w // patch_w)
+        image_size = int(self.config.image_size)
+        patch_size = int(self.config.patch_size)
+        num_patches = (image_size // patch_size) ** 2
         channels = int(getattr(self.config, "num_channels", 3))
         hidden = int(self.config.hidden_size)
         layers = int(self.config.num_hidden_layers)
         intermediate = int(self.config.intermediate_size)
         num_labels = int(getattr(self.config, "num_labels", 1000))
 
-        patch_embed_flops = 2 * batch * num_patches * (channels * patch_h * patch_w) * hidden
+        patch_embed_flops = 2 * batch * num_patches * (channels * patch_size * patch_size) * hidden
         block_flops = (
             8 * batch * num_patches * hidden * hidden
             + 4 * batch * num_patches * num_patches * hidden
