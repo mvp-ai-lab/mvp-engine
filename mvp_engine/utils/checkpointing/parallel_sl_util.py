@@ -133,7 +133,8 @@ def save_checkpoint(
             rng_state["accelerator_rng_state"] = accelerator_rng_state
         rank = get_rank()
         engine_path = cur_checkpoint_dir / "engine"
-        engine_path.mkdir(parents=True, exist_ok=True)
+        if is_main_process():
+            engine_path.mkdir(parents=True, exist_ok=True)
 
         dist.barrier()
         torch.save(rng_state, engine_path / f"rank_{rank}.pt")
