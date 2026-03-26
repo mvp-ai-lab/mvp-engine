@@ -21,6 +21,8 @@ parallel:
 data:
   train_path: "./data/minimal_vlm/demo.jsonl"
   jsonl_num_shards: null
+  cache: false
+  cache_show_progress: true
   shuffle_buffer: 128
   packing: false
   packing_selection_strategy: "best_fit"

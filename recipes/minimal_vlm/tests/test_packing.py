@@ -47,6 +47,9 @@ def _run_assembler(
 
 
 class DummyProcessor:
+    def __fingerprint__(self) -> str:
+        return "dummy-processor"
+
     def apply_chat_template(self, conversations, **kwargs):
         messages = conversations[0]
         message_count = len(messages)

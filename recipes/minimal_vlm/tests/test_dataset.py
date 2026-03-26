@@ -14,6 +14,9 @@ class DummyProcessor:
     def __init__(self) -> None:
         self.calls: list[tuple[list[dict], dict]] = []
 
+    def __fingerprint__(self) -> str:
+        return "dummy-processor"
+
     def apply_chat_template(self, conversations, **kwargs):
         self.calls.append((conversations, kwargs))
         messages = conversations[0]
@@ -191,3 +194,92 @@ def test_build_dataset_returns_rendered_mvp_dataset_samples(tmp_path: Path) -> N
     assert torch.equal(sample["input_ids"], torch.tensor([10, 11, 12, 13]))
     assert torch.equal(sample["labels"], torch.tensor([-100, -100, 12, 13]))
     assert shard_dir.is_dir()
+
+
+def test_build_dataset_places_non_packing_cache_at_pipeline_end(tmp_path: Path) -> None:
+    pytest.importorskip("mvp_dataset")
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    (image_dir / "1.jpg").write_bytes(b"test")
+
+    dataset_path = tmp_path / "demo.jsonl"
+    _write_jsonl(
+        dataset_path,
+        [
+            {
+                "messages": [
+                    {"role": "user", "content": "<image>Who is this?"},
+                    {"role": "assistant", "content": "An example."},
+                ],
+                "images": ["images/1.jpg"],
+            }
+        ],
+    )
+
+    config = OmegaConf.create(
+        {
+            "project": {"dir": str(tmp_path / "outputs")},
+            "seed": 42,
+            "data": {
+                "train_path": str(dataset_path),
+                "num_workers": 0,
+                "jsonl_num_shards": 1,
+                "cache": True,
+                "cache_show_progress": False,
+                "shuffle_buffer": 8,
+                "max_seq_len": 16,
+            },
+        }
+    )
+
+    dataset = build_dataset(config, processor=DummyProcessor())
+
+    assert [spec.kind for spec in dataset._stages] == ["map", "shuffle"]
+    assert dataset._cache_spec is not None
+    assert dataset._cache_spec.boundary_index == 2
+
+
+def test_build_dataset_places_packing_cache_at_pipeline_end(tmp_path: Path) -> None:
+    pytest.importorskip("mvp_dataset")
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    (image_dir / "1.jpg").write_bytes(b"test")
+
+    dataset_path = tmp_path / "demo.jsonl"
+    _write_jsonl(
+        dataset_path,
+        [
+            {
+                "messages": [
+                    {"role": "user", "content": "<image>Who is this?"},
+                    {"role": "assistant", "content": "An example."},
+                ],
+                "images": ["images/1.jpg"],
+            }
+        ],
+    )
+
+    config = OmegaConf.create(
+        {
+            "project": {"dir": str(tmp_path / "outputs")},
+            "seed": 42,
+            "data": {
+                "train_path": str(dataset_path),
+                "num_workers": 0,
+                "jsonl_num_shards": 1,
+                "cache": True,
+                "cache_show_progress": False,
+                "shuffle_buffer": 8,
+                "packing": True,
+                "max_seq_len": 16,
+            },
+        }
+    )
+
+    dataset = build_dataset(config, processor=DummyProcessor())
+
+    assert [spec.kind for spec in dataset._stages] == ["map", "shuffle", "assemble"]
+    assert dataset._cache_spec is not None
+    assert dataset._cache_spec.boundary_index == 3

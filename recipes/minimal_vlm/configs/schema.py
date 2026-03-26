@@ -12,6 +12,8 @@ class MinimalVLMDataConfig(BaseModel):
 
     train_path: Optional[str] = "./data/minimal_vlm/demo.jsonl"
     jsonl_num_shards: Optional[int] = Field(default=None, ge=1)
+    cache: bool = False
+    cache_show_progress: bool = True
     shuffle_buffer: int = Field(128, ge=1)
     packing: bool = False
     packing_selection_strategy: Literal["random", "best_fit"] = "best_fit"

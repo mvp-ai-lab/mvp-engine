@@ -27,4 +27,17 @@ def build_qwen3_vl_processor(model_config: Any):
         if tokenizer.pad_token_id is None and tokenizer.eos_token is not None:
             tokenizer.pad_token = tokenizer.eos_token
 
+    processor.__fingerprint__ = lambda: _processor_fingerprint(processor)
     return processor
+
+
+def _processor_fingerprint(processor: Any) -> str:
+    """Return a stable cache fingerprint for a HF processor."""
+    candidates = [
+        getattr(processor, "name_or_path", None),
+        getattr(getattr(processor, "tokenizer", None), "name_or_path", None),
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    return f"{type(processor).__module__}.{type(processor).__qualname__}"

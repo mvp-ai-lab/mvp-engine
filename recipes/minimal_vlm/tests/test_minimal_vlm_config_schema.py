@@ -14,6 +14,7 @@ def test_minimal_vlm_train_config_validates() -> None:
     validated = MinimalVLMConfig.model_validate(OmegaConf.to_container(config, resolve=True))
 
     assert validated.engine == "MinimalVLMEngine"
+    assert validated.data.cache is False
     assert validated.data.loader_prefetch_factor == 2
     assert validated.data.packing is False
     assert validated.model.attn_implementation is None
@@ -50,3 +51,18 @@ def test_minimal_vlm_schema_accepts_explicit_attention_implementation() -> None:
     )
 
     assert validated.model.attn_implementation == "flash_attention_2"
+
+
+def test_minimal_vlm_schema_accepts_cache_config() -> None:
+    validated = MinimalVLMConfig.model_validate(
+        {
+            "engine": "MinimalVLMEngine",
+            "data": {
+                "cache": True,
+                "cache_show_progress": False,
+            },
+        }
+    )
+
+    assert validated.data.cache is True
+    assert validated.data.cache_show_progress is False
