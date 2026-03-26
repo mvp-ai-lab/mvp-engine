@@ -18,19 +18,26 @@ dependencies = [
     "datasets",
     "transformers",
     "accelerate",
-    "torch==2.8.0",
-    "torchvision==0.23.0",
     "pyyaml",
     "wandb",
     "hydra-core",
     "omegaconf",
     "webdataset",
     "rich",
-    "nvidia-dali-cuda120",
     "pydantic>=2.0"
 ]
 
 [project.optional-dependencies]
+gpu = [
+    "torch==2.8.0",
+    "torchvision==0.23.0",
+    "nvidia-dali-cuda120",
+]
+npu = [
+    "torch==2.8.0",
+    "torchvision==0.23.0",
+    "torch_npu",
+]
 
 [tool.setuptools.packages.find]
 where = ["mvp_engine"]
