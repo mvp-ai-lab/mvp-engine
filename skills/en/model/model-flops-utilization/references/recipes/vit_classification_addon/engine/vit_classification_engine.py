@@ -1,13 +1,8 @@
 """MFU-focused engine snippet (non-MFU parts intentionally hidden)."""
 
-import torch
-
 from mvp_engine.distributed.utils import get_world_size
 
-
-PEAK_TFLOPS_BY_DEVICE_AND_PRECISION = {
-    "NVIDIA H200": {"bf16": 989.0, "fp16": 989.0, "fp32": 67.0}
-}
+PEAK_TFLOPS_BY_DEVICE_AND_PRECISION = {"NVIDIA H200": {"bf16": 989.0, "fp16": 989.0, "fp32": 67.0}}
 
 
 def calculate_mfu(
