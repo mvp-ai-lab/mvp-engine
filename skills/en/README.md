@@ -94,7 +94,7 @@ Use @skills/en/git/pr-gate/SKILL.md
 - `git/pr-feedback`: [git/pr-feedback/SKILL.md](git/pr-feedback/SKILL.md)
 - `git/pr-skill-review`: [git/pr-skill-review/SKILL.md](git/pr-skill-review/SKILL.md)
 - `experiment/analysis`: [experiment/analysis/SKILL.md](experiment/analysis/SKILL.md)
-- `debug/recipe-merge-repair`: [debug/recipe-merge-repair/SKILL.md](debug/recipe-merge-repair/SKILL.md)
+- `git/recipe-merge-repair`: [git/recipe-merge-repair/SKILL.md](git/recipe-merge-repair/SKILL.md)
 
 ## Adding a New Skill
 

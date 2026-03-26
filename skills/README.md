@@ -43,6 +43,6 @@ Point the agent at a skill under `en/` or `zh-cn/` by language, e.g.
 - `experiment/analysis`
   - English: [en/experiment/analysis/SKILL.md](en/experiment/analysis/SKILL.md)
   - 中文： [zh-cn/experiment/analysis/SKILL.md](zh-cn/experiment/analysis/SKILL.md)
-- `debug/recipe-merge-repair`
-  - English: [en/debug/recipe-merge-repair/SKILL.md](en/debug/recipe-merge-repair/SKILL.md)
-  - 中文： [zh-cn/debug/recipe-merge-repair/SKILL.md](zh-cn/debug/recipe-merge-repair/SKILL.md)
+- `git/recipe-merge-repair`
+  - English: [en/git/recipe-merge-repair/SKILL.md](en/git/recipe-merge-repair/SKILL.md)
+  - 中文： [zh-cn/git/recipe-merge-repair/SKILL.md](zh-cn/git/recipe-merge-repair/SKILL.md)

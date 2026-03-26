@@ -1,29 +1,31 @@
 ---
 name: recipe-merge-repair
-description: Check whether recent merged shared-code changes broke the current recipe, then repair recipe-local code/configs and validate the result. Use when updates in mvp_engine/ or other shared modules may have invalidated a recipe under recipes/.
+description: Compare the current development branch against an upstream branch, identify shared-contract changes that affect the target recipe, adapt and validate the current branch, then complete the merge. Use when a base branch such as main changed substantially and an in-flight recipe branch needs to absorb those updates safely.
 ---
 
 # recipe-merge-repair
 
-> 中文版：`skills/zh-cn/debug/recipe-merge-repair/SKILL.md`
-> English version: `skills/en/debug/recipe-merge-repair/SKILL.md`
+> 中文版：`skills/zh-cn/git/recipe-merge-repair/SKILL.md`
+> English version: `skills/en/git/recipe-merge-repair/SKILL.md`
 
 ## Goal
 
-- Check whether newly merged shared-code changes affect the recipe currently being touched.
-- Repair recipe-local code and configs when those shared changes broke the recipe.
+- Compare the current branch and upstream branch before running the merge.
+- Turn the branch diff into a recipe breakage/adaptation map instead of resolving conflicts blindly.
+- Adapt recipe-local code/configs, resolve conflicts, and validate on the current branch.
+- Finish with the upstream branch successfully merged into the active development branch.
 - Keep the fix inside `recipes/<recipe>/` unless the problem is clearly a shared-engine bug.
 
 ## Required Inputs
 
+- The current development branch and the upstream branch to merge from, for example `main`.
 - The target recipe path, config path, or engine/model files under `recipes/`.
-- The incoming change scope:
-  - base branch or commit range, or
-  - the concrete merged commits/files to inspect.
+- If known, the merge base, commit range, or high-priority commits/files to inspect.
 - The validation path to run after the fix:
   - config validation only,
   - model/engine smoke test,
   - full training startup.
+- Whether the working tree is clean; if not, decide whether local uncommitted changes are in scope for the merge.
 - Repo runtime requirements when relevant:
   - source `~/.bashrc`
   - activate `.venv` with `source .venv/bin/activate`
@@ -31,13 +33,36 @@ description: Check whether recent merged shared-code changes broke the current r
 
 ## Workflow
 
-### 1. Build the merged-change map first
+### 1. Establish merge context and safety boundaries first
 
-- Start from the incoming shared-code diff before touching the recipe.
+- Do not start with `git merge`. First confirm:
+  - the current branch
+  - the upstream branch
+  - the merge base between them
+  - whether the working tree has uncommitted changes
 - Prefer:
-  - `git log --oneline <base>..HEAD`
-  - `git diff --name-status <base>..HEAD`
-  - `git diff <base>..HEAD -- mvp_engine/ recipes/<target_recipe>/`
+  - `git branch --show-current`
+  - `git status --short`
+  - `git merge-base <current_branch> <upstream_branch>`
+- If the tree is dirty, do not let the merge overwrite unclear local edits.
+- Record the recipe target, config entrypoint, and validation goal before moving into diff analysis.
+
+### 2. Compare the two branches before merging
+
+- Separate three buckets:
+  - what exists only on the upstream branch
+  - what exists only on the current development branch
+  - where both branches touch the same files or contracts
+- Prefer:
+  - `git log --left-right --graph --oneline <merge_base>...<upstream_branch>`
+  - `git log --left-right --graph --oneline <merge_base>...<current_branch>`
+  - `git diff --name-status <merge_base>..<upstream_branch>`
+  - `git diff --name-status <merge_base>..<current_branch>`
+  - `git diff --name-status <current_branch>...<upstream_branch>`
+  - `git diff <merge_base>..<upstream_branch> -- mvp_engine/ recipes/<target_recipe>/`
+  - `git diff <merge_base>..<current_branch> -- recipes/<target_recipe>/`
+- If the current branch also changed shared code, optionally inspect:
+  - `git range-diff <merge_base>..<upstream_branch> <merge_base>..<current_branch>`
 - Group changes by contract type:
   - config schema/layout changes
   - engine lifecycle or method signature changes
@@ -45,15 +70,15 @@ description: Check whether recent merged shared-code changes broke the current r
   - model wrapper or registry changes
   - dataset/dataloader interface changes
 
-### 2. Map shared changes to the recipe surface
+### 3. Map branch deltas to the recipe surface
 
 - Read the target recipe’s:
   - `engine/*.py`
   - `model/**/*.py`
   - `configs/*.yaml`
   - recipe-local `configs/schema.py` if it exists
-- Identify direct dependencies on changed contracts.
-- Do not stop at the first failure. Build a full breakage list before editing.
+- Identify direct dependencies on both upstream contract changes and current-branch local edits.
+- Do not stop at the first failure. Build a full breakage list and merge-hotspot list before editing.
 
 Common patterns in this repo:
 
@@ -66,7 +91,19 @@ Common patterns in this repo:
 - tensor-parallel runtime was introduced or changed, but the recipe model has no `TP_MODULE_CONFIG`
 - fields moved from nested config blocks to top-level blocks and the recipe YAML still uses the old structure
 
-### 3. Repair the recipe at the correct layer
+### 4. Make a merge/adaptation plan before resolving conflicts
+
+- For each hotspot, decide the strategy first:
+  - take the upstream version directly
+  - keep the current branch’s recipe-local intent
+  - compose both sides manually
+  - treat it as a shared-layer bug and fix `mvp_engine/`
+- Typical judgments:
+  - if upstream changed the shared contract and the current branch changed recipe wiring, usually keep both and adapt at the recipe layer
+  - if the current branch copied old shared logic and upstream now provides the new shared implementation, do not revive the old contract; migrate to the new one
+  - do not resolve conflicts line-by-line without deciding what runtime contract should exist after the merge
+
+### 5. Repair the recipe at the correct layer and resolve the merge
 
 - Prefer recipe-local fixes first:
   - add or update `recipes/<recipe>/configs/schema.py`
@@ -75,8 +112,12 @@ Common patterns in this repo:
   - update recipe-local engine/model code to the current shared runtime contract
 - Only edit `mvp_engine/` when the merged code is itself wrong for all recipes.
 - Do not over-abstract. Keep repair code explicit and local to the affected recipe.
+- Once the change map is clear, run the actual merge. Prefer:
+  - `git merge --no-commit --no-ff <upstream_branch>`
+- Resolve conflicts using the hotspot map, then apply any required recipe-local adaptation.
+- Do not assume the problem is solved just because the textual conflicts are gone; continue with contract-level checks.
 
-### 4. Handle config-schema fallout explicitly
+### 6. Handle config-schema fallout explicitly
 
 - If the recipe engine subclasses `Engine` and accesses fields outside `BaseEngineConfig`, add a recipe-local schema.
 - Include every recipe field that the engine/model actually reads.
@@ -99,7 +140,7 @@ Common patterns in this repo:
   - `parallel.backend_kwargs.fsdp2.*`
   - `parallel.backend_kwargs.ddp.*`
 
-### 5. Handle distributed-runtime fallout explicitly
+### 7. Handle distributed-runtime fallout explicitly
 
 - Update recipe calls to shared helpers to match the current signatures.
 - In this repo today:
@@ -108,9 +149,9 @@ Common patterns in this repo:
 - If the recipe previously used `self.parallel_backend`, replace that logic with mesh-derived routing or the new helper behavior.
 - If TP is enabled anywhere in config, confirm the model class defines a valid `TP_MODULE_CONFIG` and add `TP_MODULE_POSTPROCESSORS` only when reshape metadata still assumes global dimensions.
 
-### 6. Validate the repaired recipe on the intended path
+### 8. Validate the merged result on the intended path
 
-- Validate at the smallest level that proves the merged breakage is fixed:
+- Validate at the smallest level that proves the merge breakage is fixed:
   - schema/model import
   - engine initialization
   - model parallelization smoke test
@@ -122,11 +163,27 @@ Common patterns in this repo:
 - If real data or pretrained assets are unavailable, create the smallest temporary local fixture needed for a smoke test instead of skipping validation entirely.
 - Prefer temporary overrides for smoke tests instead of permanently weakening recipe defaults.
 
+### 9. Finish the merge and run closing checks
+
+- Only complete the merge commit after conflict resolution and validation succeed.
+- At minimum, run:
+  - `git diff --check`
+  - `git status --short`
+- Confirm the final state means:
+  - upstream features are now present on the current branch
+  - current recipe-local development goals were not overwritten by upstream changes
+  - validation covered the merged tree, not only a pre-merge snapshot
+
 ## Validation
 
-- Confirm the merged-code inspection happened before the fix.
+- Confirm branch comparison happened before the merge and before repairs.
+- Confirm you distinguished:
+  - upstream-only changes after the merge base
+  - current-branch-only changes after the merge base
+  - overlapping files and contracts that became merge hotspots
 - Confirm the recipe now matches current shared contracts in both code and YAML.
 - Run targeted validation for every repaired breakage class.
+- Confirm validation ran on the post-merge working tree.
 - For this repo, prefer commands like:
 
 ```bash
@@ -154,13 +211,16 @@ PY
 ## Output
 
 - Report:
-  - merged files or commits inspected
+  - current branch, upstream branch, and merge base
+  - branch-only files or commits inspected
+  - files or contracts identified as merge hotspots
   - breakages found in the target recipe
   - recipe-local fixes applied
+  - how key merge conflicts were resolved
   - validation commands run and results
   - residual risks or unvalidated paths
 
 ## Read On Demand
 
-- Read `references/tomatovit-parallel-refactor-example.md` when the breakage looks like a config/distributed refactor that silently invalidated a recipe after merges.
+- Read `references/tomatovit-parallel-refactor-example.md` when the upstream branch contains a large shared config/distributed refactor that the current recipe branch now needs to merge in.
 - Read `references/vit-classification-baseline-example.md` when you want a healthy-recipe baseline for config, fake-data, and single-rank startup validation.
