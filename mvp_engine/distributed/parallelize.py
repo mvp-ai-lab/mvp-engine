@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Any, Dict
 
 import torch.nn as nn
@@ -22,6 +23,20 @@ def _set_default_kwargs(kwargs: Dict, key: str, value: Any) -> Dict:
     if key not in kwargs:
         kwargs[key] = value
     return kwargs
+
+
+def _resolve_optional_model_callable(model: nn.Module, attr_name: str) -> Callable[[nn.Module], None] | None:
+    """Load an optional model-class callable used by runtime customization hooks."""
+    cls = model.__class__
+    if not hasattr(cls, attr_name):
+        return None
+
+    hook = getattr(cls, attr_name)
+    if hook is None:
+        return None
+    if not callable(hook):
+        raise TypeError(f"{cls.__name__}.{attr_name} must be callable, got {type(hook)}.")
+    return hook
 
 
 def parallelize_model(
@@ -52,6 +67,8 @@ def parallelize_model(
                 - high_precision_modules / high_precision_mp_policy:
                   parsed and handled inside fsdp2.py
                 - Additional kwargs passed to fully_shard()
+                - Optional model class hook: ``FSDP2_PREFETCHING(model)`` is invoked
+                  after wrapping when the model defines it
 
     Returns:
         The parallelized model wrapped with the specified backend.
@@ -126,8 +143,10 @@ def parallelize_model(
             if backend_kwargs.pop("offload_policy", False):
                 backend_kwargs["offload_policy"] = CPUOffloadPolicy()
 
-            # TODO: support custom prefetching strategy
-
             parallelized_model = parallelize_model_with_fsdp2(model, backend_kwargs)
+            fsdp2_prefetching = _resolve_optional_model_callable(parallelized_model, "FSDP2_PREFETCHING")
+            if fsdp2_prefetching is not None:
+                logger.info(f"Applying custom FSDP2 prefetching on {model.__class__.__name__}...")
+                fsdp2_prefetching(parallelized_model)
 
     return parallelized_model
