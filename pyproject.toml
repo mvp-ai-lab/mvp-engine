@@ -24,18 +24,16 @@ dependencies = [
     "omegaconf",
     "webdataset",
     "rich",
-    "pydantic>=2.0"
+    "pydantic>=2.0",
+    "torch==2.8.0",
+    "torchvision==0.23.0",
 ]
 
 [project.optional-dependencies]
 gpu = [
-    "torch==2.8.0",
-    "torchvision==0.23.0",
     "nvidia-dali-cuda120",
 ]
 npu = [
-    "torch==2.8.0",
-    "torchvision==0.23.0",
     "torch_npu",
 ]
 
