@@ -1,26 +1,29 @@
 # minimal-vlm
 
-This recipe fine-tunes `Qwen/Qwen3-VL-2B-Instruct` on the local demo dataset at `data/minimal_vlm/demo.jsonl`.
+This recipe fine-tunes `Qwen/Qwen3-VL-2B-Instruct` on a local JSONL dataset.
+The default demo dataset is at `data/minimal_vlm/demo.jsonl`.
 
-`mvp_dataset` must already be importable in the runtime environment. The recipe uses it to materialize local JSONL shards under `.jsonl_shards/` next to the source JSONL file for distributed training and to build the training loader.
+`mvp_dataset` must be importable in the runtime environment. The recipe uses it
+to shard local JSONL files under `.jsonl_shards/` next to the source dataset and
+to build the training loader.
 
 ## What it does
 
-- Loads multi-turn multimodal conversations from JSONL.
-- Uses `mvp_dataset` to shard, stream, shuffle, and batch the train data.
+- Loads multimodal chat data from JSONL.
 - Rewrites `<image>` placeholders into the Hugging Face chat format expected by Qwen3-VL.
-- Builds supervised labels from assistant-token masks so all assistant turns contribute to loss.
-- Freezes the visual stack by default and trains the language model plus `lm_head`.
-- Supports separate freeze policy switches for the ViT, projector/merger, and LLM.
+- Supervises all assistant turns in the conversation.
+- Freezes the visual stack by default and trains the LLM plus `lm_head`.
+- Supports optional dataset caching and sample packing.
 
 ## Dataset format
 
 Each JSONL row must contain:
 
-- `messages`: a list of chat messages with `role` and string `content`
+- `messages`: a non-empty list of chat messages with `role` and string `content`
 - `images`: a list of image paths relative to the JSONL file
 
-The total number of image paths must exactly match the total number of `<image>` placeholders across the conversation.
+The total number of image paths must exactly match the total number of `<image>`
+placeholders across the conversation.
 
 Example:
 
@@ -34,22 +37,18 @@ Example:
 }
 ```
 
-## Run
+## Quick Start
 
-Launch with:
+Run the default demo config:
 
 ```bash
 torchrun --nproc_per_node=8 -m mvp_engine.launch --config ./recipes/minimal_vlm/configs/train.yaml
 ```
 
-Key defaults in [`configs/train.yaml`](/home/c84391361/projects/mvp-engine/recipes/minimal_vlm/configs/train.yaml):
+Point the recipe at a custom dataset:
 
-- `model.pretrained_model_name_or_path: Qwen/Qwen3-VL-2B-Instruct`
-- `model.freeze_visual: true`
-- `model.freeze_vit: true`
-- `model.freeze_projector: true`
-- `model.freeze_llm: false`
-- `data.train_path: ./data/minimal_vlm/demo.jsonl`
-- `data.jsonl_num_shards: null` so the recipe derives a shard count from `world_size * max(num_workers, 1)`
-- `data.shuffle_buffer: 128`
-- `data.loader_prefetch_factor: 2`
+```bash
+torchrun --nproc_per_node=8 -m mvp_engine.launch \
+  --config ./recipes/minimal_vlm/configs/train.yaml \
+  data.train_path=/path/to/train.jsonl
+```
