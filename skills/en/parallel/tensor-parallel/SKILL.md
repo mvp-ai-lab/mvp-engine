@@ -43,7 +43,7 @@ Generate `<MODEL_NAME>_TP_MODULE_CONFIG` for a new model under `recipes/`, then 
     ```
 - If the model is an exising model in `transformers`, you can create a wrapper class with the same name as the original model's class in the modeling file and bind `TP_MODULE_CONFIG` there.
 - If the modeling file already contains the top-level wrapper class used by training, only extend that existing class with `TP_MODULE_CONFIG` or `TP_MODULE_POSTPROCESSORS`; do not create a second wrapper class with the same name.
-- If the model needs both TP and FSDP2 prefetching, `TP_MODULE_CONFIG`, `TP_MODULE_POSTPROCESSORS`, and `FSDP2_PREFETCHING` must be merged onto the same top-level model class declaration.
+- If the model needs both TP and FSDP2 prefetching, `TP_MODULE_CONFIG`, `TP_MODULE_POSTPROCESSORS`, and `APPLY_FSDP2_CUSTOM_PREFETCHING` must be merged onto the same top-level model class declaration.
 
 ### 2.1 Check Whether TP Postprocessing Is Required
 - After drafting the TP plan, read the target module's `forward()` carefully.

@@ -43,7 +43,7 @@
     ```
 - 如果模型来自 `transformers` 的现有实现，可以在 modeling 文件中创建一个与原始模型类同名的 wrapper class，并在该类上绑定 `TP_MODULE_CONFIG`。
 - 如果 modeling 文件里已经存在训练实际使用的顶层 wrapper class，只能在这个已有类上追加 `TP_MODULE_CONFIG` 或 `TP_MODULE_POSTPROCESSORS`，禁止再创建第二个同名 wrapper class。
-- 如果模型同时需要 TP 与 FSDP2 prefetching，必须把 `TP_MODULE_CONFIG`、`TP_MODULE_POSTPROCESSORS` 与 `FSDP2_PREFETCHING` 合并到同一个顶层模型类声明中。
+- 如果模型同时需要 TP 与 FSDP2 prefetching，必须把 `TP_MODULE_CONFIG`、`TP_MODULE_POSTPROCESSORS` 与 `APPLY_FSDP2_CUSTOM_PREFETCHING` 合并到同一个顶层模型类声明中。
 
 ### 2.1 检查是否需要 TP 后处理
 - 初步写完 TP plan 后，仔细阅读目标模块的 `forward()`。
