@@ -1,60 +1,58 @@
 ---
 name: model-compile
-description: 为 recipe 接入或调整 model.compile，判断 compile 范围与放置位置、在 optim 下暴露配置，并做正确性与性能验证。`references/` 下的文件是这个 skill 的参考实现。适用于新模型启用 compile、已有 recipe 调整 compile 顺序、排查 compile 回归。
+description: 为 recipe 增加或调整 model.compile，判断 compile 范围与放置位置、在 model 下暴露配置，并验证正确性与性能。
 ---
 
 # Model Compile
 
-## 目标
+## Goal
 
-给 `recipes/<recipe>/` 下的训练 recipe 增加或调整 `model.compile` 支持，并保持：
-- 默认关闭、配置显式开启。
-- compile 作用在训练实际调用的模块上。
-- compile 一定要放在 parallelize_model 之前。
+- 为 `recipes/<recipe>/` 下的训练 recipe 增加或调整 `model.compile` 支持。
+- 让 compile 默认关闭、只通过配置显式开启。
+- 让 compile 作用在真实训练热路径的模块上，并且除非有明确理由，否则保持在 `parallelize_model` 之前。
 
-## 本仓库约定
+## Required Inputs
 
-- 配置键放在 `model` 下：
-  - `model.compile`
-  - `model.compile_backend`
-  - `model.compile_mode`
-- compile 逻辑通常放在 `prepare_model()`。
-- 不要编译 optimizer、scheduler、dataloader。
+- 目标 recipe 路径和其 `prepare_model()` 实现。
+- 真实训练热路径上的候选模块。
+- recipe 是否还有 teacher、EMA、辅助 head 或其他独立分支。
+- 目标 recipe 的 config 或 schema 文件。
+- 如果要做正确性或性能验证，是否有可用 GPU。
 
-## 工作流
+## Workflow
 
 ### 1. 先收集上下文
 
-- 找到 recipe 的 `prepare_model()`。确认基础的模型构建已经完成。
-- 如果 `references/` 里有匹配目标 recipe 的参考实现，先读这些文件。它们是这个 skill 期望的 config 和 engine 接线范例。
-- 搜索仓库内相近 recipe 作为补充先例：
+- 找到 recipe 的 `prepare_model()`，确认基础模型构建已经完成。
+- 如果 `references/` 下有匹配目标 recipe 的参考实现，先读参考文件。
+- 搜索仓库内其他 compile 先例：
 
 ```bash
-rg -n "torch\\.compile|model\\.compile|compile_backend|compile_mode" recipes
+rg -n "torch\.compile|model\.compile|compile_backend|compile_mode" recipes
 ```
-
-对于当前 skill，`references/vit_classification/configs/train.yaml` 和
-`references/vit_classification/engine/vit_classification_engine.py` 是当前参考实现。
 
 ### 2. 决定 compile 范围
 
 - 只 compile 训练热路径上的模块。
-- 确认是否还有 teacher、EMA、辅助 head、蒸馏分支等独立 `forward()` 路径。如果有，询问是否都需要 compile。
-- 如果顶层 `forward()` 混有大量 Python 预处理、token 构造、位置编码准备、输出分支或其他 recipe 胶水逻辑，默认不要直接编整个模型。
-- 这种情况下，先询问用户是否抽出一个 compile-friendly 的 core 模块/可调用对象，只覆盖稠密 tensor 热路径。
-- 除非已经证明有效，否则不要把 compile 拆成很多很小的子模块；过碎的 compile 往往拿不到跨层融合，还会明显拉长首步编译时间。
+- 如果顶层 `forward()` 混有大量 Python 预处理、token 构造、位置编码准备或其他 recipe 胶水逻辑，默认不要直接编整个模型。
+- 当 recipe 还包含 teacher、EMA、辅助 head 或蒸馏分支时，分别评估这些分支，而不是把它们隐藏在主模型决定里。
+- 优先选择一个 compile-friendly 的核心目标，而不是把 compile 切成很多零碎的小子模块。
 
 ### 3. 决定 compile 顺序
 
-默认优先：
-- 先 `model.compile(...)`，再 `parallelize_model(...)`。
-
-硬性要求：
-- 如果不用默认顺序，必须在代码注释或提交说明里写清原因。
+- 默认顺序是：
+  - 先调用 `model.compile(...)`
+  - 再调用 `parallelize_model(...)`
+- 如果某个 recipe 需要其他顺序，必须在代码注释或变更说明里写清原因。
 
 ### 4. 实现配置与代码
 
-推荐模式：
+- 把 compile 配置放在 `model` 下：
+  - `model.compile`
+  - `model.compile_backend`
+  - `model.compile_mode`
+- 通过 recipe 的 schema 或 `ConfigClass` 暴露这些字段。
+- 在 `prepare_model()` 中按如下模式接线：
 
 ```python
 if self.config.model.compile:
@@ -64,32 +62,32 @@ if self.config.model.compile:
     )
 ```
 
-规则：
-- `model.compile` 必须有 `False` 默认值。
-- 新配置系统下，recipe 要通过自己的 Pydantic `ConfigClass` 暴露 `model.compile*` 字段，并使用属性访问读取。
-- teacher/EMA 等额外模块分别 compile，不要隐式绑在主模型逻辑里。
-- 如果需要为了 compile 抽 recipe 专属的 encoder/core 子模块，优先编译一个较大的核心目标，而不是把几十个 block 分别 compile。
-- 不要为了 compile 改写 checkpoint 格式、参数命名或模型对外接口。
+- `model.compile` 默认值必须是 `False`。
+- 不要为了迁就 compile 而改 checkpoint 格式、参数命名或对外接口。
 
-### 5. 验证
+### 5. 验证正确性与性能
 
-至少完成：
-- config 验证
+- 至少验证 config 解析和 compile 接线本身。
+- 如果 GPU 可用，询问用户是否执行：
+  - 单进程或单卡的 forward/backward 冒烟测试
+  - compile 开关前后的 loss 和日志对比
+- 在可行时记录首步编译耗时、是否进入稳态、吞吐变化和显存变化。
 
-如果有 GPU 可以用，询问用户是否做如下测试：
-- 单卡或单进程 `forward/backward` 冒烟。
-- 对比 compile 开/关的 loss 与日志是否正常，不要求逐 bit 一致，但要无明显发散。
+## Validation
 
-建议记录：
-- 首步编译耗时。
-- 是否真的进入了 step 2 / 稳态；如果 compile 只能勉强跑完 step 1，通常还不能算可用。
-- 稳态吞吐变化。
-- 显存变化。
+- `model.compile`、`model.compile_backend` 和 `model.compile_mode` 已接入配置。
+- 被 compile 的目标与真实训练热路径一致。
+- compile 没有在缺乏证据的情况下被切碎成很多小子模块。
+- compile 顺序要么是默认顺序，要么有明确的例外说明。
+- teacher、EMA 等额外分支都被单独评估过。
 
-## 验收清单
+## Output
 
-- [ ] `model.compile`、`model.compile_backend`、`model.compile_mode` 已接入 config。
-- [ ] compile 目标模块与训练真实热路径一致。
-- [ ] compile 目标没有被切得过碎；优先一个 compile-friendly core，而不是很多零散 compiled 子模块。
-- [ ] compile 顺序有明确依据；若是例外顺序，已注明原因。
-- [ ] 额外模块、分支已逐个评估是否需要 compile。
+- 说明更新了哪些 model、engine 和 config 文件。
+- 说明最终被 compile 的模块或可调用对象是什么。
+- 说明采用的 compile 顺序，以及是否偏离默认顺序。
+- 总结已执行的正确性或性能验证，以及仍未验证的部分。
+
+## Read On Demand
+
+- 需要当前 compile 接线参考实现时，读取 `references/vit_classification/configs/train.yaml` 和 `references/vit_classification/engine/vit_classification_engine.py`。
