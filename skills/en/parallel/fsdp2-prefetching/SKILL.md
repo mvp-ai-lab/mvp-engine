@@ -5,12 +5,19 @@ description: Add a recipe/model-local FSDP2 prefetching callable for new models.
 
 # FSDP2 Prefetching (EN)
 
+## When To Use
+
+- Use this skill when the model architecture is fairly complex, such as multi-branch stacks, cross-layer transitions, mixture layers, or any forward path that is not just a simple linear stack. In those cases, a custom FSDP2 prefetching policy can better match the true execution order and improve training throughput.
+- Use it when the user already sees signs that default FSDP2 overlap is not good enough, for example obvious waiting between wrapped modules, branch handoff stalls, or poor communication/compute overlap.
+- If the model is very linear and mostly a standard sequential stack, you often do not need custom prefetching at all. The default FSDP2 behavior is usually enough unless the user explicitly wants extra performance tuning.
+- When executing this skill, explain this tradeoff to the user first: this skill is mainly for models where default prefetch behavior does not match the real execution topology, not something every FSDP2 model must have.
+
 ## Goal
 
 Generate a recipe/model-local FSDP2 prefetch setup callable for the target model and bind it on the top-level model class as `APPLY_FSDP2_CUSTOM_PREFETCHING`.
 
 The runtime contract in this repo is fixed:
-- Entry point: `mvp_engine/distributed/parallelize.py`
+- Entry point: `mvp_engine/distributed/fsdp2.py`
 - Runtime only discovers and calls `model.__class__.APPLY_FSDP2_CUSTOM_PREFETCHING(model)` after FSDP2 wrapping
 - Do not add a YAML toggle or design a generic prefetch DSL
 
@@ -21,13 +28,6 @@ The runtime contract in this repo is fixed:
 - FSDP2 wrap targets or `_no_split_modules`
 - Source for the top-level `forward()` and key submodule `forward()` methods
 - Whether the model contains branches, cross-layer jumps, mixture layers, or shared blocks
-
-## When To Use
-
-- Use this skill when the model architecture is fairly complex, such as multi-branch stacks, cross-layer transitions, mixture layers, or any forward path that is not just a simple linear stack. In those cases, a custom FSDP2 prefetching policy can better match the true execution order and improve training throughput.
-- Use it when the user already sees signs that default FSDP2 overlap is not good enough, for example obvious waiting between wrapped modules, branch handoff stalls, or poor communication/compute overlap.
-- If the model is very linear and mostly a standard sequential stack, you often do not need custom prefetching at all. The default FSDP2 behavior is usually enough unless the user explicitly wants extra performance tuning.
-- When executing this skill, explain this tradeoff to the user first: this skill is mainly for models where default prefetch behavior does not match the real execution topology, not something every FSDP2 model must have.
 
 ## Workflow
 
