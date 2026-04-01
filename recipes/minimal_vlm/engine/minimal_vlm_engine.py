@@ -15,13 +15,13 @@ from mvp_engine.utils.log import logger
 from mvp_engine.utils.misc import calculate_model_size
 
 from ..configs.schema import MinimalVLMConfig
-from ..dataset import MinimalVLMCollator, build_dataset, build_qwen3_vl_processor
-from ..model import build_qwen3_vl_model
-from ..model.packing import (
-    prepare_packed_model_inputs,
-    segmented_flash_attention_patches,
+from ..dataset import (
+    MinimalVLMCollator,
+    ModelInputs,
+    build_dataset,
+    build_qwen3_vl_processor,
 )
-from ..types import TrainBatch
+from ..model import build_qwen3_vl_model
 
 
 @ENGINE_REGISTRY.register()
@@ -32,7 +32,6 @@ class MinimalVLMEngine(Engine):
     config: MinimalVLMConfig
 
     processor: Any | None = None
-    _attention_patch_context: Any | None = None
 
     def prepare_dataloader(self, workflow: str = "train"):
         """Build the train-only dataloader over preprocessed multimodal samples.
@@ -57,11 +56,9 @@ class MinimalVLMEngine(Engine):
         loader = TorchLoader(
             dataset,
             num_workers=int(self.config.data.num_workers),
-            pin_memory=self.device.type == "cuda",
-            persistent_workers=int(self.config.data.num_workers) > 0,
-            prefetch_factor=int(self.config.data.loader_prefetch_factor),
+            pin_memory=self.device.type in ["cuda", "npu"],
+            persistent_workers=False,
         )
-        loader = loader.shuffle(buffer_size=int(self.config.data.shuffle_buffer))
         return loader.batch(
             batch_size=int(self.config.data.batch_size),
             drop_last=True,
@@ -78,12 +75,6 @@ class MinimalVLMEngine(Engine):
             The distributed-ready Qwen3-VL model.
         """
         model = build_qwen3_vl_model(self.config.model).to(self.device)
-        if (
-            bool(self.config.data.packing)
-            and getattr(model.config, "_attn_implementation", None) == "flash_attention_2"
-        ):
-            self._attention_patch_context = segmented_flash_attention_patches()
-            self._attention_patch_context.__enter__()
         logger.info(f" - Model name: {model.__class__.__name__}")
 
         parallelized_model = parallelize_model(
@@ -147,7 +138,7 @@ class MinimalVLMEngine(Engine):
             milestones=[warmup_steps],
         )
 
-    def train_pre_step(self, data: dict[str, Any]) -> TrainBatch:
+    def train_pre_step(self, data: ModelInputs) -> ModelInputs:
         """Move the collated batch to the local device and normalize keys.
 
         Args:
@@ -156,23 +147,12 @@ class MinimalVLMEngine(Engine):
         Returns:
             A normalized batch dictionary ready for the model forward pass.
         """
-        batch: dict[str, Any] = {}
         for key, value in data.items():
             if isinstance(value, torch.Tensor):
-                batch[key] = value.to(self.device, non_blocking=True)
-            else:
-                batch[key] = value
+                data[key] = value.to(self.device, non_blocking=True)
+        return data
 
-        model = getattr(self.model, "module", self.model)
-        batch = prepare_packed_model_inputs(
-            batch,
-            model_config=model.config,
-            attn_implementation=getattr(model.config, "_attn_implementation", None),
-            mask_dtype=self.dtype if self.dtype.is_floating_point else torch.float32,
-        )
-        return batch
-
-    def train_one_step(self, data: TrainBatch) -> dict[str, Any]:
+    def train_one_step(self, data: ModelInputs) -> dict[str, Any]:
         """Run one forward pass and collect training metrics.
 
         Args:
@@ -188,21 +168,9 @@ class MinimalVLMEngine(Engine):
         ):
             outputs = self.model(**data)
 
-        supervised_tokens = (data["labels"] != -100).sum()
-
         return {
             "loss": outputs.loss,
             "logs": {
                 "train/loss": outputs.loss.item(),
-                "train/supervised_tokens": float(supervised_tokens.item()),
             },
         }
-
-    def after_train(self) -> None:
-        """Finalize training and restore any recipe-local patches."""
-        try:
-            super().after_train()
-        finally:
-            if self._attention_patch_context is not None:
-                self._attention_patch_context.__exit__(None, None, None)
-                self._attention_patch_context = None

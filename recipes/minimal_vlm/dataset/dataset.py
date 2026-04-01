@@ -14,46 +14,9 @@ from mvp_dataset.core import RuntimeContext
 from mvp_engine.distributed.utils import get_world_size
 from mvp_engine.utils.log import logger
 
-from .packing import PackedSampleAssembler
+from .types import ModelInputs
 
 IMAGE_PLACEHOLDER = "<image>"
-
-
-def _build_packed_sample_assembler(
-    assemble_context: RuntimeContext,
-    *,
-    max_length: int,
-    selection_strategy: str,
-    open_pack_limit: int,
-    pack_buffer_size: int,
-) -> PackedSampleAssembler:
-    """Build a packed-sample assembler from cache-fingerprintable scalars."""
-    return PackedSampleAssembler(
-        max_length=max_length,
-        selection_strategy=selection_strategy,
-        open_pack_limit=open_pack_limit,
-        pack_buffer_size=pack_buffer_size,
-        seed=int(assemble_context.sample_shuffle_seed),
-    )
-
-
-def _sample_location(sample: dict[str, Any]) -> tuple[Path, int]:
-    """Extract the source JSONL path and 1-based row number from a sample.
-
-    Args:
-        sample: One row emitted by ``mvp_dataset.Dataset.from_jsonl(...)``.
-
-    Returns:
-        A tuple of ``(source_file, line_number)`` for error reporting.
-    """
-    source_file = sample.get("__file__")
-    index_in_file = sample.get("__index_in_file__")
-    if not isinstance(source_file, str) or not source_file:
-        raise ValueError("mvp_dataset JSONL samples must include a string `__file__` field.")
-    if not isinstance(index_in_file, int) or index_in_file < 0:
-        raise ValueError("mvp_dataset JSONL samples must include a non-negative integer `__index_in_file__` field.")
-
-    return Path(source_file).expanduser().resolve(), index_in_file + 1
 
 
 def process_image(image: str, *, image_root: Path | None = None) -> Path:
@@ -116,36 +79,6 @@ def process_message(
     return {"role": role, "content": blocks}
 
 
-def _tokenize_messages(
-    apply_chat_template: Any,
-    messages: list[dict[str, Any]],
-    *,
-    add_generation_prompt: bool,
-    max_length: int,
-) -> torch.Tensor:
-    """Tokenize one conversation fragment with the recipe chat template.
-
-    Args:
-        apply_chat_template: Bound ``processor.apply_chat_template`` callable.
-        messages: Conversation fragment to tokenize.
-        add_generation_prompt: Whether to append the assistant generation prompt.
-        max_length: Maximum tokenized length after truncation.
-
-    Returns:
-        The 1D ``input_ids`` tensor for the provided conversation fragment.
-    """
-    tokenized = apply_chat_template(
-        [messages],
-        tokenize=True,
-        add_generation_prompt=add_generation_prompt,
-        return_dict=True,
-        return_tensors="pt",
-        truncation=True,
-        max_length=max_length,
-    )
-    return tokenized["input_ids"][0]
-
-
 def build_labels(
     apply_chat_template: Any,
     messages: list[dict[str, Any]],
@@ -168,6 +101,24 @@ def build_labels(
     Returns:
         A label tensor where only assistant response tokens are supervised.
     """
+
+    def tokenize_messages(
+        conversation: list[dict[str, Any]],
+        *,
+        add_generation_prompt: bool,
+    ) -> torch.Tensor:
+        """Tokenize one conversation fragment with the recipe chat template."""
+        tokenized = apply_chat_template(
+            [conversation],
+            tokenize=True,
+            add_generation_prompt=add_generation_prompt,
+            return_dict=True,
+            return_tensors="pt",
+            truncation=True,
+            max_length=max_length,
+        )
+        return tokenized["input_ids"][0]
+
     labels = torch.full_like(input_ids, ignore_index)
     valid_length = int(attention_mask.sum().item())
     if valid_length <= 0:
@@ -179,19 +130,15 @@ def build_labels(
 
         prefix_length = 0
         if message_index > 0:
-            prefix_ids = _tokenize_messages(
-                apply_chat_template,
+            prefix_ids = tokenize_messages(
                 messages[:message_index],
                 add_generation_prompt=True,
-                max_length=max_length,
             )
             prefix_length = int(prefix_ids.size(0))
 
-        upto_ids = _tokenize_messages(
-            apply_chat_template,
+        upto_ids = tokenize_messages(
             messages[: message_index + 1],
             add_generation_prompt=False,
-            max_length=max_length,
         )
         upto_length = int(upto_ids.size(0))
 
@@ -210,7 +157,7 @@ def process_sample(
     max_length: int,
     image_placeholder: str = IMAGE_PLACEHOLDER,
     ignore_index: int = -100,
-) -> dict[str, Any]:
+) -> ModelInputs:
     """Validate one JSONL row and convert it into training tensors.
 
     Args:
@@ -229,10 +176,19 @@ def process_sample(
 
     apply_chat_template = processor.apply_chat_template
 
-    source_file, line_number = _sample_location(sample)
+    source_file = sample.get("__file__")
+    index_in_file = sample.get("__index_in_file__")
+    if not isinstance(source_file, str) or not source_file:
+        raise ValueError("mvp_dataset JSONL samples must include a string `__file__` field.")
+    if not isinstance(index_in_file, int) or index_in_file < 0:
+        raise ValueError("mvp_dataset JSONL samples must include a non-negative integer `__index_in_file__` field.")
+
+    source_file = Path(source_file).expanduser().resolve()
+    line_number = index_in_file + 1
     loc = f"{source_file}:{line_number}"
 
     try:
+        # Validate the sample payload before we touch any file or tokenizer work.
         messages = sample.get("messages")
         images = sample.get("images", [])
         if not isinstance(messages, list) or not messages:
@@ -240,15 +196,19 @@ def process_sample(
         if not isinstance(images, list):
             raise ValueError("has invalid `images`.")
 
+        # Normalize image paths against the JSONL location so relative paths work.
         resolved_images = [process_image(p, image_root=source_file.parent) for p in images]
 
+        # Rewrite each message into the processor's multimodal chat structure.
         image_iter = iter(resolved_images)
         rendered_messages = [process_message(msg, image_iter, image_placeholder=image_placeholder) for msg in messages]
 
+        # Catch mismatches between declared images and <image> placeholders early.
         unused = list(image_iter)
         if unused:
             raise ValueError(f"has {len(unused)} unused image path(s).")
 
+        # Tokenize the full conversation once to get model inputs and vision features.
         model_inputs = apply_chat_template(
             [rendered_messages],
             tokenize=True,
@@ -260,6 +220,8 @@ def process_sample(
         )
         input_ids = model_inputs["input_ids"][0]
         attention_mask = model_inputs["attention_mask"][0]
+
+        # Re-tokenize assistant boundaries so only assistant responses contribute to loss.
         labels = build_labels(
             apply_chat_template,
             rendered_messages,
@@ -271,7 +233,8 @@ def process_sample(
     except Exception as exc:
         raise type(exc)(f"{loc} {exc}") from exc
 
-    processed_sample: dict[str, Any] = {
+    # Keep the processor outputs that the training step needs.
+    processed_sample: ModelInputs = {
         "input_ids": input_ids,
         "attention_mask": attention_mask,
         "labels": labels,
@@ -300,19 +263,15 @@ def build_dataset(config: Any, *, processor: Any):
         raise ValueError("Missing `data.train_path` for the minimal VLM recipe.")
     dataset_path = Path(dataset_path_value).expanduser().resolve()
 
-    num_workers = int(config.data.num_workers)
-    jsonl_num_shards = config.data.jsonl_num_shards
-    if jsonl_num_shards is None:
-        jsonl_num_shards = max(get_world_size() * max(num_workers, 1), 1)
-
     output_dir = dataset_path.parent / ".jsonl_shards"
     context = RuntimeContext.from_runtime(seed=int(config.seed))
+    num_shards = max(get_world_size(), 1)
 
     dataset = Dataset.from_jsonl(
         dataset_path,
         context=context,
         resample=True,
-        num_shards=int(jsonl_num_shards),
+        num_shards=int(num_shards),
         output_dir=output_dir,
     ).map(
         partial(
@@ -322,19 +281,4 @@ def build_dataset(config: Any, *, processor: Any):
         )
     )
 
-    dataset = dataset.shuffle(buffer_size=int(config.data.shuffle_buffer))
-
-    if bool(getattr(config.data, "packing", False)):
-        dataset = dataset.assemble(
-            partial(
-                _build_packed_sample_assembler,
-                max_length=int(config.data.max_seq_len),
-                selection_strategy=str(getattr(config.data, "packing_selection_strategy", "best_fit")),
-                open_pack_limit=int(getattr(config.data, "packing_open_pack_limit", 8)),
-                pack_buffer_size=int(getattr(config.data, "packing_buffer_size", 64)),
-            )
-        )
-    if bool(getattr(config.data, "cache", False)):
-        dataset = dataset.cache(show_progress=bool(getattr(config.data, "cache_show_progress", True)))
-
-    return dataset
+    return dataset.shuffle(buffer_size=1000)

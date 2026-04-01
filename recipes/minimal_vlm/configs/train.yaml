@@ -8,48 +8,20 @@ project:
   name: "minimal-vlm"
   dir: "./outputs"
 
-log:
-  interval: 20
-  backends: ["terminal", "file"]
-
 parallel:
   mesh:
     replicate: -1
     shard: 1
     tensor: 1
-  backend_kwargs: {}
 data:
   train_path: "./data/minimal_vlm/demo.jsonl"
-  jsonl_num_shards: null
-  cache: false
-  cache_show_progress: true
-  shuffle_buffer: 128
-  packing: false
-  packing_selection_strategy: "best_fit"
-  packing_open_pack_limit: 8
-  packing_buffer_size: 64
-  loader_prefetch_factor: 2
   max_seq_len: 2048
   batch_size: 1
-  num_workers: 0
 model:
   pretrained_model_name_or_path: "Qwen/Qwen3-VL-2B-Instruct"
-  attn_implementation: null
-  trust_remote_code: true
-  freeze_vit: true
-  freeze_projector: true
-  freeze_llm: false
 optim:
   lr: 1.0e-5
   weight_decay: 0.05
-  gradient_accumulation_steps: 1
-  mixed_precision: "bf16"
-  warmup_ratio: 0.1
-  clip_grad_norm: 1.0
 loop:
   policy: "iter"
   total_steps: 100
-
-checkpoint:
-  keep_n: 3
-  interval: 50

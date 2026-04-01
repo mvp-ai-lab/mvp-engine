@@ -5,15 +5,15 @@ The default demo dataset is at `data/minimal_vlm/demo.jsonl`.
 
 `mvp_dataset` must be importable in the runtime environment. The recipe uses it
 to shard local JSONL files under `.jsonl_shards/` next to the source dataset and
-to build the training loader.
+to build the training dataset.
 
 ## What it does
 
 - Loads multimodal chat data from JSONL.
 - Rewrites `<image>` placeholders into the Hugging Face chat format expected by Qwen3-VL.
 - Supervises all assistant turns in the conversation.
-- Freezes the visual stack by default and trains the LLM plus `lm_head`.
-- Supports optional dataset caching and sample packing.
+- Freezes the visual stack by default and trains the language model plus `lm_head`.
+- Runs through the shared distributed wrapper with a DDP-safe default mesh for `torchrun`.
 
 ## Dataset format
 

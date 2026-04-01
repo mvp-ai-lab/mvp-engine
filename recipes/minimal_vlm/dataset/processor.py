@@ -18,7 +18,7 @@ def build_qwen3_vl_processor(model_config: Any):
     """
     processor = AutoProcessor.from_pretrained(
         model_config.pretrained_model_name_or_path,
-        trust_remote_code=bool(getattr(model_config, "trust_remote_code", True)),
+        trust_remote_code=True,
     )
 
     tokenizer = getattr(processor, "tokenizer", None)

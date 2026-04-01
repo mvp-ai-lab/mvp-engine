@@ -24,35 +24,18 @@ def _is_projector_parameter(name: str) -> bool:
     return any(name.startswith(prefix) for prefix in PROJECTOR_PREFIXES)
 
 
-def apply_freeze_policy(
-    model,
-    *,
-    freeze_vit: bool = False,
-    freeze_projector: bool = False,
-    freeze_llm: bool = False,
-) -> int:
-    """Apply the recipe freeze policy to Qwen3-VL parameter groups.
+def apply_default_freeze_policy(model) -> int:
+    """Freeze the visual encoder and projector for the default demo setup.
 
     Args:
         model: Loaded Qwen3-VL model instance.
-        freeze_vit: Whether to freeze the visual encoder stack.
-        freeze_projector: Whether to freeze the visual projector and merger stack.
-        freeze_llm: Whether to freeze the language model and ``lm_head``.
 
     Returns:
         The number of parameters that were marked non-trainable.
     """
     frozen_parameters = 0
     for name, parameter in model.named_parameters():
-        should_freeze = False
-        if freeze_vit and name.startswith("model.visual.") and not _is_projector_parameter(name):
-            should_freeze = True
-        if freeze_projector and _is_projector_parameter(name):
-            should_freeze = True
-        if freeze_llm and (name.startswith("model.language_model.") or name.startswith("lm_head.")):
-            should_freeze = True
-
-        if should_freeze:
+        if name.startswith("model.visual.") or _is_projector_parameter(name):
             parameter.requires_grad = False
             frozen_parameters += parameter.numel()
 
@@ -68,28 +51,10 @@ def build_qwen3_vl_model(model_config: Any):
     Returns:
         The initialized Qwen3-VL model.
     """
-    freeze_vit = bool(getattr(model_config, "freeze_vit", True))
-    freeze_projector = bool(getattr(model_config, "freeze_projector", True))
-    freeze_llm = bool(getattr(model_config, "freeze_llm", False))
-    attn_implementation = getattr(model_config, "attn_implementation", None)
-
-    model_kwargs = {
-        "trust_remote_code": bool(getattr(model_config, "trust_remote_code", True)),
-        "torch_dtype": "auto",
-    }
-    if attn_implementation is not None:
-        model_kwargs["attn_implementation"] = attn_implementation
-
     model = AutoModelForImageTextToText.from_pretrained(
         model_config.pretrained_model_name_or_path,
-        **model_kwargs,
+        trust_remote_code=True,
+        torch_dtype="auto",
     )
-    if attn_implementation is not None:
-        model.config._attn_implementation = attn_implementation
-    apply_freeze_policy(
-        model,
-        freeze_vit=freeze_vit,
-        freeze_projector=freeze_projector,
-        freeze_llm=freeze_llm,
-    )
+    apply_default_freeze_policy(model)
     return model

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import torch
 from torch.nn.utils.rnn import pad_sequence
+
+from .types import ModelInputs
 
 
 class MinimalVLMCollator:
@@ -24,7 +24,7 @@ class MinimalVLMCollator:
         self.pad_token_id = pad_token_id
         self.ignore_index = ignore_index
 
-    def __call__(self, batch: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
+    def __call__(self, batch: list[ModelInputs]) -> ModelInputs:
         """Pad token tensors and concatenate optional vision tensors.
 
         Args:
@@ -33,7 +33,7 @@ class MinimalVLMCollator:
         Returns:
             A batched tensor dictionary ready for model forward passes.
         """
-        model_inputs = {
+        model_inputs: ModelInputs = {
             "input_ids": pad_sequence(
                 [sample["input_ids"] for sample in batch],
                 batch_first=True,
@@ -50,15 +50,6 @@ class MinimalVLMCollator:
                 padding_value=self.ignore_index,
             ),
         }
-
-        if any("pack_segment_ids" in sample for sample in batch):
-            if not all("pack_segment_ids" in sample for sample in batch):
-                raise ValueError("Packed and unpacked samples cannot be mixed in the same minimal_vlm batch.")
-            model_inputs["pack_segment_ids"] = pad_sequence(
-                [sample["pack_segment_ids"] for sample in batch],
-                batch_first=True,
-                padding_value=0,
-            )
 
         pixel_values = [sample["pixel_values"] for sample in batch if sample.get("pixel_values") is not None]
         if pixel_values:
