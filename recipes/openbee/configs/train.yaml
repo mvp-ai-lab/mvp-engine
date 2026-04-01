@@ -1,0 +1,27 @@
+dev_mode: false
+engine: OpenbeeEngine
+
+seed: 42
+deterministic: false
+
+project:
+  name: "openbee-alignment"
+  dir: "./outputs"
+
+parallel:
+  mesh:
+    replicate: -1
+    shard: 1
+    tensor: 1
+data:
+  train_path: "./data/openbee/alignment_demo.jsonl"
+  max_seq_len: 2048
+  batch_size: 1
+model:
+  pretrained_model_name_or_path: "Qwen/Qwen3-VL-2B-Instruct"
+optim:
+  lr: 1.0e-5
+  weight_decay: 0.05
+loop:
+  policy: "iter"
+  total_steps: 100
