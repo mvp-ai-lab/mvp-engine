@@ -60,6 +60,7 @@ class BaseFSDP2Config(BaseModel):
     model_config = ConfigDict(frozen=False, extra="allow")
 
     reshard_after_forward: bool = True
+    offload_policy: bool = False
     mp_policy: BaseMpPolicyConfig = Field(default_factory=BaseMpPolicyConfig)
     high_precision_modules: list[str] = []
     target_classes: list[str] = []

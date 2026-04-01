@@ -3,6 +3,7 @@ from typing import Any, Dict
 import torch.nn as nn
 from omegaconf import OmegaConf
 from torch.distributed.device_mesh import DeviceMesh
+from torch.distributed.fsdp import CPUOffloadPolicy
 
 from mvp_engine.utils.log import logger
 
@@ -121,7 +122,10 @@ def parallelize_model(
                 },
             )
 
-            # TODO: support cpu offloading
+            # Map the config-level boolean to PyTorch's composable FSDP2 policy object.
+            if backend_kwargs.pop("offload_policy", False):
+                backend_kwargs["offload_policy"] = CPUOffloadPolicy()
+
             # TODO: support custom prefetching strategy
 
             parallelized_model = parallelize_model_with_fsdp2(model, backend_kwargs)
