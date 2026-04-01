@@ -42,6 +42,8 @@
         TP_MODULE_CONFIG = <MODEL_NAME>_TP_MODULE_CONFIG
     ```
 - 如果模型来自 `transformers` 的现有实现，可以在 modeling 文件中创建一个与原始模型类同名的 wrapper class，并在该类上绑定 `TP_MODULE_CONFIG`。
+- 如果 modeling 文件里已经存在训练实际使用的顶层 wrapper class，只能在这个已有类上追加 `TP_MODULE_CONFIG` 或 `TP_MODULE_POSTPROCESSORS`，禁止再创建第二个同名 wrapper class。
+- 如果模型同时需要 TP 与 FSDP2 prefetching，必须把 `TP_MODULE_CONFIG`、`TP_MODULE_POSTPROCESSORS` 与 `APPLY_FSDP2_CUSTOM_PREFETCHING` 合并到同一个顶层模型类声明中。
 
 ### 2.1 检查是否需要 TP 后处理
 - 初步写完 TP plan 后，仔细阅读目标模块的 `forward()`。
@@ -102,6 +104,8 @@
 - [ ] 每个 plan key 都是该类中的真实子模块名。
 - [ ] Plan value 只使用 `"col"` 或 `"row"`。
 - [ ] `<MODEL_NAME>_TP_MODULE_CONFIG` 已绑定到顶层模型类。
+- [ ] 若顶层 wrapper class 已存在，本次修改是在原类上追加属性，而不是新建第二个同名类。
+- [ ] 若模型同时启用 TP 与 FSDP2 prefetching，相关类属性已合并到同一个顶层模型类声明中。
 - [ ] 所有在 `forward()` 中使用缓存全局元数据的模块都已检查是否需要 TP 后处理。
 - [ ] 如果存在 `TP_MODULE_POSTPROCESSORS`，其中的 key 必须与真实运行时类名一致。
 - [ ] 后处理 hook 只修改本地运行时元数据，不得改写预训练参数张量。
