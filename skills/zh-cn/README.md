@@ -95,6 +95,7 @@ Agent 会按 skill 工作流生成适配代码和测试。
 - `git/pr-feedback`：[git/pr-feedback/SKILL.md](git/pr-feedback/SKILL.md)
 - `git/pr-skill-review`：[git/pr-skill-review/SKILL.md](git/pr-skill-review/SKILL.md)
 - `experiment/analysis`：[experiment/analysis/SKILL.md](experiment/analysis/SKILL.md)
+- `git/recipe-merge-repair`：[git/recipe-merge-repair/SKILL.md](git/recipe-merge-repair/SKILL.md)
 
 ## 如何新增 Skill
 
