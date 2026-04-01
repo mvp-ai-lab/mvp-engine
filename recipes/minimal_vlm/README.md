@@ -39,6 +39,13 @@ Example:
 
 ## Quick Start
 
+Download Demo Data:
+
+```bash
+cd data
+hf download mvp-lab/mvp-engine-minimal-vlm-data ./minimal_vlm --repo-type=dataset
+```
+
 Run the default demo config:
 
 ```bash
