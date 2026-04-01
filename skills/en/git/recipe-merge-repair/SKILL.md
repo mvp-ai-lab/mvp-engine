@@ -177,8 +177,3 @@ description: Systematically compare the current development branch against an up
   - how key merge conflicts were resolved
   - what validation ran and the results
   - remaining risks, limitations, or unvalidated paths
-
-## Read On Demand
-
-- Read `references/tomatovit-parallel-refactor-example.md` when the target recipe has heavy custom engine, dataset, or checkpoint logic and is clearly drifting from current shared contracts.
-- Read `references/vit-classification-baseline-example.md` when you need an already-aligned control recipe to separate shared-stack problems from recipe-local extension drift.
