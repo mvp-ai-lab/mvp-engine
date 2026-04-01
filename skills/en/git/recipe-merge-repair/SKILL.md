@@ -180,5 +180,5 @@ description: Systematically compare the current development branch against an up
 
 ## Read On Demand
 
-- Read `references/tomatovit-parallel-refactor-example.md` when the upstream branch contains a large shared config/distributed refactor that the current recipe branch now needs to merge.
-- Read `references/vit-classification-baseline-example.md` when you want a healthy-recipe baseline for validation in this repository.
+- Read `references/tomatovit-parallel-refactor-example.md` when the target recipe has heavy custom engine, dataset, or checkpoint logic and is clearly drifting from current shared contracts.
+- Read `references/vit-classification-baseline-example.md` when you need an already-aligned control recipe to separate shared-stack problems from recipe-local extension drift.

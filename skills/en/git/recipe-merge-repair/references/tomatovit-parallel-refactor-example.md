@@ -1,50 +1,50 @@
-# Tomatovit Parallel Refactor Example
+# TomatoViT Shared-Contract Drift Example
 
-Use this example when a recipe broke after shared config and distributed refactors.
+Use this example when the target recipe carries substantial custom engine, dataset, and checkpoint logic of its own, and the upstream shared layer has evolved in config, parallelism, or runtime contracts.
 
-## Incoming changes to inspect
+## Why this is a strong merge-repair example
 
-- `c3e6ef1 enhance (refactor): a better config system (#56)`
-- `c37c2a7 support fsdp2 params cpu offload (#60)`
-- `196b919 fix ckpt creation bug (#57)`
+`recipes/tomatovit/` is not a lightweight recipe that only swaps model settings. It customizes:
 
-These commits changed repo-wide contracts that `recipes/tomatovit/` depended on.
+- its own engine lifecycle and training logic
+- a WebDataset + DALI data path
+- extra state such as a teacher model, PartialFC heads, and iBOT loss
+- custom save/load/checkpoint behavior
+- multiple stage configs and parallel configs
 
-## Breakages found in `recipes/tomatovit/`
+That makes it a realistic example of a common merge-repair pattern: failures do not land in one config key only. They show up across entrypoints, runtime paths, auxiliary state, and restore paths at the same time.
 
-1. `TomatoViTEngine` still relied on `BaseEngineConfig`, so recipe-only fields such as `data.*`, `model.*`, and `optim.compile*` were dropped during validation.
-2. The engine still called `parallelize_model(..., backend=...)`, but the shared helper no longer accepts a backend argument.
-3. The engine still expected `self.parallel_backend` and old checkpoint helper signatures.
-4. `stage1_fsdp.yaml`, `stage1_tp.yaml`, and `stage1_fsdp2_tp.yaml` still used old mesh keys: `dp_size`, `fsdp2_size`, `tp_size`.
-5. The old flat `parallel.backend_kwargs` layout no longer matched the repo schema.
-6. `stage1.yaml` and `stage2.yaml` still stored checkpoint settings under `loop.checkpoint` instead of the top-level `checkpoint` block.
-7. TP-enabled configs could not work because `TomatoViTModel` defined no `TP_MODULE_CONFIG`.
+## Drift signals you can already see in the current repository
 
-## Repair shape
+1. `recipes/tomatovit/engine/tomatovit_engine.py` does not define a recipe-local `ConfigClass`, but the engine reads many recipe-specific fields such as `data.*`, `model.*`, `optim.compile_*`, and `model.load_from.*`.
+2. There is no checked-in `schema.py` under `recipes/tomatovit/configs/`, while `mvp_engine/engine/engine.py` validates configs through `ConfigClass` before the engine runs. If the recipe keeps inheriting `BaseEngineConfig`, those recipe-specific fields are dropped before they reach the engine.
+3. The engine still depends on `self.parallel_backend`, but the current shared `Engine` does not expose that attribute.
+4. The same engine still calls `parallelize_model(..., backend=...)`, while the current `mvp_engine/distributed/parallelize.py` only accepts `model`, `device_mesh`, and `backend_kwargs`.
+5. The recipe’s custom checkpoint flow still keeps core settings under `loop.checkpoint` and still uses the older `save_checkpoint(...)` / `load_checkpoint(...)` calling pattern, while the shared engine and shared checkpoint helpers are organized around top-level `checkpoint` config and mesh-driven semantics.
+6. `stage1_fsdp.yaml`, `stage1_tp.yaml`, and `stage1_fsdp2_tp.yaml` still use older mesh keys such as `dp_size`, `fsdp2_size`, and `tp_size`, and still use the old `backend_kwargs` layout.
 
-- Add `recipes/tomatovit/configs/schema.py` with recipe-local Pydantic models.
-- Set `ConfigClass` on `TomatoViTEngine`.
-- Update the engine to:
-  - route DDP vs FSDP2 from `DeviceMesh`
-  - call `parallelize_model(...)` with the current signature
-  - call checkpoint helpers with `mesh` first
-- Migrate the YAML files to current mesh/backend layout.
-- Add recipe-local TP module config for:
-  - `TomatoViTFlashAttention2`
-  - `TomatoViTMoTFlashAttention2`
-  - `SiglipMLP`
+These signals tell you this is not a “fix one import and move on” situation. The target recipe has multiple outdated assumptions about the shared layer at once.
 
-## Validation shape
+## How the skill should use this example
 
-- Compile the recipe Python tree.
-- Run a config/schema smoke test that proves the recipe fields survive validation.
-- Run a GPU smoke test that:
-  - allocates a GPU with the local cluster command or alias
-  - activates `.venv`
-  - builds a temporary local pretrained fixture
-  - instantiates the recipe model/engine on the updated config path
+For this kind of recipe, the skill should not jump straight into textual conflict resolution. It should first build a hotspot map:
 
-## Why this belongs in a skill
+- which issues belong to config entrypoints and schema drift
+- which issues come from the engine depending on old shared interfaces
+- which issues belong to runtime gaps such as parallelism, checkpointing, and restore flows
+- which issues come from recipe-owned extra state such as teacher/head/scheduler/loss handling
 
-- The workflow is stable: inspect merged contracts, map recipe dependencies, repair locally, validate.
-- The actual fix is recipe-specific: schema fields, mesh layout, TP plan, and engine wiring depend on the recipe.
+In other words, this example should remind the agent that a complex recipe often needs “entrypoint + runtime + restore-path” repair, not just single-point patching.
+
+## A good repair order to extract from this example
+
+1. Restore the config entrypoint first: confirm that recipe-local schema, engine `ConfigClass`, and YAML layout still deliver the right fields into the engine.
+2. Then repair contract drift between the engine and shared helpers: parallelism, checkpointing, runtime entrypoints, compile/optimizer hooks, and related call sites.
+3. Then repair the recipe-owned auxiliary state paths: teacher model, auxiliary heads, loss modules, schedulers, and custom load/save behavior.
+4. Finish with targeted post-merge validation instead of treating merge completion as proof.
+
+## The most important lesson from this example
+
+- Complex recipe breakages often span multiple layers and cannot be repaired one error at a time.
+- If a recipe wrapped or reimplemented shared capabilities locally, those “second-layer wiring” points are where shared-layer evolution will usually break first.
+- Merge repair is not only about making the main model run again; it must also cover auxiliary state, restore paths, and long-running training entrypoints.

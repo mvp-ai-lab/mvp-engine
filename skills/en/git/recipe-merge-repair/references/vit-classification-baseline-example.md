@@ -1,50 +1,53 @@
-# ViT Classification Baseline Example
+# ViT Classification Control-Group Example
 
-Use this example when you need a known-good baseline for a recipe that is already aligned with the current engine contracts.
+Use this example when you need a recipe that is already mostly aligned with the current shared layer, so you can use it as a control group and determine whether a failure comes from shared infrastructure or from the target recipe itself.
 
-## Why this recipe is useful as a baseline
+## Why it works well as a control group
 
-- `recipes/vit_classification/` already has:
-  - a recipe-local `ConfigClass`
-  - fake-data support for offline smoke runs
-  - current `parallelize_model(...)` usage
-  - current top-level `checkpoint` config layout
+`recipes/vit_classification/` has several properties that are especially useful in this repository:
 
-That makes it a good comparison point when another recipe appears broken after merges.
+- a clear recipe-local schema in `recipes/vit_classification/configs/schema.py`
+- an engine that explicitly sets `ConfigClass`
+- a clean split across dataset / model / engine layers
+- current `parallelize_model(...)` usage that matches the shared helper
+- current top-level `checkpoint` layout in config
+- a `use_fake_data` path that makes lightweight validation possible without real data
 
-## What the validation found
+That makes it a strong reference point for “what a healthy recipe looks like under current shared contracts.”
 
-1. The recipe code paths were already compatible with the current engine/config stack.
-2. The checked-in template default was not single-rank friendly:
-   - `parallel.mesh.replicate: -1`
-   - `parallel.mesh.shard: 8`
-   - `parallel.mesh.tensor: 1`
-3. On a `WORLD_SIZE=1` smoke run, that layout inferred `replicate=0` and failed during `DeviceMesh` initialization before recipe logic ran.
+## How to use this example during merge repair
 
-## Repair shape
+When another recipe breaks after a merge, use `vit_classification` as a control group to ask three questions:
 
-- Keep the recipe template runnable by default:
-  - change `parallel.mesh.shard` from `8` to `1`
-  - keep a short comment explaining that multi-rank FSDP2 users should raise `shard` intentionally
-- Make common tuning overrides ergonomic under Hydra struct mode:
-  - expose `patch_size`, `num_channels`, `hidden_size`, `intermediate_size`, `num_hidden_layers`, and `num_attention_heads` in `train.yaml`
-  - this allows plain overrides like `model.hidden_size=192` during smoke tests
+1. What does the current shared-layer usage look like?
+   - How does the engine receive validated config?
+   - How does the model enter the current parallelization path?
+   - How does the dataset provide a minimal validation path?
+2. Where does the target recipe diverge from the control group?
+   - Is the difference in entrypoints, schema, or helper usage?
+   - Or is the target recipe genuinely more complex in its local logic?
+3. Is the failure really merge breakage, or is the chosen validation path itself bad?
+   - If even the control group does not run, suspect shared infrastructure or the validation environment first.
+   - If the control group runs and the target recipe does not, keep narrowing to recipe-local hotspots.
 
-## Validation shape
+## Concrete lessons from the current repository state
 
-- `python -m compileall recipes/vit_classification`
-- Config/schema composition for `train.yaml`
-- GPU smoke with:
-  - fake data
-  - local model construction (`load_pretrained_weights: false`)
-  - single-rank mesh
-  - engine startup and one training forward pass
+- `recipes/vit_classification/engine/vit_classification_engine.py` shows a relatively clean prepare pattern under the current shared engine contract: build dataset/model first, then call the shared parallel helper.
+- `recipes/vit_classification/dataset/imagenet.py` shows a very useful validation tactic: preserve a fake-data path so smoke tests are not blocked by unavailable external data.
+- `recipes/vit_classification/configs/train.yaml` also shows that even a healthy recipe is not automatically perfect for every validation environment; for example, the checked-in mesh defaults are more naturally aimed at a multi-rank template, so a single-rank smoke run often needs a temporary override.
 
-## Practical lesson for the skill
+That last point matters: a control group is not a “zero-problem sample.” It is a reference frame that helps you classify where the real problem lives.
 
-- Not every recipe needs repair code.
-- Sometimes the only issue is that the default validation path is invalid for the requested world size.
-- The skill should distinguish:
-  - shared-contract breakage
-  - recipe logic breakage
-  - smoke-only mesh/default mismatch
+## What the skill should learn from this example
+
+- When the target recipe is complex, starting from a healthy, simpler, already-aligned recipe can dramatically reduce blind repair work.
+- A good control group should cover:
+  - the current shared configuration entrypoint
+  - the current shared runtime entrypoint
+  - a minimum viable validation path
+- If the difference between the control group and the target recipe lives mostly in recipe-local extensions, then the merge-repair effort should move back to those extensions rather than continue doubting the entire shared stack.
+
+## The most important lesson from this example
+
+- Not every merge breakage should start with the most complex recipe. Sometimes reading a healthy recipe first is the fastest way to recover the current “correct posture.”
+- The role of a control group is not to replace the target recipe. It is to help the agent decide whether the current failure is a shared-layer regression, recipe-local drift, or simply a bad validation path.

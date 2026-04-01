@@ -1,50 +1,53 @@
-# ViT Classification 基线示例
+# ViT Classification 控制组示例
 
-当你需要一个“当前仓库里已经健康对齐的 recipe”作为对照时，优先看这个例子。
+当你需要一个“已经基本对齐当前共享层”的 recipe 作为控制组，来判断 breakage 到底来自共享层还是来自目标 recipe 本身时，优先参考这个例子。
 
-## 为什么它适合作为基线
+## 为什么它适合作为控制组
 
-- `recipes/vit_classification/` 已经具备：
-  - recipe-local `ConfigClass`
-  - 可离线 smoke 的 fake data 支持
-  - 当前版本的 `parallelize_model(...)` 调用方式
-  - 当前版本的顶层 `checkpoint` 配置结构
+`recipes/vit_classification/` 在当前仓库里具备几个很有价值的特征：
 
-因此，当另一个 recipe 在 merge 之后疑似损坏时，它是很好的对照样本。
+- 有清晰的 recipe-local schema：`recipes/vit_classification/configs/schema.py`
+- engine 显式设置了 `ConfigClass`
+- dataset / model / engine 三层分工清楚，入口比较短
+- `parallelize_model(...)` 的调用方式已经对齐当前共享 helper
+- 配置里已经使用当前顶层 `checkpoint` 布局
+- dataset 提供 `use_fake_data` 路径，便于在缺真实数据时做轻量验证
 
-## 验证中发现了什么
+这使它很适合当作“当前共享契约下，健康 recipe 大致应该长什么样”的参照物。
 
-1. 这个 recipe 的代码路径本身已经兼容当前 engine/config 契约。
-2. 但模板默认 mesh 不适合单卡 smoke：
-   - `parallel.mesh.replicate: -1`
-   - `parallel.mesh.shard: 8`
-   - `parallel.mesh.tensor: 1`
-3. 在 `WORLD_SIZE=1` 的验证里，这会推导出 `replicate=0`，并在 `DeviceMesh` 初始化阶段直接失败，还没执行到 recipe 逻辑。
+## 这个例子在 merge-repair 里怎么用
 
-## 修复形态
+当另一个 recipe merge 后坏掉时，可以把 `vit_classification` 当成控制组去问三类问题：
 
-- 让模板默认值可以直接跑 smoke：
-  - 把 `parallel.mesh.shard` 从 `8` 改成 `1`
-  - 同时保留简短注释，说明多卡 FSDP2 训练时应主动把 `shard` 调大
-- 让常用调参在 Hydra struct mode 下更顺手：
-  - 在 `train.yaml` 中显式写出 `patch_size`、`num_channels`、`hidden_size`、`intermediate_size`、`num_hidden_layers`、`num_attention_heads`
-  - 这样 smoke test 时可以直接写 `model.hidden_size=192` 这类普通 override
+1. 共享层的当前用法是什么。
+   - 例如 engine 如何拿到经过校验的 config
+   - model 如何走当前的并行入口
+   - dataset 如何提供一个可验证的最小路径
+2. 目标 recipe 偏离控制组的地方在哪里。
+   - 是入口、schema、helper 调用方式不同
+   - 还是确实因为 recipe 业务逻辑更复杂
+3. 当前失败到底是 merge breakage，还是验证路径本身选得不好。
+   - 如果控制组都跑不起来，优先怀疑共享层或验证环境
+   - 如果控制组能跑、目标 recipe 不行，就继续缩小到 recipe-local hotspot
 
-## 验证形态
+## 从仓库现状里可以提炼出的具体经验
 
-- `python -m compileall recipes/vit_classification`
-- 对 `train.yaml` 做 config/schema 组合验证
-- GPU smoke 包括：
-  - fake data
-  - 本地构造模型（`load_pretrained_weights: false`）
-  - 单卡 mesh
-  - engine 启动和一次训练前向
+- `recipes/vit_classification/engine/vit_classification_engine.py` 展示了当前共享 engine 契约下比较干净的 prepare pattern：先 build dataset/model，再调用共享 parallel helper。
+- `recipes/vit_classification/dataset/imagenet.py` 展示了一个很有用的验证策略：在真实依赖不可用时，保留 fake-data 路径，让 smoke test 不被外部数据阻塞。
+- `recipes/vit_classification/configs/train.yaml` 说明“健康 recipe”也未必默认适合所有验证环境；例如当前 mesh 默认值更偏向多卡模板，在单卡 smoke 时往往需要临时 override。
 
-## 这个 skill 应该吸收的经验
+这点很重要：控制组不是“永远零问题”的样板，而是一个能帮助你区分问题来源的参考系。
 
-- 不是每个 recipe 都需要写修复代码。
-- 有时真正的问题只是“默认验证路径和当前 world size 不兼容”。
-- skill 应该区分三类问题：
-  - 共享契约真的变了
-  - recipe 逻辑真的坏了
-  - 只是 smoke 用的 mesh / 默认值不匹配
+## skill 应该从这个例子吸收什么
+
+- 当目标 recipe 很复杂时，先找一个健康、简单、已对齐共享层的 recipe 做对照，能大幅减少盲修。
+- 一个好的控制组应该覆盖：
+  - 当前共享配置入口
+  - 当前共享运行时入口
+  - 最小可行验证路径
+- 如果控制组和目标 recipe 的差异只出现在 recipe-local 扩展层，那么 merge repair 的重点就应该回到这些扩展层，而不是继续怀疑整个 shared stack。
+
+## 这个例子最有价值的经验
+
+- 不是每个 merge breakage 都需要直接去翻复杂 recipe；有时先读一个健康 recipe，能更快看清“当前标准姿势”是什么。
+- 控制组的意义不是替代目标 recipe，而是帮助 agent 判断：当前看到的是共享层回归、recipe-local 漂移，还是验证路径选择错误。

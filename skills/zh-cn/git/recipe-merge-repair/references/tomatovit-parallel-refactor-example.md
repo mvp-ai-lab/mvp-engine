@@ -1,50 +1,50 @@
-# Tomatovit 并行重构示例
+# TomatoViT 共享契约漂移示例
 
-当某个 recipe 在共享 config / distributed 重构之后失效时，优先参考这个例子。
+当目标 recipe 自己带有较重的 engine / dataset / checkpoint 定制，而上游共享层在配置、并行或运行时契约上发生演进时，优先参考这个例子。
 
-## 先看哪些合入改动
+## 为什么它是好的 merge-repair 样本
 
-- `c3e6ef1 enhance (refactor): a better config system (#56)`
-- `c37c2a7 support fsdp2 params cpu offload (#60)`
-- `196b919 fix ckpt creation bug (#57)`
+`recipes/tomatovit/` 不是一个“只换模型配置”的轻量 recipe，它同时定制了：
 
-这些 commit 改了全仓共享契约，而 `recipes/tomatovit/` 仍然依赖旧契约。
+- 自己的 engine 生命周期与训练逻辑
+- WebDataset + DALI 数据路径
+- teacher model、PartialFC heads、iBOT loss 等附加状态
+- 自己的 save/load/checkpoint 逻辑
+- 多份 stage 配置和并行配置
 
-## 在 `recipes/tomatovit/` 中发现的 breakages
+这意味着它很适合拿来演示一种真实场景：merge 失败点不会只落在单个 config 字段上，而是会同时出现在入口、运行路径、辅助状态和恢复链路上。
 
-1. `TomatoViTEngine` 还在使用 `BaseEngineConfig`，导致 `data.*`、`model.*`、`optim.compile*` 等 recipe 字段在校验后被静默丢弃。
-2. engine 仍然调用 `parallelize_model(..., backend=...)`，但共享 helper 已经不接收 `backend` 参数。
-3. engine 仍然依赖 `self.parallel_backend` 以及旧版 checkpoint helper 签名。
-4. `stage1_fsdp.yaml`、`stage1_tp.yaml`、`stage1_fsdp2_tp.yaml` 还在使用旧 mesh key：`dp_size`、`fsdp2_size`、`tp_size`。
-5. 旧的扁平 `parallel.backend_kwargs` 结构已经不符合当前 schema。
-6. `stage1.yaml` 和 `stage2.yaml` 仍然把 checkpoint 放在 `loop.checkpoint` 下，而不是新的顶层 `checkpoint`。
-7. 启用 TP 的配置无法工作，因为 `TomatoViTModel` 没有定义 `TP_MODULE_CONFIG`。
+## 当前仓库里能直接看到的漂移信号
 
-## 修复形态
+1. `recipes/tomatovit/engine/tomatovit_engine.py` 没有设置 recipe-local `ConfigClass`，但 engine 代码大量访问 `data.*`、`model.*`、`optim.compile_*`、`model.load_from.*` 等 recipe 专属字段。
+2. `recipes/tomatovit/configs/` 目录下没有 checked-in 的 `schema.py`，而 `mvp_engine/engine/engine.py` 会先用 `ConfigClass` 做 Pydantic 校验；如果继续沿用 `BaseEngineConfig`，这些 recipe 字段会在进入 engine 前被丢掉。
+3. `recipes/tomatovit/engine/tomatovit_engine.py` 仍在依赖 `self.parallel_backend`，但当前共享 `Engine` 并没有提供这个属性。
+4. 同一个 engine 仍然调用旧式 `parallelize_model(..., backend=...)`，但当前 `mvp_engine/distributed/parallelize.py` 只接收 `model`、`device_mesh` 和 `backend_kwargs`。
+5. 自定义 checkpoint 路径仍然把核心设置放在 `loop.checkpoint` 下，并继续使用旧式 `save_checkpoint(...)` / `load_checkpoint(...)` 调用方式；而共享 `Engine` 和共享 checkpoint helper 已经围绕顶层 `checkpoint` 和 `mesh` 驱动的语义组织。
+6. `stage1_fsdp.yaml`、`stage1_tp.yaml`、`stage1_fsdp2_tp.yaml` 仍然使用 `dp_size`、`fsdp2_size`、`tp_size` 这类旧 mesh key，并且 `backend_kwargs` 还是旧布局。
 
-- 新增 `recipes/tomatovit/configs/schema.py`，补 recipe-local Pydantic schema。
-- 在 `TomatoViTEngine` 上设置 `ConfigClass`。
-- 更新 engine：
-  - 从 `DeviceMesh` 推断 DDP/FSDP2
-  - 按当前签名调用 `parallelize_model(...)`
-  - 用 `mesh` 作为 checkpoint helper 的首参
-- 把 YAML 迁移到当前 mesh / backend 布局。
-- 给以下模块补 recipe-local TP plan：
-  - `TomatoViTFlashAttention2`
-  - `TomatoViTMoTFlashAttention2`
-  - `SiglipMLP`
+这些信号说明：这不是“修一个 import”就能结束的问题，而是 target recipe 对共享层的多处旧假设已经同时过期。
 
-## 验证形态
+## 这个例子应该怎样被 skill 使用
 
-- 先编译整个 recipe Python 目录。
-- 跑一个 config/schema smoke test，证明 recipe 字段不会在校验中丢失。
-- 再跑 GPU smoke test：
-  - 用本地集群命令或 alias 申请 GPU
-  - 激活 `.venv`
-  - 构造临时本地 pretrained fixture
-  - 用更新后的配置路径初始化 recipe model/engine
+面对这种 recipe，skill 的重点不应是直接 merge 冲突块，而应先建立一张 hotspot map：
 
-## 为什么这适合做成 skill
+- 哪些问题属于配置入口与 schema 漂移
+- 哪些问题属于 engine 对共享层旧接口的依赖
+- 哪些问题属于并行、checkpoint、恢复链路等运行时断层
+- 哪些问题来自 recipe 自己额外维护的状态，例如 teacher / head / scheduler / loss
 
-- 工作流是稳定的：先看 merged contract，再映射 recipe 依赖，局部修复，最后验证。
-- 具体修法又是 recipe-specific 的：schema 字段、mesh 布局、TP plan、engine 接线都必须按当前 recipe 来写。
+换句话说，这个例子要提醒 agent：复杂 recipe 的 merge repair 往往是“入口 + 运行时 + 恢复链路”的组合修复，而不是单点修补。
+
+## 适合从这里抽取的修复顺序
+
+1. 先让配置入口重新可用：确认 recipe-local schema、engine `ConfigClass` 和 YAML 布局是否还能把字段安全送进 engine。
+2. 再处理 engine 与共享层 helper 的契约漂移：并行、checkpoint、运行时入口、compile/optimizer 等调用是否仍然成立。
+3. 然后补上 recipe 自己额外维护的状态路径：teacher model、aux heads、loss、scheduler、load/save 逻辑。
+4. 最后做针对性的 post-merge 验证，而不是只看 merge 是否结束。
+
+## 这个例子最有价值的经验
+
+- 复杂 recipe 的 breakage 往往跨多个层次，不能只按单个报错逐个修。
+- 如果 recipe 自己复制或包了一层共享能力，那么共享层改动之后，最先要检查的就是这些“二次接线”位置。
+- merge repair 不只是让主模型跑起来，还要确认附加状态、恢复路径和长期训练入口没有一起坏掉。
