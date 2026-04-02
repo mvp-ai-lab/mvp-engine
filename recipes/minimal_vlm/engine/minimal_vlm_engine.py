@@ -48,9 +48,12 @@ class MinimalVLMEngine(Engine):
         if self.processor is None:
             self.processor = build_qwen3_vl_processor(self.config.model)
         dataset = build_dataset(self.config, processor=self.processor)
+        pad_token_id = self.processor.tokenizer.pad_token_id
+        if pad_token_id is None:
+            raise ValueError("Tokenizer `pad_token_id` must be set for collation.")
 
         collate_fn = MinimalVLMCollator(
-            pad_token_id=int(self.processor.tokenizer.pad_token_id),
+            pad_token_id=int(pad_token_id),
         )
 
         loader = TorchLoader(

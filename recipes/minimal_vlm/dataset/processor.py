@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Any
 
 from transformers import AutoProcessor
@@ -27,7 +28,7 @@ def build_qwen3_vl_processor(model_config: Any):
         if tokenizer.pad_token_id is None and tokenizer.eos_token is not None:
             tokenizer.pad_token = tokenizer.eos_token
 
-    processor.__fingerprint__ = lambda: _processor_fingerprint(processor)
+    processor.__fingerprint__ = partial(_processor_fingerprint, processor)
     return processor
 
 
