@@ -242,9 +242,9 @@ def process_sample(
         "labels": labels,
     }
     if "pixel_values" in model_inputs:
-        processed_sample["pixel_values"] = model_inputs["pixel_values"][0]
+        processed_sample["pixel_values"] = model_inputs["pixel_values"]
     if "image_grid_thw" in model_inputs:
-        processed_sample["image_grid_thw"] = model_inputs["image_grid_thw"][0]
+        processed_sample["image_grid_thw"] = model_inputs["image_grid_thw"]
     return processed_sample
 
 

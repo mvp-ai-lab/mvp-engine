@@ -52,14 +52,10 @@ class MinimalVLMCollator:
         }
 
         pixel_values = [sample["pixel_values"] for sample in batch if sample.get("pixel_values") is not None]
-        if pixel_values and len(pixel_values) != len(batch):
-            raise ValueError("Mixed image and text-only samples are not supported in the same batch.")
         if pixel_values:
             model_inputs["pixel_values"] = torch.cat(pixel_values, dim=0)
 
         image_grid_thw = [sample["image_grid_thw"] for sample in batch if sample.get("image_grid_thw") is not None]
-        if image_grid_thw and len(image_grid_thw) != len(batch):
-            raise ValueError("Mixed image and text-only samples are not supported in the same batch.")
         if image_grid_thw:
             model_inputs["image_grid_thw"] = torch.cat(image_grid_thw, dim=0)
 
