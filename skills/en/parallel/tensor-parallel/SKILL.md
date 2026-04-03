@@ -42,6 +42,8 @@ Generate `<MODEL_NAME>_TP_MODULE_CONFIG` for a new model under `recipes/`, then 
         TP_MODULE_CONFIG = <MODEL_NAME>_TP_MODULE_CONFIG
     ```
 - If the model is an exising model in `transformers`, you can create a wrapper class with the same name as the original model's class in the modeling file and bind `TP_MODULE_CONFIG` there.
+- If the modeling file already contains the top-level wrapper class used by training, only extend that existing class with `TP_MODULE_CONFIG` or `TP_MODULE_POSTPROCESSORS`; do not create a second wrapper class with the same name.
+- If the model needs both TP and FSDP2 prefetching, `TP_MODULE_CONFIG`, `TP_MODULE_POSTPROCESSORS`, and `APPLY_FSDP2_CUSTOM_PREFETCHING` must be merged onto the same top-level model class declaration.
 
 ### 2.1 Check Whether TP Postprocessing Is Required
 - After drafting the TP plan, read the target module's `forward()` carefully.
@@ -102,6 +104,8 @@ Generate `<MODEL_NAME>_TP_MODULE_CONFIG` for a new model under `recipes/`, then 
 - [ ] Each plan key exists in the class as a child module.
 - [ ] Plan values only use `"col"` or `"row"`.
 - [ ] `<MODEL_NAME>_TP_MODULE_CONFIG` is defined on the top-level model class.
+- [ ] If the top-level wrapper class already existed, this change extended that class instead of creating a second class with the same name.
+- [ ] If the model uses both TP and FSDP2 prefetching, the related class attributes are merged onto the same top-level model class declaration.
 - [ ] Every module whose `forward()` uses cached global metadata has been reviewed for TP postprocessing.
 - [ ] `TP_MODULE_POSTPROCESSORS` keys, if present, equal real runtime class names.
 - [ ] Postprocess hooks only change local runtime metadata and do not mutate pretrained parameter tensors.

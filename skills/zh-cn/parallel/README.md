@@ -4,3 +4,4 @@
 
 可用：
 - `tensor-parallel/SKILL.md`：Tensor Parallel 模块配置生成指南。
+- `fsdp2-prefetching/SKILL.md`：FSDP2 prefetching callable 生成指南。

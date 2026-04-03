@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Any, List, Tuple
 
 import torch
@@ -30,6 +31,20 @@ def _build_mixed_precision_policy(mp_policy: Any) -> MixedPrecisionPolicy | None
         output_dtype=_convert_dtype(mp_policy.get("output_dtype", None)),
         cast_forward_inputs=mp_policy.get("cast_forward_inputs", True),
     )
+
+
+def _resolve_optional_model_callable(model: nn.Module, attr_name: str) -> Callable[[nn.Module], None] | None:
+    """Load an optional model-class callable used by runtime customization hooks."""
+    cls = model.__class__
+    if not hasattr(cls, attr_name):
+        return None
+
+    hook = getattr(cls, attr_name)
+    if hook is None:
+        return None
+    if not callable(hook):
+        raise TypeError(f"{cls.__name__}.{attr_name} must be callable, got {type(hook)}.")
+    return hook
 
 
 def parallelize_model_with_fsdp2(
@@ -151,5 +166,11 @@ def parallelize_model_with_fsdp2(
     # 3. Wrap the whole model with FSDP2
     fully_shard(model, **backend_kwargs, ignored_params=ignored_params)
     logger.info(f"  - ✓ {model.__class__.__name__} (entire model)")
+
+    # 4. Apply FSDP2 prefetching if needed
+    apply_fsdp2_custom_prefetching = _resolve_optional_model_callable(model, "APPLY_FSDP2_CUSTOM_PREFETCHING")
+    if apply_fsdp2_custom_prefetching is not None:
+        logger.info(f"Applying custom FSDP2 prefetching on {model.__class__.__name__}...")
+        apply_fsdp2_custom_prefetching(model)
 
     return model
