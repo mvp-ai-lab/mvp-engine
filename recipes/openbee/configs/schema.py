@@ -32,7 +32,7 @@ class OpenbeeDataConfig(BaseModel):
 class OpenbeeModelConfig(BaseModel):
     model_config = ConfigDict(frozen=False, extra="forbid")
 
-    pretrained_model_name_or_path: str = "Qwen/Qwen3-VL-2B-Instruct"
+    pretrained_model_name_or_path: str = "./recipes/openbee/pretrained/Qwen3-VL-8B-Instruct"
 
     @field_validator("pretrained_model_name_or_path", mode="before")
     @classmethod

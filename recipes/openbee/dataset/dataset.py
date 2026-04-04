@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from collections.abc import Iterable
 from functools import partial
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any
 import torch
 from mvp_dataset import Dataset, set_logger
 from mvp_dataset.core import RuntimeContext
+from PIL import Image
 
 from mvp_engine.distributed.utils import get_world_size
 from mvp_engine.utils.log import logger
@@ -19,16 +21,27 @@ from .types import ModelInputs
 IMAGE_PLACEHOLDER = "<image>"
 
 
-def process_image(image: str, *, image_root: Path | None = None) -> Path:
-    """Resolve one image reference from the JSONL row into an absolute path.
+def process_image(
+    image: str | bytes,
+    *,
+    image_root: Path | None = None,
+) -> str | Image.Image:
+    """Normalize one image input from the JSONL row.
 
     Args:
-        image: Image path stored in the JSONL row.
+        image: Image path stored in the JSONL row, or raw bytes after
+            ``Dataset.resolve_refs`` loads a tar-backed image reference.
         image_root: Optional base directory used for relative image paths.
 
     Returns:
-        The resolved absolute path to the image file.
+        Either an absolute image path string or a decoded RGB PIL image.
     """
+    if isinstance(image, bytes):
+        with Image.open(io.BytesIO(image)) as decoded:
+            return decoded.convert("RGB")
+
+    if not isinstance(image, str):
+        raise ValueError(f"contains an invalid image value: {type(image).__name__}.")
     if not image:
         raise ValueError(f"contains an invalid image path: {image!r}")
 
@@ -39,12 +52,12 @@ def process_image(image: str, *, image_root: Path | None = None) -> Path:
 
     if not resolved.is_file():
         raise FileNotFoundError(f"references missing image: {resolved}")
-    return resolved
+    return str(resolved)
 
 
 def process_message(
     message: dict[str, Any],
-    image_iter: Iterable[Path],
+    image_iter: Iterable[str | Image.Image],
     *,
     image_placeholder: str,
 ) -> dict[str, Any]:
@@ -65,14 +78,15 @@ def process_message(
     if not isinstance(content, str):
         raise ValueError("contains non-string content.")
 
-    blocks: list[dict[str, str]] = []
+    blocks: list[dict[str, Any]] = []
     segments = content.split(image_placeholder)
     for i, segment in enumerate(segments):
         if segment:
             blocks.append({"type": "text", "text": segment})
         if i < len(segments) - 1:
             try:
-                blocks.append({"type": "image", "image": str(next(image_iter))})
+                image_value = next(image_iter)
+                blocks.append({"type": "image", "image": image_value})
             except StopIteration as exc:
                 raise ValueError("has more image placeholders than image paths.") from exc
 
@@ -269,17 +283,22 @@ def build_dataset(config: Any, *, processor: Any):
     context = RuntimeContext.from_runtime(seed=int(config.seed))
     num_shards = max(get_world_size(), 1)
 
-    dataset = Dataset.from_jsonl(
-        dataset_path,
-        context=context,
-        resample=True,
-        num_shards=int(num_shards),
-        output_dir=output_dir,
-    ).map(
-        partial(
-            process_sample,
-            processor=processor,
-            max_length=int(config.data.max_seq_len),
+    dataset = (
+        Dataset.from_jsonl(
+            dataset_path,
+            context=context,
+            resample=True,
+            group_key="images",
+            num_shards=int(num_shards),
+            output_dir=output_dir,
+        )
+        .resolve_refs([("images", dataset_path.parent)])
+        .map(
+            partial(
+                process_sample,
+                processor=processor,
+                max_length=int(config.data.max_seq_len),
+            )
         )
     )
 

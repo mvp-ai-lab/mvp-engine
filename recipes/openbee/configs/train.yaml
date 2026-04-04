@@ -14,11 +14,11 @@ parallel:
     shard: 1
     tensor: 1
 data:
-  train_path: "./data/openbee/alignment_demo.jsonl"
+  train_path: "./data/openbee/stage1-stage2-mm-only/train.jsonl"
   max_seq_len: 2048
   batch_size: 1
 model:
-  pretrained_model_name_or_path: "Qwen/Qwen3-VL-2B-Instruct"
+  pretrained_model_name_or_path: "./recipes/openbee/pretrained/Qwen3-VL-8B-Instruct"
 optim:
   lr: 1.0e-5
   weight_decay: 0.05
