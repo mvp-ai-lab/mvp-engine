@@ -1,8 +1,8 @@
 """Model helpers for the openbee recipe."""
 
-from .qwen3_vl import apply_default_freeze_policy, build_qwen3_vl_model
+from .qwen3_vl import apply_freeze_policy, build_qwen3_vl_model
 
 __all__ = [
-    "apply_default_freeze_policy",
+    "apply_freeze_policy",
     "build_qwen3_vl_model",
 ]

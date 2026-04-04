@@ -34,6 +34,12 @@ class OpenbeeModelConfig(BaseModel):
 
     pretrained_model_name_or_path: str = "./recipes/openbee/pretrained/Qwen3-VL-8B-Instruct"
 
+    # Freeze flags for each sub-module.  Default follows the alignment-stage
+    # convention: train only the merger while keeping ViT and LLM frozen.
+    freeze_vit: bool = True
+    freeze_merger: bool = False
+    freeze_llm: bool = False
+
     @field_validator("pretrained_model_name_or_path", mode="before")
     @classmethod
     def validate_pretrained_model_name_or_path(cls, value: str) -> str:

@@ -7,6 +7,7 @@ from typing import Any
 import torch
 from mvp_dataset import TorchLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from transformers.utils.logging import disable_progress_bar
 
 from mvp_engine.distributed.parallelize import parallelize_model
 from mvp_engine.distributed.utils import is_main_process
@@ -32,6 +33,10 @@ class OpenbeeEngine(Engine):
     config: OpenbeeConfig
 
     processor: Any | None = None
+
+    def __init__(self, config):
+        super().__init__(config)
+        disable_progress_bar()
 
     def prepare_dataloader(self, workflow: str = "train"):
         """Build the train-only dataloader over preprocessed multimodal samples.
