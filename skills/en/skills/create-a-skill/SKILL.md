@@ -25,11 +25,14 @@ Move long examples, templates, and variant-specific detail into `references/` wh
 
 ## Workflow
 
-### 1. Decide whether this should be a skill
+### 1. Make the skill-fit decision internally first
 
+- This check belongs only to the current `create-a-skill` run; it is not content for the target skill itself.
+- Do not copy this decision, its rationale, or any "first explain why this should or should not be a skill" wording into the target `SKILL.md`.
 - Use a skill when the task has a stable workflow but requires model-, recipe-, or context-specific adaptation.
 - Do not create a skill for logic that should be an engine-core reusable code API.
 - Do not create a skill for one-off experiment glue that should stay inside `recipes/`.
+- If the answer is no, explain that briefly in the current response and stop without creating or rewriting the target skill files.
 
 ### 2. Define the skill contract first
 
@@ -80,6 +83,7 @@ Move long examples, templates, and variant-specific detail into `references/` wh
   - `Read On Demand`
 - Prefer direct instructions over background exposition.
 - Keep the main document centered on decisions, steps, and pass criteria.
+- The target skill should describe how to do the domain task after the skill triggers; do not add meta steps about deciding whether the task deserves to exist as a skill.
 
 ### 6. Split supporting material only when it helps
 
@@ -102,6 +106,7 @@ Move long examples, templates, and variant-specific detail into `references/` wh
 - Confirm any `references/` entries are referenced from `Read On Demand`.
 - Confirm any `scripts/` entries are explicitly invoked by the workflow and described with inputs and outputs.
 - Confirm the `en` and `zh-cn` mirrors use the correct language and aligned semantics.
+- Confirm the generated or updated target skill does not contain a meta step about deciding whether something should be a skill, and does not ask a future agent to explain that internal decision to the user first.
 - If you add or modify helper scripts, run them at least once.
 
 ## Output
