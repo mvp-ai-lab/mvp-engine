@@ -1,4 +1,5 @@
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 
@@ -41,13 +42,41 @@ def _import_recipe_modules(recipe_dir: Path) -> None:
 
     import importlib
 
-    for py_file in sorted(recipe_dir.glob("**/*.py")):
-        if py_file.name.startswith("_"):
-            continue
+    py_files = sorted(py_file for py_file in recipe_dir.glob("**/*.py") if not py_file.name.startswith("_"))
+    py_files = _filter_gitignored_paths(py_files)
 
+    for py_file in py_files:
         relative_path = py_file.relative_to(relative_root)
         module_name = ".".join(relative_path.with_suffix("").parts)
         importlib.import_module(module_name)
+
+
+def _filter_gitignored_paths(paths: list[Path]) -> list[Path]:
+    """Drop paths ignored by Git so recipe auto-import follows .gitignore rules."""
+    if not paths:
+        return []
+
+    project_root = PROJECT_ROOT.resolve()
+    try:
+        relative_paths = [path.resolve().relative_to(project_root).as_posix() for path in paths]
+    except ValueError:
+        return paths
+
+    result = subprocess.run(
+        ["git", "check-ignore", "--stdin"],
+        input="\n".join(relative_paths),
+        capture_output=True,
+        cwd=project_root,
+        text=True,
+        check=False,
+    )
+    if result.returncode not in (0, 1):
+        return paths
+
+    ignored_paths = {line.strip() for line in result.stdout.splitlines() if line.strip()}
+    return [
+        path for path, relative_path in zip(paths, relative_paths, strict=True) if relative_path not in ignored_paths
+    ]
 
 
 @hydra.main(version_base=None)
