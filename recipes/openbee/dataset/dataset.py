@@ -16,6 +16,7 @@ from PIL import Image
 from mvp_engine.distributed.utils import get_world_size
 from mvp_engine.utils.log import logger
 
+from .packing import PackedSampleAssembler
 from .types import ModelInputs
 
 IMAGE_PLACEHOLDER = "<image>"
@@ -300,6 +301,26 @@ def build_dataset(config: Any, *, processor: Any):
                 max_length=int(config.data.max_seq_len),
             )
         )
+        .shuffle(buffer_size=config.data.shuffle_buffer)
     )
 
-    return dataset.shuffle(buffer_size=1000)
+    if config.data.packing:
+        max_length = config.data.max_seq_len
+        selection_strategy = config.data.packing_selection_strategy
+        open_pack_limit = config.data.packing_open_pack_limit
+        pack_buffer_size = config.data.packing_buffer_size
+
+        dataset = dataset.assemble(
+            lambda assemble_context: PackedSampleAssembler(
+                max_length=max_length,
+                selection_strategy=selection_strategy,
+                open_pack_limit=open_pack_limit,
+                pack_buffer_size=pack_buffer_size,
+                seed=assemble_context.sample_shuffle_seed,
+            )
+        )
+
+    if config.data.cache:
+        dataset = dataset.cache(show_progress=config.data.cache_show_progress)
+
+    return dataset

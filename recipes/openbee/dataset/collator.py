@@ -51,6 +51,15 @@ class OpenbeeCollator:
             ),
         }
 
+        if any("pack_segment_ids" in sample for sample in batch):
+            if not all("pack_segment_ids" in sample for sample in batch):
+                raise ValueError("Packed and unpacked samples cannot be mixed in the same openbee batch.")
+            model_inputs["pack_segment_ids"] = pad_sequence(
+                [sample["pack_segment_ids"] for sample in batch],
+                batch_first=True,
+                padding_value=0,
+            )
+
         pixel_values = [sample["pixel_values"] for sample in batch if sample.get("pixel_values") is not None]
         if pixel_values:
             model_inputs["pixel_values"] = torch.cat(pixel_values, dim=0)

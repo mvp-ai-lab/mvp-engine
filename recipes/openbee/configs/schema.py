@@ -1,6 +1,6 @@
 """Pydantic schema for the OpenBee recipe."""
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -11,6 +11,13 @@ class OpenbeeDataConfig(BaseModel):
     model_config = ConfigDict(frozen=False, extra="forbid")
 
     train_path: Optional[str] = "./data/openbee/alignment_demo.jsonl"
+    cache: bool = False
+    cache_show_progress: bool = True
+    shuffle_buffer: int = Field(1000, ge=1)
+    packing: bool = False
+    packing_selection_strategy: Literal["random", "best_fit"] = "best_fit"
+    packing_open_pack_limit: int = Field(8, ge=1)
+    packing_buffer_size: int = Field(64, ge=-1)
     max_seq_len: int = Field(2048, ge=1)
     batch_size: int = Field(1, ge=1)
     num_workers: int = Field(0, ge=0)
@@ -33,6 +40,7 @@ class OpenbeeModelConfig(BaseModel):
     model_config = ConfigDict(frozen=False, extra="forbid")
 
     pretrained_model_name_or_path: str = "./recipes/openbee/pretrained/Qwen3-VL-8B-Instruct"
+    attn_implementation: Literal["eager", "sdpa", "flash_attention_2"] = "flash_attention_2"
 
     # Freeze flags for each sub-module.  Default follows the alignment-stage
     # convention: train only the merger while keeping ViT and LLM frozen.

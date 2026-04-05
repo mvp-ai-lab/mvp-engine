@@ -24,6 +24,7 @@ from ..dataset import (
     build_qwen3_vl_processor,
 )
 from ..model import build_qwen3_vl_model
+from ..model.packing import apply_packed_fa2_patch, prepare_packed_model_inputs
 from ..utils.log.mfu import build_mfu_log
 
 
@@ -82,6 +83,8 @@ class OpenbeeEngine(Engine):
             The distributed-ready Qwen3-VL model.
         """
         model = build_qwen3_vl_model(self.config.model).to(self.device)
+        if self.config.data.packing and getattr(model.config, "_attn_implementation", None) == "flash_attention_2":
+            apply_packed_fa2_patch()
         logger.info(f" - Model name: {model.__class__.__name__}")
 
         parallelized_model = parallelize_model(
@@ -154,10 +157,19 @@ class OpenbeeEngine(Engine):
         Returns:
             A normalized batch dictionary ready for the model forward pass.
         """
+        batch: ModelInputs = {}
         for key, value in data.items():
             if isinstance(value, torch.Tensor):
-                data[key] = value.to(self.device, non_blocking=True)
-        return data
+                batch[key] = value.to(self.device, non_blocking=True)
+            else:
+                batch[key] = value
+
+        return prepare_packed_model_inputs(
+            batch,
+            model_config=self.unwrapped_model.config,
+            attn_implementation=getattr(self.unwrapped_model.config, "_attn_implementation", None),
+            mask_dtype=self.dtype if self.dtype.is_floating_point else torch.float32,
+        )
 
     def train_one_step(self, data: ModelInputs) -> dict[str, Any]:
         """Run one forward pass and collect training metrics.

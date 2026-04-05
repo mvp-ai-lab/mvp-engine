@@ -15,8 +15,15 @@ parallel:
     tensor: 1
 data:
   train_path: "./data/openbee/stage1-stage2-mm-only/dev.jsonl"
-  max_seq_len: 2048
-  batch_size: 32
+  cache: false
+  cache_show_progress: true
+  shuffle_buffer: 1000
+  packing: true
+  packing_selection_strategy: "best_fit"
+  packing_open_pack_limit: 8
+  packing_buffer_size: 64
+  max_seq_len: 8192
+  batch_size: 2
 model:
   pretrained_model_name_or_path: "./recipes/openbee/pretrained/Qwen3-VL-8B-Instruct"
   # Freeze flags — set true to stop gradient for the corresponding sub-module.
@@ -27,6 +34,11 @@ model:
 optim:
   lr: 1.0e-5
   weight_decay: 0.05
+  gradient_accumulation_steps: 1
+  mixed_precision: "bf16"
+  warmup_ratio: 0.05
+  clip_grad_norm: 1.0
+
 loop:
   policy: "iter"
   total_steps: 10000

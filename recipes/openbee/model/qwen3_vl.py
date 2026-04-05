@@ -195,6 +195,7 @@ def build_qwen3_vl_model(model_config: Any):
         model_config.pretrained_model_name_or_path,
         trust_remote_code=True,
         torch_dtype="auto",
+        attn_implementation=model_config.attn_implementation,
     )
     model = inject_model_flops_calculation(model)
 
