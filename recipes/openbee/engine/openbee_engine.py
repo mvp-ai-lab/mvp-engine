@@ -209,6 +209,9 @@ class OpenbeeEngine(Engine):
         gradient_accumulation_steps = self.config.optim.gradient_accumulation_steps
         loss = outputs["loss"] / gradient_accumulation_steps
 
+        # Accumulate loss for logging: average across all micro-batches in the window.
+        self._loss_accumulator = getattr(self, "_loss_accumulator", 0.0) + outputs["loss"].item()
+
         with accumulate_gradients(self.model, sync=is_sync):
             self.scaler.scale(loss).backward()
 
@@ -251,6 +254,10 @@ class OpenbeeEngine(Engine):
             for i, lr in enumerate(self.scheduler.get_last_lr()):
                 other_logs[f"lr/group_{i}"] = lr
 
+            averaged_loss = self._loss_accumulator / gradient_accumulation_steps
+            self._loss_accumulator = 0.0
+            outputs["logs"]["train/loss"] = averaged_loss
+
             logger.log_metrics(
                 {**outputs["logs"], **other_logs},
                 step=self.step,
@@ -261,18 +268,15 @@ class OpenbeeEngine(Engine):
         return outputs
 
     def run_iter_train(self) -> None:
-        """Run iteration-based training loop until total_steps is reached."""
+        """Run iteration-based training loop, reusing the first batch to eliminate data loading overhead.
+
+        The first batch is fetched once and cached in ``self.data``. Subsequent steps reuse
+        the same batch so that ``perf/mfu`` reflects pure compute throughput without data
+        pipeline latency. Remove this override to restore normal data iteration.
+        """
         while self.step < self.total_steps:
-            if hasattr(self, "data"):
-                if self.step >= self.total_steps:
-                    # In case it's a infinity loader
-                    break
-                self.train_after_step(self.train_one_step(self.train_pre_step(self.data)))
-            else:
+            if not hasattr(self, "data"):
                 for data in self.train_loader:
                     self.data = data
-                    if self.step >= self.total_steps:
-                        # In case it's a infinity loader
-                        break
-                    self.train_after_step(self.train_one_step(self.train_pre_step(data)))
                     break
+            self.train_after_step(self.train_one_step(self.train_pre_step(self.data)))
