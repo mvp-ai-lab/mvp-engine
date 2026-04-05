@@ -14,6 +14,7 @@ from mvp_engine.distributed.utils import is_main_process
 from mvp_engine.engine import ENGINE_REGISTRY, Engine
 from mvp_engine.utils.log import logger
 from mvp_engine.utils.misc import calculate_model_size
+from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
 from ..configs.schema import OpenbeeConfig
 from ..dataset import (
@@ -23,6 +24,7 @@ from ..dataset import (
     build_qwen3_vl_processor,
 )
 from ..model import build_qwen3_vl_model
+from ..utils.log.mfu import build_mfu_log
 
 
 @ENGINE_REGISTRY.register()
@@ -178,4 +180,87 @@ class OpenbeeEngine(Engine):
             "logs": {
                 "train/loss": outputs.loss.item(),
             },
+            "mfu_inputs": {
+                "batch_size": int(data["input_ids"].shape[0]),
+                "seq_len": int(data["input_ids"].shape[1]),
+                "image_grid_thw": data.get("image_grid_thw"),
+            },
         }
+
+    def train_after_step(self, outputs: dict[str, Any]) -> dict[str, Any]:
+        """Run the optimizer step and include recipe-local MFU metrics in logs."""
+        assert "loss" in outputs, "The model output must contain 'loss' key."
+        assert "logs" in outputs, "The model output must contain 'logs' key."
+
+        is_sync = self.accumulate_step()
+
+        gradient_accumulation_steps = self.config.optim.gradient_accumulation_steps
+        loss = outputs["loss"] / gradient_accumulation_steps
+
+        with accumulate_gradients(self.model, sync=is_sync):
+            self.scaler.scale(loss).backward()
+
+        if is_sync:
+            self.scaler.unscale_(self.optimizer)
+
+            max_grad_norm = self.config.optim.clip_grad_norm
+            if max_grad_norm is not None:
+                clip_grad_norm_(self.model, max_grad_norm)
+
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            self.scheduler.step()
+            self.optimizer.zero_grad(set_to_none=True)
+
+            self.step += 1
+            self.timer.tick()
+
+            other_logs = {
+                "eta": self.timer.eta_string,
+                "time/batch": self.timer.batch_time,
+                "time/throughput": self.timer.throughput,
+            }
+            other_logs.update(
+                build_mfu_log(
+                    model=self.unwrapped_model,
+                    device_type=self.device.type,
+                    precision=str(self.config.optim.mixed_precision),
+                    batch_size=int(outputs["mfu_inputs"]["batch_size"]),
+                    seq_len=int(outputs["mfu_inputs"]["seq_len"]),
+                    image_grid_thw=outputs["mfu_inputs"].get("image_grid_thw"),
+                    step_time_seconds=float(self.timer.batch_time_latest),
+                    gradient_accumulation_steps=int(self.config.optim.gradient_accumulation_steps),
+                    freeze_vit=bool(self.config.model.freeze_vit),
+                    freeze_merger=bool(self.config.model.freeze_merger),
+                    freeze_llm=bool(self.config.model.freeze_llm),
+                )
+            )
+
+            for i, lr in enumerate(self.scheduler.get_last_lr()):
+                other_logs[f"lr/group_{i}"] = lr
+
+            logger.log_metrics(
+                {**outputs["logs"], **other_logs},
+                step=self.step,
+            )
+
+            self.save()
+
+        return outputs
+
+    def run_iter_train(self) -> None:
+        """Run iteration-based training loop until total_steps is reached."""
+        while self.step < self.total_steps:
+            if hasattr(self, "data"):
+                if self.step >= self.total_steps:
+                    # In case it's a infinity loader
+                    break
+                self.train_after_step(self.train_one_step(self.train_pre_step(self.data)))
+            else:
+                for data in self.train_loader:
+                    self.data = data
+                    if self.step >= self.total_steps:
+                        # In case it's a infinity loader
+                        break
+                    self.train_after_step(self.train_one_step(self.train_pre_step(data)))
+                    break

@@ -527,7 +527,7 @@ class Engine(ABC):
 
     def after_train(self) -> None:
         """Finalize training with checkpoint save, evaluation, and cleanup."""
-        self.save(force=True)
+        self.save(force=True and not self.config.dev_mode)
         logger.info("Training finished!")
         logger.destroy()
 

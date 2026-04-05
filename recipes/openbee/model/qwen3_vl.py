@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from types import MethodType
 from typing import Any
 
+import torch
 from transformers import AutoModelForImageTextToText
 
 # ---------------------------------------------------------------------------
@@ -70,6 +72,115 @@ def apply_freeze_policy(
     return frozen_counts
 
 
+def inject_model_flops_calculation(model):
+    """Inject per-process FLOPs estimation onto the loaded Qwen3-VL model."""
+
+    def calculate_model_flops(
+        self,
+        *,
+        batch_size: int,
+        seq_len: int,
+        image_grid_thw: torch.Tensor | None = None,
+        is_training: bool = True,
+        freeze_vit: bool = False,
+        freeze_merger: bool = False,
+        freeze_llm: bool = False,
+    ) -> float:
+        batch = int(batch_size)
+        tokens = int(seq_len)
+        if batch <= 0 or tokens <= 0:
+            raise ValueError("batch_size and seq_len must be > 0")
+
+        text_cfg = self.config.text_config
+        vision_cfg = self.config.vision_config
+
+        text_layers = int(text_cfg.num_hidden_layers)
+        text_hidden = int(text_cfg.hidden_size)
+        text_intermediate = int(text_cfg.intermediate_size)
+        vocab = int(text_cfg.vocab_size)
+
+        language_per_layer = (
+            8 * batch * tokens * text_hidden * text_hidden
+            + 4 * batch * tokens * tokens * text_hidden
+            # SwiGLU has three matrices: gate_proj, up_proj (H→I each) and down_proj (I→H),
+            # so MLP FLOPs are 6×B×T×H×I, not 4× as in a standard two-layer FFN.
+            + 6 * batch * tokens * text_hidden * text_intermediate
+        )
+        language_flops = float(text_layers * language_per_layer + 2 * batch * tokens * text_hidden * vocab)
+
+        vit_flops = 0.0
+        merger_flops = 0.0
+        if image_grid_thw is not None and image_grid_thw.numel() > 0:
+            grid = image_grid_thw.detach().to(device="cpu", dtype=torch.long).reshape(-1, 3)
+            if torch.any(grid <= 0):
+                raise ValueError("image_grid_thw must contain positive temporal/height/width values")
+
+            temporal_tokens = grid[:, 0]
+            height_tokens = grid[:, 1]
+            width_tokens = grid[:, 2]
+
+            visual_seq_lens = temporal_tokens * height_tokens * width_tokens
+            merged_seq_lens = (
+                temporal_tokens
+                * (height_tokens // int(vision_cfg.spatial_merge_size))
+                * (width_tokens // int(vision_cfg.spatial_merge_size))
+            )
+
+            if torch.any(height_tokens % int(vision_cfg.spatial_merge_size) != 0) or torch.any(
+                width_tokens % int(vision_cfg.spatial_merge_size) != 0
+            ):
+                raise ValueError("image_grid_thw height/width must be divisible by spatial_merge_size")
+
+            vision_hidden = int(vision_cfg.hidden_size)
+            vision_layers = int(vision_cfg.depth)
+            vision_intermediate = int(vision_cfg.intermediate_size)
+            vision_out_hidden = int(vision_cfg.out_hidden_size)
+            channels = int(vision_cfg.in_channels)
+            patch_size = int(vision_cfg.patch_size)
+            temporal_patch_size = int(vision_cfg.temporal_patch_size)
+            spatial_merge_size = int(vision_cfg.spatial_merge_size)
+
+            patch_dim = channels * temporal_patch_size * patch_size * patch_size
+            patch_embed_flops = 2 * int(visual_seq_lens.sum().item()) * patch_dim * vision_hidden
+            attention_projection_flops = 8 * vision_hidden * vision_hidden * int(visual_seq_lens.sum().item())
+            attention_scores_flops = 4 * vision_hidden * int(torch.square(visual_seq_lens).sum().item())
+            mlp_flops = 4 * vision_hidden * vision_intermediate * int(visual_seq_lens.sum().item())
+            vision_encoder_flops = vision_layers * (attention_projection_flops + attention_scores_flops + mlp_flops)
+
+            merger_input_hidden = vision_hidden * (spatial_merge_size**2)
+            vit_flops = float(patch_embed_flops + vision_encoder_flops)
+            merger_flops = float(2 * int(merged_seq_lens.sum().item()) * merger_input_hidden * vision_out_hidden)
+
+        if not is_training:
+            return language_flops + vit_flops + merger_flops
+
+        # Per-component backward multipliers.
+        #
+        # Gradient flow order (backward): loss → LLM → merger → ViT → pixels
+        # Pixel values never require grad, so activation gradients always stop at ViT's input —
+        # even when ViT is trainable.
+        #
+        # Rules:
+        #   - Not frozen: weight grads + activation grads → 3× forward FLOPs
+        #   - Frozen, but upstream module is trainable: activation grads still flow through
+        #     this module so that upstream weight grads can be computed → 2× forward FLOPs
+        #   - Frozen, nothing upstream is trainable (or this is ViT whose input has no grad):
+        #     no backward at all → 1× forward FLOPs
+        upstream_of_llm_is_trained = (not freeze_merger) or (not freeze_vit)
+        upstream_of_merger_is_trained = not freeze_vit
+
+        llm_mult = 3.0 if not freeze_llm else (2.0 if upstream_of_llm_is_trained else 1.0)
+        merger_mult = 3.0 if not freeze_merger else (2.0 if upstream_of_merger_is_trained else 1.0)
+        # ViT: input (pixel values) never requires grad, so activation grad never propagates
+        # further back regardless of upstream modules.  Backward only happens for weight grads.
+        vit_mult = 3.0 if not freeze_vit else 1.0
+
+        return language_flops * llm_mult + merger_flops * merger_mult + vit_flops * vit_mult
+
+    model.calculate_model_flops = MethodType(calculate_model_flops, model)
+    return model
+
+
 def build_qwen3_vl_model(model_config: Any):
     """Load the Qwen3-VL model checkpoint and apply the configured freeze policy.
 
@@ -85,6 +196,7 @@ def build_qwen3_vl_model(model_config: Any):
         trust_remote_code=True,
         torch_dtype="auto",
     )
+    model = inject_model_flops_calculation(model)
 
     apply_freeze_policy(
         model,
