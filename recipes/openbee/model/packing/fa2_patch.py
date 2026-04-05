@@ -83,6 +83,10 @@ def apply_packed_fa2_patch() -> None:
         del batch_size, cache_position, kv_offset, mask_function, kwargs
         return attention_mask[:, -kv_length:]
 
+    # flash_attn's C++ kernel requires max_seqlen to be a concrete Python int even though
+    # the declaration says SymInt — the Python binding does not actually support SymInt.
+    # Disabling compile here causes a graph break once per forward pass (not per layer).
+    @torch.compiler.disable
     def _get_unpad_data(attention_mask: torch.Tensor):
         if not _is_segmented_mask(attention_mask):
             return _original_get_unpad(attention_mask)

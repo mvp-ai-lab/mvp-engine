@@ -87,6 +87,20 @@ class OpenbeeEngine(Engine):
             apply_packed_fa2_patch()
         logger.info(f" - Model name: {model.__class__.__name__}")
 
+        if self.config.model.compile:
+            # The ViT encoder computes data-dependent cu_seqlens/max_seqlen for
+            # flash_attn_varlen_func directly (not via _get_unpad_data), so dynamo cannot
+            # trace it — flash_attn C++ requires a Python int but receives a FakeTensor.
+            # Wrapping its forward with compiler.disable causes a graph break there so it
+            # runs eagerly.  The ViT is frozen anyway, so there is no training benefit to
+            # compiling it; the LLM and merger (the actual training targets) are compiled.
+            if hasattr(model, "model") and hasattr(model.model, "visual"):
+                model.model.visual.forward = torch.compiler.disable(model.model.visual.forward)
+            model.compile(
+                backend=self.config.model.compile_backend,
+                mode=self.config.model.compile_mode,
+            )
+
         parallelized_model = parallelize_model(
             model,
             device_mesh=self.device_mesh,

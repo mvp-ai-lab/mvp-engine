@@ -48,6 +48,10 @@ class OpenbeeModelConfig(BaseModel):
     freeze_merger: bool = False
     freeze_llm: bool = False
 
+    compile: bool = True
+    compile_backend: str = "inductor"
+    compile_mode: str = "default"
+
     @field_validator("pretrained_model_name_or_path", mode="before")
     @classmethod
     def validate_pretrained_model_name_or_path(cls, value: str) -> str:
