@@ -206,6 +206,7 @@ class OpenbeeEngine(Engine):
             "logs": {
                 "train/loss": outputs.loss.item(),
             },
+            "effective_tokens": int((data["labels"] != -100).sum().item()),
             "mfu_inputs": {
                 "batch_size": int(data["input_ids"].shape[0]),
                 "seq_len": int(data["input_ids"].shape[1]),
@@ -225,6 +226,9 @@ class OpenbeeEngine(Engine):
 
         # Accumulate loss for logging: average across all micro-batches in the window.
         self._loss_accumulator = getattr(self, "_loss_accumulator", 0.0) + outputs["loss"].item()
+        self._effective_tokens_accumulator = getattr(self, "_effective_tokens_accumulator", 0) + int(
+            outputs["effective_tokens"]
+        )
 
         with accumulate_gradients(self.model, sync=is_sync):
             self.scaler.scale(loss).backward()
@@ -246,9 +250,11 @@ class OpenbeeEngine(Engine):
 
             other_logs = {
                 "eta": self.timer.eta_string,
-                "time/batch": self.timer.batch_time,
-                "time/throughput": self.timer.throughput,
+                "perf/batch_time": self.timer.batch_time,
             }
+            effective_tokens = self._effective_tokens_accumulator
+            self._effective_tokens_accumulator = 0
+            other_logs["perf/toks_per_sec"] = effective_tokens / self.timer.batch_time
             other_logs.update(
                 build_mfu_log(
                     model=self.unwrapped_model,
@@ -280,17 +286,3 @@ class OpenbeeEngine(Engine):
             self.save()
 
         return outputs
-
-    def run_iter_train(self) -> None:
-        """Run iteration-based training loop, reusing the first batch to eliminate data loading overhead.
-
-        The first batch is fetched once and cached in ``self.data``. Subsequent steps reuse
-        the same batch so that ``perf/mfu`` reflects pure compute throughput without data
-        pipeline latency. Remove this override to restore normal data iteration.
-        """
-        while self.step < self.total_steps:
-            if not hasattr(self, "data"):
-                for data in self.train_loader:
-                    self.data = data
-                    break
-            self.train_after_step(self.train_one_step(self.train_pre_step(self.data)))

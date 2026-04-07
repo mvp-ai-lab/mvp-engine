@@ -11,6 +11,7 @@ class OpenbeeDataConfig(BaseModel):
     model_config = ConfigDict(frozen=False, extra="forbid")
 
     train_path: Optional[str] = "./data/openbee/alignment_demo.jsonl"
+    enable_thinking: bool = True
     cache: bool = False
     cache_show_progress: bool = True
     shuffle_buffer: int = Field(1000, ge=1)
@@ -41,6 +42,7 @@ class OpenbeeModelConfig(BaseModel):
 
     pretrained_model_name_or_path: str = "./recipes/openbee/pretrained/Qwen3-VL-8B-Instruct"
     attn_implementation: Literal["eager", "sdpa", "flash_attention_2"] = "flash_attention_2"
+    image_max_pixels: int | None = Field(None, ge=1)
 
     # Freeze flags for each sub-module.  Default follows the alignment-stage
     # convention: train only the merger while keeping ViT and LLM frozen.

@@ -5,30 +5,34 @@ seed: 42
 deterministic: false
 
 project:
-  name: "openbee-alignment"
+  name: "openbee-qwen3vl_8b-alignment"
   dir: "./outputs"
+
+log:
+  interval: 1
 
 parallel:
   mesh:
     replicate: -1
-    shard: 8
+    shard: 1
     tensor: 1
-  backend_kwargs:
-    fsdp2:
-      reshard_after_forward: false
 data:
-  train_path: "./data/openbee/stage1-stage2-mm-only/dev.jsonl"
-  cache: false
+  train_path: "./data/openbee/stage1-stage2-mm-only/**/*.parquet"
+  enable_thinking: false
+  cache: true
   cache_show_progress: true
   shuffle_buffer: 1000
   packing: true
   packing_selection_strategy: "best_fit"
   packing_open_pack_limit: 8
   packing_buffer_size: 64
-  max_seq_len: 4096
-  batch_size: 2
+  max_seq_len: 8192
+  batch_size: 1
+  num_workers: 2
 model:
   pretrained_model_name_or_path: "./recipes/openbee/pretrained/Qwen3-VL-8B-Instruct"
+  attn_implementation: "flash_attention_2"
+  image_max_pixels: 1048576
   # Freeze flags — set true to stop gradient for the corresponding sub-module.
   # Defaults follow the alignment-stage convention: train merger only.
   freeze_vit: true
@@ -38,13 +42,17 @@ model:
   compile_backend: "inductor"
   compile_mode: "default"
 optim:
-  lr: 1.0e-5
-  weight_decay: 0.05
-  gradient_accumulation_steps: 16
+  lr: 1.0e-4
+  weight_decay: 0.0
+  gradient_accumulation_steps: 2
   mixed_precision: "bf16"
-  warmup_ratio: 0.05
+  warmup_ratio: 0.0
   clip_grad_norm: 1.0
 
 loop:
   policy: "iter"
-  total_steps: 10000
+  total_steps: 1762
+
+checkpoint:
+  interval: 100
+  keep_n: 2

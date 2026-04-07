@@ -1,4 +1,4 @@
-"""JSONL dataset processing utilities for the OpenBee recipe."""
+"""Dataset processing utilities for the OpenBee recipe."""
 
 from __future__ import annotations
 
@@ -13,30 +13,48 @@ from mvp_dataset import Dataset, set_logger
 from mvp_dataset.core import RuntimeContext
 from PIL import Image
 
-from mvp_engine.distributed.utils import get_world_size
 from mvp_engine.utils.log import logger
 
 from .packing import PackedSampleAssembler
 from .types import ModelInputs
 
 IMAGE_PLACEHOLDER = "<image>"
+ROLE_MAP = {
+    "assistant": "assistant",
+    "gpt": "assistant",
+    "human": "user",
+    "system": "system",
+    "tool": "tool",
+    "user": "user",
+}
 
 
 def process_image(
-    image: str | bytes,
+    image: str | bytes | dict[str, Any],
     *,
     image_root: Path | None = None,
 ) -> str | Image.Image:
-    """Normalize one image input from the JSONL row.
+    """Normalize one image input from one dataset row.
 
     Args:
-        image: Image path stored in the JSONL row, or raw bytes after
-            ``Dataset.resolve_refs`` loads a tar-backed image reference.
+        image: Image path, raw image bytes, or a parquet image struct with
+            ``{"bytes", "path"}`` fields.
         image_root: Optional base directory used for relative image paths.
 
     Returns:
         Either an absolute image path string or a decoded RGB PIL image.
     """
+    if isinstance(image, dict):
+        image_bytes = image.get("bytes")
+        if isinstance(image_bytes, (bytes, bytearray, memoryview)):
+            return process_image(bytes(image_bytes), image_root=image_root)
+
+        image_path = image.get("path")
+        if isinstance(image_path, str) and image_path:
+            return process_image(image_path, image_root=image_root)
+
+        raise ValueError("contains an invalid image record.")
+
     if isinstance(image, bytes):
         with Image.open(io.BytesIO(image)) as decoded:
             return decoded.convert("RGB")
@@ -56,28 +74,42 @@ def process_image(
     return str(resolved)
 
 
+def normalize_message(message: dict[str, Any]) -> dict[str, str]:
+    """Normalize one source message from JSONL or parquet schema."""
+    role = message.get("role")
+    content = message.get("content")
+    if isinstance(role, str) and isinstance(content, str) and role:
+        return {"role": role, "content": content}
+
+    source_role = message.get("from")
+    source_content = message.get("value")
+    normalized_role = ROLE_MAP.get(source_role)
+    if normalized_role is None:
+        raise ValueError(f"contains an invalid role: {source_role!r}")
+    if not isinstance(source_content, str):
+        raise ValueError("contains non-string content.")
+    return {"role": normalized_role, "content": source_content}
+
+
 def process_message(
     message: dict[str, Any],
     image_iter: Iterable[str | Image.Image],
     *,
     image_placeholder: str,
 ) -> dict[str, Any]:
-    """Convert one message into HF chat content blocks.
+    """Convert one source message into HF chat content blocks.
 
     Args:
-        message: Source message with ``role`` and string ``content``.
+        message: Source message in recipe JSONL format or parquet Open-Bee format.
         image_iter: Iterator over resolved image paths for ``<image>`` placeholders.
         image_placeholder: Placeholder token that marks image positions in text.
 
     Returns:
         A Hugging Face chat-format message with ``text`` and ``image`` blocks.
     """
-    role = message.get("role")
-    content = message.get("content")
-    if not isinstance(role, str) or not role:
-        raise ValueError(f"contains an invalid role: {role!r}")
-    if not isinstance(content, str):
-        raise ValueError("contains non-string content.")
+    normalized_message = normalize_message(message)
+    role = normalized_message["role"]
+    content = normalized_message["content"]
 
     blocks: list[dict[str, Any]] = []
     segments = content.split(image_placeholder)
@@ -102,6 +134,7 @@ def build_labels(
     *,
     max_length: int,
     ignore_index: int,
+    skip_think_prefix: bool = False,
 ) -> torch.Tensor:
     """Build supervised labels for one tokenized conversation.
 
@@ -112,6 +145,9 @@ def build_labels(
         attention_mask: Attention mask for the full conversation.
         max_length: Maximum tokenized length after truncation.
         ignore_index: Label value used to mask tokens out of the loss.
+        skip_think_prefix: When True, the ``<think>…</think>`` opening block of
+            each assistant turn is excluded from the loss, matching the behaviour
+            of LLaMA-Factory's ``ReasoningTemplate`` with ``enable_thinking=False``.
 
     Returns:
         A label tensor where only assistant response tokens are supervised.
@@ -133,6 +169,12 @@ def build_labels(
             max_length=max_length,
         )
         return tokenized["input_ids"][0]
+
+    # Token IDs for the empty thinking block the model emits when not reasoning.
+    # These match Qwen3-VL's tokenizer: <think> = 151667, \n\n = 271, </think> = 151668.
+    # When skip_think_prefix=True we skip any leading run of these tokens so they
+    # are not supervised — matching LLaMA-Factory's ReasoningTemplate behaviour.
+    _THINK_PREFIX_IDS = {151667, 271, 151668}
 
     labels = torch.full_like(input_ids, ignore_index)
     valid_length = int(attention_mask.sum().item())
@@ -159,6 +201,16 @@ def build_labels(
 
         start = min(prefix_length, valid_length)
         end = min(upto_length, valid_length)
+
+        # Optionally skip the leading <think>…</think> block from supervision.
+        # Advance `start` past any consecutive think-prefix tokens so that only
+        # the actual answer content contributes to the loss.
+        if skip_think_prefix and start < end:
+            pos = start
+            while pos < end and input_ids[pos].item() in _THINK_PREFIX_IDS:
+                pos += 1
+            start = pos
+
         if start < end:
             labels[start:end] = input_ids[start:end]
 
@@ -172,11 +224,12 @@ def process_sample(
     max_length: int,
     image_placeholder: str = IMAGE_PLACEHOLDER,
     ignore_index: int = -100,
+    skip_think_prefix: bool = False,
 ) -> ModelInputs:
-    """Validate one JSONL row and convert it into training tensors.
+    """Validate one dataset row and convert it into training tensors.
 
     Args:
-        sample: One raw JSONL row emitted by ``mvp_dataset``.
+        sample: One raw row emitted by ``mvp_dataset`` from JSONL or parquet.
         processor: Hugging Face processor (or compatible object with
             ``apply_chat_template`` and ``__fingerprint__``).
         max_length: Maximum tokenized sequence length.
@@ -194,24 +247,26 @@ def process_sample(
     source_file = sample.get("__file__")
     index_in_file = sample.get("__index_in_file__")
     if not isinstance(source_file, str) or not source_file:
-        raise ValueError("mvp_dataset JSONL samples must include a string `__file__` field.")
+        raise ValueError("mvp_dataset samples must include a string `__file__` field.")
     if not isinstance(index_in_file, int) or index_in_file < 0:
-        raise ValueError("mvp_dataset JSONL samples must include a non-negative integer `__index_in_file__` field.")
+        raise ValueError("mvp_dataset samples must include a non-negative integer `__index_in_file__` field.")
 
     source_file = Path(source_file).expanduser().resolve()
-    line_number = index_in_file + 1
-    loc = f"{source_file}:{line_number}"
+    row_number = index_in_file + 1
+    loc = f"{source_file}:{row_number}"
 
     try:
         # Validate the sample payload before we touch any file or tokenizer work.
         messages = sample.get("messages")
+        if messages is None:
+            messages = sample.get("conversations")
         images = sample.get("images", [])
         if not isinstance(messages, list) or not messages:
-            raise ValueError("has invalid `messages`.")
+            raise ValueError("has invalid `messages`/`conversations`.")
         if not isinstance(images, list):
             raise ValueError("has invalid `images`.")
 
-        # Normalize image paths against the JSONL location so relative paths work.
+        # Normalize inline parquet image records or relative image paths.
         resolved_images = [process_image(p, image_root=source_file.parent) for p in images]
 
         # Rewrite each message into the processor's multimodal chat structure.
@@ -221,7 +276,7 @@ def process_sample(
         # Catch mismatches between declared images and <image> placeholders early.
         unused = list(image_iter)
         if unused:
-            raise ValueError(f"has {len(unused)} unused image path(s).")
+            raise ValueError(f"has {len(unused)} unused image(s).")
 
         # Tokenize the full conversation once to get model inputs and vision features.
         model_inputs = apply_chat_template(
@@ -244,6 +299,7 @@ def process_sample(
             attention_mask,
             max_length=max_length,
             ignore_index=ignore_index,
+            skip_think_prefix=skip_think_prefix,
         )
         if not torch.any(labels != ignore_index):
             raise ValueError("has no supervised assistant tokens after tokenization/truncation.")
@@ -271,7 +327,7 @@ def build_dataset(config: Any, *, processor: Any):
         processor: Hugging Face processor used during sample processing.
 
     Returns:
-        An ``mvp_dataset.Dataset`` pipeline with JSONL loading, processing, and
+        An ``mvp_dataset.Dataset`` pipeline with parquet loading, processing, and
         sample-level shuffling.
     """
     set_logger(logger)
@@ -280,25 +336,20 @@ def build_dataset(config: Any, *, processor: Any):
         raise ValueError("Missing `data.train_path` for the OpenBee recipe.")
     dataset_path = Path(dataset_path_value).expanduser().resolve()
 
-    output_dir = dataset_path.parent / ".jsonl_shards"
     context = RuntimeContext.from_runtime(seed=int(config.seed))
-    num_shards = max(get_world_size(), 1)
 
     dataset = (
-        Dataset.from_jsonl(
+        Dataset.from_parquet(
             dataset_path,
             context=context,
             resample=True,
-            group_key="images",
-            num_shards=int(num_shards),
-            output_dir=output_dir,
         )
-        .resolve_refs([("images", dataset_path.parent)])
         .map(
             partial(
                 process_sample,
                 processor=processor,
                 max_length=int(config.data.max_seq_len),
+                skip_think_prefix=not bool(config.data.enable_thinking),
             )
         )
         .shuffle(buffer_size=config.data.shuffle_buffer)

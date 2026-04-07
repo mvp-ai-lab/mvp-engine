@@ -20,6 +20,14 @@ def build_qwen3_vl_processor(model_config: Any):
         model_config.pretrained_model_name_or_path,
         trust_remote_code=True,
     )
+    image_processor = getattr(processor, "image_processor", None)
+    image_max_pixels = getattr(model_config, "image_max_pixels", None)
+    if image_processor is not None and image_max_pixels is not None:
+        size = getattr(image_processor, "size", None)
+        if isinstance(size, dict):
+            size["longest_edge"] = int(image_max_pixels)
+        if hasattr(image_processor, "max_pixels"):
+            image_processor.max_pixels = int(image_max_pixels)
 
     tokenizer = getattr(processor, "tokenizer", None)
     if tokenizer is not None:
@@ -39,5 +47,15 @@ def _processor_fingerprint(processor: Any) -> str:
     ]
     for candidate in candidates:
         if isinstance(candidate, str) and candidate:
-            return candidate
-    return f"{type(processor).__module__}.{type(processor).__qualname__}"
+            base = candidate
+            break
+    else:
+        base = f"{type(processor).__module__}.{type(processor).__qualname__}"
+
+    image_processor = getattr(processor, "image_processor", None)
+    image_size = getattr(image_processor, "size", None)
+    if isinstance(image_size, dict):
+        shortest_edge = image_size.get("shortest_edge")
+        longest_edge = image_size.get("longest_edge")
+        return f"{base}|image_size={shortest_edge}x{longest_edge}"
+    return base
