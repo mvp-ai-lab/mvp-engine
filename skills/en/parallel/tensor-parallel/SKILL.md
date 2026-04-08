@@ -1,14 +1,18 @@
 ---
 name: tensor-parallel
-description: Add recipe-local tensor parallel plans and optional TP postprocess hooks for a model in this repo. Use when enabling TP for a new model, updating mesh config, or fixing TP-local runtime metadata.
+description: Add recipe-local tensor parallel plans and optional TP postprocess hooks for a
+  model in this repo. Use when enabling TP for a new model, updating mesh config, or fixing
+  TP-local runtime metadata.
 ---
 
 # TP Module Config Playbook
 
 ## Goal
 
-- Generate `<MODEL_NAME>_TP_MODULE_CONFIG` for the target model and bind it on the top-level model class as `TP_MODULE_CONFIG`.
-- Add `TP_MODULE_POSTPROCESSORS` only when TP sharding changes module-local metadata that the runtime does not fix automatically.
+- Generate `<MODEL_NAME>_TP_MODULE_CONFIG` for the target model and bind it on the
+  top-level model class as `TP_MODULE_CONFIG`.
+- Add `TP_MODULE_POSTPROCESSORS` only when TP sharding changes module-local metadata that
+  the runtime does not fix automatically.
 - Update the training mesh config so TP size, replicate, and shard are compatible.
 
 ## Required Inputs
@@ -26,12 +30,16 @@ description: Add recipe-local tensor parallel plans and optional TP postprocess 
 ### 1. Collect the runtime structure
 
 - Find the target modeling file and the top-level model class used by training.
-- Find the repeated compute blocks such as attention, MLP, projector, or branch MLP classes.
+- Find the repeated compute blocks such as attention, MLP, projector, or branch MLP
+  classes.
 - In each block class, collect direct `nn.Linear` child names from `__init__`.
 - Build the TP plan with these heuristics:
-  - use `"col"` for input-expansion projections such as `q_proj`, `k_proj`, `v_proj`, `qkv`, `fc1`, `up_proj`, `gate_proj`, and `_a/_b` branch variants
-  - use `"row"` for output-merge projections such as `out_proj`, `o_proj`, `proj_out`, `fc2`, `down_proj`, `wo`, and `_a/_b` branch variants
-  - if unsure, treat early projections as `"col"` and the final projection back to hidden size as `"row"`
+  - use `"col"` for input-expansion projections such as `q_proj`, `k_proj`, `v_proj`,
+    `qkv`, `fc1`, `up_proj`, `gate_proj`, and `_a/_b` branch variants
+  - use `"row"` for output-merge projections such as `out_proj`, `o_proj`, `proj_out`,
+    `fc2`, `down_proj`, `wo`, and `_a/_b` branch variants
+  - if unsure, treat early projections as `"col"` and the final projection back to hidden
+    size as `"row"`
 - Keep in mind the runtime contract in this repo:
   - `TP_MODULE_CONFIG` maps `module.__class__.__name__ -> plan`
   - each plan maps child linear names to `"col"` or `"row"`
@@ -41,7 +49,9 @@ description: Add recipe-local tensor parallel plans and optional TP postprocess 
 
 - Define `<MODEL_NAME>_TP_MODULE_CONFIG` in the modeling file.
 - Bind it on the top-level model class as `TP_MODULE_CONFIG`.
-- If the model comes from `transformers`, it is acceptable to create a wrapper class with the same top-level class name in the local modeling file and bind the TP attributes there.
+- If the model comes from `transformers`, it is acceptable to create a wrapper class with
+  the same top-level class name in the local modeling file and bind the TP attributes
+  there.
 - If the modeling file already contains the top-level wrapper class used by training, only
   extend that existing class with `TP_MODULE_CONFIG` or `TP_MODULE_POSTPROCESSORS`; do not
   create a second wrapper class with the same name.
@@ -71,7 +81,8 @@ class <TopModelClass>(...):
 ### 3. Check whether TP postprocessing is required
 
 - Read the target module's `forward()` carefully after drafting the TP plan.
-- If `forward()` only consumes tensor shapes produced by the sharded linears, extra postprocessing is usually unnecessary.
+- If `forward()` only consumes tensor shapes produced by the sharded linears, extra
+  postprocessing is usually unnecessary.
 - If `forward()` depends on cached metadata on `self`, add a postprocess hook.
 - Common warning signs include:
   - `view(..., self.num_attention_heads, self.attention_head_size)`
@@ -104,7 +115,8 @@ class MyModel(...):
 
 ### 5. Update the training config
 
-- If the user has not already specified them, ask these two questions before editing config:
+- If the user has not already specified them, ask these two questions before editing
+  config:
   - how many GPUs per node will training use
   - what TP size should the recipe use
 - Add `tensor: <N>` to the mesh config when it is missing.
@@ -127,13 +139,16 @@ parallel:
 - `TP_MODULE_CONFIG` keys equal real runtime class names.
 - Each plan key exists in the target class as a real child module.
 - Plan values use only `"col"` or `"row"`.
-- The top-level model class exposes `<MODEL_NAME>_TP_MODULE_CONFIG` through `TP_MODULE_CONFIG`.
+- The top-level model class exposes `<MODEL_NAME>_TP_MODULE_CONFIG` through
+  `TP_MODULE_CONFIG`.
 - If the top-level wrapper class already existed, the change extends that class instead of
   creating a second class with the same name.
 - If the model uses both TP and FSDP2 prefetching, the related class attributes are merged
   onto the same top-level model class declaration.
-- Every module whose `forward()` depends on cached global metadata was reviewed for TP postprocessing.
-- `TP_MODULE_POSTPROCESSORS`, if present, uses real runtime class names and only mutates local runtime metadata.
+- Every module whose `forward()` depends on cached global metadata was reviewed for TP
+  postprocessing.
+- `TP_MODULE_POSTPROCESSORS`, if present, uses real runtime class names and only mutates
+  local runtime metadata.
 - The mesh config has compatible `replicate`, `shard`, and `tensor` values.
 
 ## Output
@@ -145,4 +160,5 @@ parallel:
 
 ## Read On Demand
 
-- Read `./references/vit_classification/` when you need a full TP example with model changes, config wiring, and recipe-local tests.
+- Read `./references/vit_classification/` when you need a full TP example with model
+  changes, config wiring, and recipe-local tests.

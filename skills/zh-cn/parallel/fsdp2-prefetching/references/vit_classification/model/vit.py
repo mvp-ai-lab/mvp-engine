@@ -10,7 +10,7 @@ from transformers.models.vit.modeling_vit import (
 
 
 def apply_fsdp2_custom_prefetching_for_vit(model: nn.Module) -> None:
-    """Wire forward and backward prefetch edges for a sequential ViT encoder."""
+    """Wire forward/backward prefetch edges for a sequential ViT encoder."""
     if getattr(model, "_fsdp2_prefetching_configured", False):
         return
 

@@ -19,7 +19,7 @@ The runtime contract in this repo is fixed:
 - Entry point: `mvp_engine/distributed/fsdp2.py`
 - Runtime only discovers and calls `model.__class__.APPLY_FSDP2_CUSTOM_PREFETCHING(model)`
   after FSDP2 wrapping
-- Do not add a YAML toggle for this behavior
+- Do not add a YAML toggle or design a generic prefetch DSL
 
 ## Required Inputs
 
@@ -106,20 +106,20 @@ class <TopModelClass>(...):
 - Do not introduce `torch.fx`, tracing helpers, or automatic graph analysis.
 - Do not abstract model-local execution order into a generic runtime helper.
 - Do not mutate model config to represent prefetch edges.
-- If the wiring only covers a few module families, use explicit loops and branches.
+- If the wiring is only a few module families, use explicit loops and branches.
 
 ## Validation
 
-- The top-level model class defines `APPLY_FSDP2_CUSTOM_PREFETCHING` and its value is
-  callable.
-- If the top-level wrapper class already existed, the change extends that class instead of
-  creating a second class with the same name.
-- If the model uses both TP and FSDP2 prefetching, the related class attributes are merged
-  onto the same top-level model class declaration.
-- The callable resolves real runtime module paths instead of guessed names.
-- Every module used in a prefetch edge is part of the FSDP2 wrap set.
-- The callable has an idempotence guard and can be called twice safely.
-- No generic prefetch DSL, graph helper, or YAML config field was introduced.
+- Confirm the top-level model class defines `APPLY_FSDP2_CUSTOM_PREFETCHING` and that it
+  is callable.
+- Confirm that if the top-level wrapper class already existed, this change extended that
+  class instead of creating a second class with the same name.
+- Confirm that if the model uses both TP and FSDP2 prefetching, the related class
+  attributes are merged onto the same top-level model class declaration.
+- Confirm the callable resolves real runtime module paths instead of guessed names.
+- Confirm every module used in a prefetch edge is part of the FSDP2 wrap set.
+- Confirm the callable has an idempotence guard and can be called twice safely.
+- Confirm no generic prefetch DSL, graph helper, or YAML config field was introduced.
 
 ## Output
 

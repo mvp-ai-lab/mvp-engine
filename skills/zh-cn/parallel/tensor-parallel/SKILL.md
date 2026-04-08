@@ -1,14 +1,17 @@
 ---
 name: tensor-parallel
-description: 为本仓库中的模型增加 recipe-local 的 tensor parallel plan 和可选 TP 后处理 hook。适用于给新模型接入 TP、更新 mesh 配置，或修正 TP 后的模块局部元数据。
+description: 为本仓库中的模型增加 recipe-local 的 tensor parallel plan 和可选 TP 后处理 hook。
+  适用于给新模型接入 TP、更新 mesh 配置，或修正 TP 后的模块局部元数据。
 ---
 
 # TP Module Config 操作手册
 
 ## Goal
 
-- 为目标模型生成 `<MODEL_NAME>_TP_MODULE_CONFIG`，并在顶层模型类上绑定为 `TP_MODULE_CONFIG`。
-- 只有当 TP 分片改变了运行时不会自动修正的模块局部元数据时，才增加 `TP_MODULE_POSTPROCESSORS`。
+- 为目标模型生成 `<MODEL_NAME>_TP_MODULE_CONFIG`，并在顶层模型类上绑定为
+  `TP_MODULE_CONFIG`。
+- 只有当 TP 分片改变了运行时不会自动修正的模块局部元数据时，才增加
+  `TP_MODULE_POSTPROCESSORS`。
 - 调整训练 mesh 配置，使 TP size、replicate 和 shard 彼此兼容。
 
 ## Required Inputs
@@ -29,8 +32,10 @@ description: 为本仓库中的模型增加 recipe-local 的 tensor parallel pla
 - 找到会重复实例化的计算块，例如 attention、MLP、projector 或 branch MLP。
 - 在每个 block 类中，收集 `__init__` 里直接定义的 `nn.Linear` 子模块名。
 - 按以下启发式规则建立 TP plan：
-  - `q_proj`、`k_proj`、`v_proj`、`qkv`、`fc1`、`up_proj`、`gate_proj` 以及 `_a/_b` 分支变体通常用 `"col"`
-  - `out_proj`、`o_proj`、`proj_out`、`fc2`、`down_proj`、`wo` 以及 `_a/_b` 分支变体通常用 `"row"`
+  - `q_proj`、`k_proj`、`v_proj`、`qkv`、`fc1`、`up_proj`、`gate_proj` 以及 `_a/_b`
+    分支变体通常用 `"col"`
+  - `out_proj`、`o_proj`、`proj_out`、`fc2`、`down_proj`、`wo` 以及 `_a/_b`
+    分支变体通常用 `"row"`
   - 如果拿不准，前面的扩张投影通常按 `"col"`，回到 hidden size 的最终投影按 `"row"`
 - 同时遵守本仓库的运行时约定：
   - `TP_MODULE_CONFIG` 映射 `module.__class__.__name__ -> plan`
@@ -41,7 +46,8 @@ description: 为本仓库中的模型增加 recipe-local 的 tensor parallel pla
 
 - 在 modeling 文件里定义 `<MODEL_NAME>_TP_MODULE_CONFIG`。
 - 在顶层模型类上绑定 `TP_MODULE_CONFIG`。
-- 如果模型来自 `transformers`，可以在本地 modeling 文件里创建同名 wrapper class，并在其上绑定 TP 属性。
+- 如果模型来自 `transformers`，可以在本地 modeling 文件里创建同名 wrapper class，
+  并在其上绑定 TP 属性。
 - 如果 modeling 文件里已经存在训练实际使用的顶层 wrapper class，只能在这个已有类上追加
   `TP_MODULE_CONFIG` 或 `TP_MODULE_POSTPROCESSORS`，禁止再创建第二个同名 wrapper class。
 - 如果模型同时需要 TP 与 FSDP2 prefetching，必须把 `TP_MODULE_CONFIG`、

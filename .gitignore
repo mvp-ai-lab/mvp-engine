@@ -167,6 +167,7 @@ data/
 !skills/en/data/
 !skills/cn/data/
 /scripts/
+/references/
 wandb/
 playground/
 .deepspeed_env

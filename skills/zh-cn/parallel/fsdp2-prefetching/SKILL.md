@@ -18,7 +18,7 @@ description: 为 recipe 或 model 中的新模型补充 FSDP2 prefetching callab
 - 入口在 `mvp_engine/distributed/fsdp2.py`
 - runtime 只会在 FSDP2 wrap 完成后读取并调用
   `model.__class__.APPLY_FSDP2_CUSTOM_PREFETCHING(model)`
-- 不为这套行为新增 YAML 开关
+- 不新增 YAML 开关，不设计通用 prefetch DSL
 
 ## Required Inputs
 
@@ -96,19 +96,19 @@ class <TopModelClass>(...):
 
 ## Validation
 
-- 顶层模型类定义了 `APPLY_FSDP2_CUSTOM_PREFETCHING`，且其值为 callable。
-- 若顶层 wrapper class 已存在，本次修改是在原类上追加属性，而不是新建第二个同名类。
-- 若模型同时启用 TP 与 FSDP2 prefetching，相关类属性已合并到同一个顶层模型类声明中。
-- callable 解析的是运行时真实模块路径，而不是猜测的名字。
-- 所有被加入 prefetch 边的模块都属于 FSDP2 wrap 集合。
-- callable 具备幂等 guard，重复调用不会重复改写状态。
-- 没有引入新的通用 prefetch DSL、graph helper 或 YAML 配置项。
+- 确认顶层模型类定义了 `APPLY_FSDP2_CUSTOM_PREFETCHING`，且其值为 callable。
+- 确认若顶层 wrapper class 已存在，本次修改是在原类上追加属性，而不是新建第二个同名类。
+- 确认若模型同时启用 TP 与 FSDP2 prefetching，相关类属性已经合并到同一个顶层模型类声明中。
+- 确认 callable 在读取模块时依赖的是运行时真实模块路径，而不是猜测的名字。
+- 确认所有被加入 prefetch 边的模块都已经进入 FSDP2 wrap 集合。
+- 确认 callable 具备幂等 guard，重复调用不会重复改写状态。
+- 确认没有引入新的通用 prefetch DSL、graph helper 或 YAML 配置项。
 
 ## Output
 
 - 说明新增或修改了哪个模型文件，以及绑定了哪个
   `APPLY_FSDP2_CUSTOM_PREFETCHING` callable。
-- 总结 forward 和 backward prefetch 的核心边。
+- 说明 forward 和 backward prefetch 的核心边。
 - 说明已验证内容和仍未验证的部分。
 
 ## Read On Demand
