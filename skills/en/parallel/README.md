@@ -4,3 +4,4 @@ Skills for **distributed / parallelism strategies** (e.g. FSDP wrap policy, tens
 
 Available:
 - `tensor-parallel/SKILL.md`: Tensor Parallel module config generation guide.
+- `fsdp2-prefetching/SKILL.md`: FSDP2 prefetching callable generation guide.

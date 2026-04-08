@@ -42,6 +42,10 @@ description: 为本仓库中的模型增加 recipe-local 的 tensor parallel pla
 - 在 modeling 文件里定义 `<MODEL_NAME>_TP_MODULE_CONFIG`。
 - 在顶层模型类上绑定 `TP_MODULE_CONFIG`。
 - 如果模型来自 `transformers`，可以在本地 modeling 文件里创建同名 wrapper class，并在其上绑定 TP 属性。
+- 如果 modeling 文件里已经存在训练实际使用的顶层 wrapper class，只能在这个已有类上追加
+  `TP_MODULE_CONFIG` 或 `TP_MODULE_POSTPROCESSORS`，禁止再创建第二个同名 wrapper class。
+- 如果模型同时需要 TP 与 FSDP2 prefetching，必须把 `TP_MODULE_CONFIG`、
+  `TP_MODULE_POSTPROCESSORS` 与 `APPLY_FSDP2_CUSTOM_PREFETCHING` 合并到同一个顶层模型类声明中。
 
 ```python
 <MODEL_NAME>_TP_MODULE_CONFIG: dict[str, object] = {
@@ -122,6 +126,8 @@ parallel:
 - 每个 plan key 都是目标类上的真实子模块。
 - plan value 只使用 `"col"` 或 `"row"`。
 - 顶层模型类通过 `TP_MODULE_CONFIG` 暴露了 `<MODEL_NAME>_TP_MODULE_CONFIG`。
+- 若顶层 wrapper class 已存在，本次修改是在原类上追加属性，而不是新建第二个同名类。
+- 若模型同时启用 TP 与 FSDP2 prefetching，相关类属性已合并到同一个顶层模型类声明中。
 - 所有依赖缓存全局元数据的模块都检查过是否需要 TP 后处理。
 - 如果存在 `TP_MODULE_POSTPROCESSORS`，其 key 与真实运行时类名一致，且只修改本地运行时元数据。
 - mesh 配置里的 `replicate`、`shard` 和 `tensor` 彼此兼容。

@@ -42,6 +42,12 @@ description: Add recipe-local tensor parallel plans and optional TP postprocess 
 - Define `<MODEL_NAME>_TP_MODULE_CONFIG` in the modeling file.
 - Bind it on the top-level model class as `TP_MODULE_CONFIG`.
 - If the model comes from `transformers`, it is acceptable to create a wrapper class with the same top-level class name in the local modeling file and bind the TP attributes there.
+- If the modeling file already contains the top-level wrapper class used by training, only
+  extend that existing class with `TP_MODULE_CONFIG` or `TP_MODULE_POSTPROCESSORS`; do not
+  create a second wrapper class with the same name.
+- If the model needs both TP and FSDP2 prefetching, `TP_MODULE_CONFIG`,
+  `TP_MODULE_POSTPROCESSORS`, and `APPLY_FSDP2_CUSTOM_PREFETCHING` must be merged onto the
+  same top-level model class declaration.
 
 ```python
 <MODEL_NAME>_TP_MODULE_CONFIG: dict[str, object] = {
@@ -122,6 +128,10 @@ parallel:
 - Each plan key exists in the target class as a real child module.
 - Plan values use only `"col"` or `"row"`.
 - The top-level model class exposes `<MODEL_NAME>_TP_MODULE_CONFIG` through `TP_MODULE_CONFIG`.
+- If the top-level wrapper class already existed, the change extends that class instead of
+  creating a second class with the same name.
+- If the model uses both TP and FSDP2 prefetching, the related class attributes are merged
+  onto the same top-level model class declaration.
 - Every module whose `forward()` depends on cached global metadata was reviewed for TP postprocessing.
 - `TP_MODULE_POSTPROCESSORS`, if present, uses real runtime class names and only mutates local runtime metadata.
 - The mesh config has compatible `replicate`, `shard`, and `tensor` values.
