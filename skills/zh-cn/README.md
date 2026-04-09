@@ -88,7 +88,7 @@ Agent 会按 skill 工作流生成适配代码和测试。
 ## Skill 列表
 
 - `parallel/fsdp2-prefetching`：[parallel/fsdp2-prefetching/SKILL.md](parallel/fsdp2-prefetching/SKILL.md)
-- `parallel/tensor-parallel`: [parallel/tensor-parallel/SKILL.md](parallel/tensor-parallel/SKILL.md)
+- `parallel/tensor-parallel`：[parallel/tensor-parallel/SKILL.md](parallel/tensor-parallel/SKILL.md)
 - `training/model-compile`：[training/model-compile/SKILL.md](training/model-compile/SKILL.md)
 - `training/gradient-checkpointing`：[training/gradient-checkpointing/SKILL.md](training/gradient-checkpointing/SKILL.md)
 - `model/model-migration`：[model/model-migration/SKILL.md](model/model-migration/SKILL.md)

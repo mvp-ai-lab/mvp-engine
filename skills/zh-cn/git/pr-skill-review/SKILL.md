@@ -1,47 +1,63 @@
 ---
 name: pr-skill-review
-description: 对「修改 skill 文件」的 PR 做评审。应用 skill 评审清单，输出具体问题、建议与可保留项。
+description: 对修改 skills/ 下文件的 PR 做评审。使用 skill 评审清单，指出具体问题与优点，并把反馈落到明确文件和章节上。
 ---
 
 # 评审 Skill PR
 
-## 何时使用
+## Goal
 
-- 用户要求你对「修改了 `skills/` 下文件」的 PR 做 review（如 SKILL.md、references/*.md）。
-- 用户要求针对 skill 内容做评审（模式、完整性、清晰度、是否符合 skill 理念、测试指引）。
+- 只评审 PR 中与 skill 相关的部分。
+- 一致地应用仓库的 skill review checklist。
+- 产出作者可以立刻执行的具体反馈。
 
-## 输入约定
+## Required Inputs
 
-- PR 上下文（base/head 分支或 PR diff）。
-- 可选：指定要重点看的 skill 或路径。
+- PR 上下文，例如 base/head 分支或 PR diff。
+- 可选的聚焦路径或 skill 名称，如果用户只想看一部分。
 
-## 标准流程
+## Workflow
 
-1. **识别 skill 相关改动**
-   - 列出 PR 中所有位于 `skills/` 下的文件（任意语言）。
-   - 若 PR 同时改代码与 skill，可将评审范围限定为 skill 相关文件（或与用户约定只审 skill）。
+### 1. 圈定 skill 改动范围
 
-2. **应用 skill 评审清单**
-   - 阅读并应用 [references/skill-review-checklist.md](references/skill-review-checklist.md)（与 `pr-feedback` 的 feedback-checklist 维度一致）。
-   - 对每个被改动的 skill（或新增 skill）逐项检查：准确性、完整性、清晰与一致、与 skill 理念一致、测试指引。
-   - 评论时可使用清单中的「Skill 位置」引用主流程、示例或测试模板路径。
+- 列出所有位于 `skills/` 下的改动文件。
+- 如果 PR 还改了 `skills/` 之外的代码，除非用户要求扩展范围，否则只评审 skill 文件。
 
-3. **给作者的输出**
-   - 列出**具体问题与建议**，并注明文件与章节（如 `path/to/SKILL.md § 何时使用`）。
-   - 若有**可保留**之处，简要说明以便作者知道哪些无需改。
-   - 反馈要可执行：一点一条、带位置与建议改法或待澄清问题。
+### 2. 应用 skill 评审清单
 
-## 输出模板
+- 读取 [references/skill-review-checklist.md](references/skill-review-checklist.md)。
+- 对每个被改动或新增的 skill，按以下维度检查：
+  - 准确性
+  - 完整性
+  - 清晰度与一致性
+  - 是否符合 skill 理念
+  - 测试或验证指引
+- 在评价工作流、示例或验证指引时，使用明确的章节引用。
 
-- **范围**
+### 3. 整理给作者的评审反馈
+
+- 列出具体问题和建议，并注明文件与章节位置。
+- 对已经写得好的内容也要简要指出，避免作者误改无问题部分。
+- 每条反馈只说一个问题或建议，并给出推荐改法或必须澄清的问题。
+
+## Validation
+
+- 评审范围内的每个 skill 文件都实际检查过。
+- 每条发现都引用了具体文件位置或章节。
+- 评审结果能区分必须修改的问题和可以保留的内容。
+- 反馈基于 checklist 维度，而不是泛泛的风格意见。
+
+## Output
+
+- Scope:
   - `已审文件: <skill 文件列表>`
-- **问题 / 建议**
-  - `文件:行号 或 § 章节 | 问题或建议`
-- **可保留**
-  - 简要说明哪些保持现状即可。
-- **小结**
-  - 1～2 句：整体评价与主要后续动作。
+- Issues / Suggestions:
+  - `文件:行号 或 章节 | 问题或建议`
+- Good As-Is:
+  - 简要说明哪些内容应保持现状
+- Summary:
+  - 1-2 句整体评价和后续重点
 
-## 需要参考时再读取
+## Read On Demand
 
-- [references/skill-review-checklist.md](references/skill-review-checklist.md): **评审** skill 内容时使用的完整清单（准确性、完整性、清晰、理念、测试）。
+- 在开始评审 skill 内容前，读取 [references/skill-review-checklist.md](references/skill-review-checklist.md)。
