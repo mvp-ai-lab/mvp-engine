@@ -3,6 +3,10 @@ import os
 import torch
 import torch.distributed as dist
 
+from mvp_engine.distributed.utils import (
+    configure_distributed_socket_ifnames,
+    get_local_rank,
+)
 from mvp_engine.utils.log import simple_info
 from mvp_engine.utils.misc import get_device
 
@@ -20,11 +24,13 @@ def initialize_process_group():
     """Initialize the torch.distributed process group based on env variables.
 
     Uses RANK and WORLD_SIZE from the environment, selects the device for the
-    current rank, and initializes a matching process group via env://.
+    current process via LOCAL_RANK when available, and initializes a matching
+    process group via env://.
     """
     rank = int(os.getenv("RANK", "0"))
     world_size = int(os.getenv("WORLD_SIZE", "1"))
-    device = get_device(rank)
+    device = get_device(get_local_rank())
+    configured_ifnames = {}
 
     if device.type == "cuda":
         torch.cuda.set_device(device)
@@ -36,6 +42,15 @@ def initialize_process_group():
 
     if world_size <= 0:
         raise ValueError("WORLD_SIZE must be greater than 0 for distributed training.")
+
+    if world_size > 1:
+        configured_ifnames = configure_distributed_socket_ifnames(device.type)
+
+    if rank == 0 and configured_ifnames:
+        simple_info(
+            "Distributed socket interfaces: "
+            + ", ".join(f"{env_name}={ifname}" for env_name, ifname in configured_ifnames.items())
+        )
 
     simple_info(
         f"Parallel Process Group Initializing: [bold]rank {rank}/{world_size}[/bold] on [yellow]{device}[/yellow]..."
