@@ -126,8 +126,6 @@ def parallelize_model(
             if backend_kwargs.pop("offload_policy", False):
                 backend_kwargs["offload_policy"] = CPUOffloadPolicy()
 
-            # TODO: support custom prefetching strategy
-
             parallelized_model = parallelize_model_with_fsdp2(model, backend_kwargs)
 
     return parallelized_model

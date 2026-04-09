@@ -230,6 +230,8 @@ def process_sample(
             max_length=max_length,
             ignore_index=ignore_index,
         )
+        if not torch.any(labels != ignore_index):
+            raise ValueError("has no supervised assistant tokens after tokenization/truncation.")
     except Exception as exc:
         raise type(exc)(f"{loc} {exc}") from exc
 
