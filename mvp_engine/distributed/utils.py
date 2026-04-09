@@ -1,3 +1,4 @@
+import os
 import pickle
 from typing import Any, Optional
 
@@ -12,6 +13,11 @@ def get_rank() -> int:
     if not dist.is_initialized():
         return 0
     return dist.get_rank()
+
+
+def get_local_rank() -> int:
+    """Return the local rank of the current process on this node."""
+    return int(os.getenv("LOCAL_RANK", str(get_rank())))
 
 
 def get_world_size() -> int:
