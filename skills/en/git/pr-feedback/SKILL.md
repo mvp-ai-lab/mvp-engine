@@ -1,60 +1,73 @@
 ---
 name: pr-feedback
-description: Use after a PR is open and review comments arrive. Covers comment triage, targeted fixes, regression checks, and reviewer response drafting.
+description: Use after a PR is open and review comments arrive. Triage reviewer comments, implement scoped fixes, re-run validation, and draft reviewer-ready responses with file references.
 ---
 
 # Handle PR Feedback
 
-## When to use
+## Goal
 
-- The user asks to handle reviewer comments on an open PR.
-- The user asks to batch-fix review feedback and prepare responses.
+- Resolve open reviewer feedback on an existing PR with targeted changes.
+- Keep code changes scoped to comment intent and make validation evidence easy to report.
+- Produce reviewer responses that are ready to post.
 
-## Required inputs
+## Required Inputs
 
-- PR context (base/head branch or equivalent diff range).
-- Reviewer comments (inline comments, summary comments, or issue links).
-- Validation commands required before re-push.
+- PR context such as base/head branches or an equivalent diff range.
+- Reviewer comments, including inline comments, summary comments, or linked issues.
+- Validation commands that should run before the branch is pushed again.
 
 ## Workflow
 
-1. Collect review context
-- Gather unresolved comments and categorize by severity/type.
-- Map each comment to concrete files/lines/commits.
+### 1. Collect review context
 
-2. Triage and plan
-- Group by action type:
+- Gather all unresolved comments and map each one to concrete files, lines, or commits.
+- Note whether the comment is blocking correctness, design/readability, or clarification-only.
+
+### 2. Triage and plan
+
+- Group comments by action type:
   - must-fix correctness issues
-  - design/readability improvements
-  - clarification-only responses
-- Identify conflicts or ambiguous comments to clarify with user.
+  - design or readability improvements
+  - explanation-only responses
+- Mark conflicts or ambiguous comments that still need user or reviewer clarification.
 
-3. Implement targeted fixes
-- Keep each fix scoped to comment intent.
-- Update docstrings and type hints/comments when behavior contract changed.
+### 3. Implement targeted fixes
+
+- Keep each code change tightly aligned with the comment that motivated it.
+- Update docstrings, type hints, or comments when the behavior contract changes.
 - Avoid unrelated cleanup in the same patch.
 
-4. Re-validate
-- Run required lint/test commands.
-- If full validation is expensive, run targeted tests and report gaps.
+### 4. Re-validate
 
-5. Draft reviewer responses
-- For each comment, provide:
+- Run the required lint and test commands.
+- If full validation is too expensive, run the targeted checks that cover the changed paths and report the remaining gap explicitly.
+
+### 5. Draft reviewer responses
+
+- For each comment, state:
   - what changed
-  - where it changed (`file:line`)
-  - validation evidence
-- If not changing code, provide concise technical rationale.
+  - where it changed using `file:line`
+  - what validation supports the change
+- If code is not being changed, give a concise technical rationale instead of a vague refusal.
 
-## Output template
+## Validation
 
-- Comment Resolution
+- Every unresolved comment is accounted for as fixed, clarified, or still pending.
+- Each code change maps back to a concrete reviewer comment.
+- Validation results are recorded, or any remaining validation gap is called out explicitly.
+- Reviewer responses cite the changed locations precisely enough for the reviewer to follow them.
+
+## Output
+
+- Comment Resolution:
   - `comment id | action (fixed/clarified/pending) | file:line`
-- Validation
+- Validation:
   - `command | result`
-- Pending Items
+- Pending Items:
   - `needs user decision / reviewer confirmation`
 
-## Read on demand
+## Read On Demand
 
-- [references/feedback-checklist.md](references/feedback-checklist.md): when the PR is about a skill, use this to ensure replies address the same dimensions reviewers use.
-- [../pr-gate/references/docstring-and-typing.md](../pr-gate/references/docstring-and-typing.md): docstring and typing update rules when behavior changed.
+- Read [references/feedback-checklist.md](references/feedback-checklist.md) when the PR changes skills and the response should match the same review dimensions used by skill reviewers.
+- Read [../pr-gate/references/docstring-and-typing.md](../pr-gate/references/docstring-and-typing.md) when behavior changed and the touched code needs docstring or typing cleanup.
