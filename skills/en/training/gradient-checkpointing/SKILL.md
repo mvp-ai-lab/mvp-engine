@@ -102,11 +102,36 @@ for layer in self.layers:
 
 ## 5. Testing
 
-Add recipe-local tests that cover:
+Add recipe-local tests under `recipes/<recipe>/skill_tests/gradient-checkpointing/`:
 
-1. enable and disable toggles set the expected module state.
-2. the checkpoint function is actually invoked during training.
-3. gradients match with and without checkpointing.
+- `test_spec.yaml`: declare the required test layers for this applied skill.
+- `test_structure.py`: at least verify recipe import, registry wiring, config
+  schema validation, required slots, and logger/checkpoint hooks; it must also
+  verify the enable/disable toggles expose the expected module state.
+- `test_runtime.py`: at least build dataset, collator, model, optimizer,
+  scheduler, and engine successfully without starting training; it must also
+  verify that the checkpoint function is actually invoked during training.
+- `test_smoke.py`: cover one real recipe-owned single step: forward, loss,
+  backward, optimizer step, logger write, and checkpoint noop or temporary
+  save; it must also verify gradients match with and without checkpointing.
+- `test_smoke.py` must use the full real capability path for this skill: real
+  engine, real recipe entrypoints, and the real checkpointing / logger /
+  checkpoint wiring under test. Do not short-circuit it with monkeypatch-based
+  fake wrappers, fake checkpoint functions, fake training steps, or similar
+  test-only stand-ins.
+- If the recipe's full-capability single step only makes sense on GPU or
+  distributed hardware, write the smoke test as a real launcher-driven smoke
+  test and set `gpu_preferred: true` in `test_spec.yaml`; do not degrade it
+  into fake logic just to make it run in a weaker environment.
+
+The smoke path must run through the user's real recipe/model entrypoints with a
+minimal recipe-owned config or batch. Do not replace the recipe with an unrelated
+tiny demo model just for this test.
+
+When executing this skill for a user recipe, add these tests automatically. Do not
+wait for the user to ask for test files explicitly. If execution is blocked by GPU
+availability or permissions, return the exact `tests/test_skills.py` command and any
+extra launch command the user needs.
 
 Reference tests:
 

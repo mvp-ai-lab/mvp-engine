@@ -76,9 +76,39 @@ Rules:
 At minimum:
 - config validation
 
+Add recipe-local tests under `recipes/<recipe>/skill_tests/model-compile/`:
+
+- `test_spec.yaml`: declare the required test layers for this applied skill.
+- `test_structure.py`: at least verify recipe import, registry wiring, config
+  schema validation, required slots, and logger/checkpoint hooks; it must also
+  verify the compile config keys exist and compile is wired at the intended point.
+- `test_runtime.py`: at least build dataset, collator, model, optimizer,
+  scheduler, and engine successfully without starting training; it must also
+  verify `torch.compile` is called only on the intended training-path module(s).
+- `test_smoke.py`: cover one real recipe-owned single step: forward, loss,
+  backward, optimizer step, logger write, and checkpoint noop or temporary
+  save; it must also verify both compile-on and compile-off paths complete
+  through the recipe's own training path.
+- `test_smoke.py` must use the full real capability path for this skill: real
+  engine, real recipe entrypoints, and the real `torch.compile` / logger /
+  checkpoint wiring under test. Do not short-circuit it with monkeypatch-based
+  fake compile wrappers, fake training steps, or similar test-only stand-ins.
+- If the recipe's full-capability single step only makes sense on GPU or
+  distributed hardware, write the smoke test as a real launcher-driven smoke
+  test and set `gpu_preferred: true` in `test_spec.yaml`; do not degrade it
+  into fake logic just to make it run in a weaker environment.
+
 If GPU is available, ask the user whether to run the following tests:
 - a single-GPU or single-process `forward/backward` smoke test.
 - compare compile on/off loss and logs. Bitwise identity is not required, but there should be no obvious divergence.
+
+Use the user's real recipe/model entrypoints with a minimal recipe-owned config
+or batch. Do not substitute an unrelated tiny model for compile validation.
+
+When executing this skill for a user recipe, add these tests automatically. Do not
+wait for the user to request test scaffolding separately. If execution is blocked by
+GPU availability or permissions, return the exact `tests/test_skills.py` command and
+any required launch command instead.
 
 Good to record:
 - first-step compile latency.

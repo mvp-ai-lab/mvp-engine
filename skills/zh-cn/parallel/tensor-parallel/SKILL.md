@@ -110,5 +110,32 @@
 - [ ] 如果存在 `TP_MODULE_POSTPROCESSORS`，其中的 key 必须与真实运行时类名一致。
 - [ ] 后处理 hook 只修改本地运行时元数据，不得改写预训练参数张量。
 
+同时在 `recipes/<recipe>/skill_tests/tensor-parallel/` 下补 recipe-local 测试：
+
+- `test_spec.yaml`：声明这个 skill 在该 recipe 上要求哪些测试层级。
+- `test_structure.py`：至少验证 recipe import、registry 接线、config schema 校验、
+  required slots，以及 logger/checkpoint hooks；还必须验证用户顶层模型类上的
+  TP 类属性与配置接线存在。
+- `test_runtime.py`：至少成功构建 dataset、collator、model、optimizer、
+  scheduler 和 engine，且不直接启动训练；还必须验证运行时能解析
+  `TP_MODULE_CONFIG` 并执行必需的 postprocessor。
+- `test_smoke.py`：覆盖 1 个真实、recipe-owned 的 single step：forward、loss、
+  backward、optimizer step、logger write，以及 checkpoint noop 或临时保存；
+  还必须验证用户自己的 recipe / model 能在启用 TP 的情况下完成这一步。
+- `test_smoke.py` 必须走该 skill 的完整真实能力路径：真实 engine、真实 recipe
+  入口、真实 TP / launcher / logger / checkpoint 接线；禁止用 monkeypatch、fake
+  wrapper、fake `parallelize_model`、fake process group、fake device mesh 等
+  测试桩把要验证的并行路径短路掉。
+- 如果该 recipe 的 full-capability single-step 只能在多卡或 GPU / 分布式环境下
+  成立，就把 smoke test 写成真实 launcher 测试，并在 `test_spec.yaml` 里把
+  `gpu_preferred` 设为 `true`；不要为了在 CPU 或单进程下跑通而退化成 fake 逻辑。
+
+不要换成与该 recipe 无关的 tiny model。smoke 测试应基于用户自己的 recipe / model
+真实入口，只把配置和 batch 缩到该 recipe 能接受的最小规模。
+
+当你在用户 recipe 上执行这个 skill 时，应默认自动补齐这些测试，不要要求用户自己列出测试文件。
+如果因为 GPU、分布式启动条件或执行权限受限而无法运行，直接把准确的 `tests/test_skills.py`
+命令以及所需 launcher 命令返回给用户。
+
 ## 示例
 - 一个完整的 ViT TP 示例归档在 `./references/vit_classification/`，其中包含启用 TP 的模型文件、训练配置和 recipe-local 测试。

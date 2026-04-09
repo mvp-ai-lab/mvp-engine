@@ -79,23 +79,44 @@ If the user later needs a concrete pattern, use the closest existing recipe as a
 
 ## 4. Validate
 
-At minimum run:
+Add recipe-local tests under `recipes/<recipe>/skill_tests/new-recipe/`:
 
-```bash
-python3 -m compileall recipes/<recipe_name>
-```
+- `test_spec.yaml`: declare the required test layers for this applied skill.
+- `test_structure.py`: at least verify recipe import, registry wiring, config
+  schema validation, required slots, and logger/checkpoint hooks; for this
+  scaffold skill it must also verify the generated layout exists, expected files
+  are created, package/module names match the recipe name, and the README/config
+  placeholders were rewritten for the requested recipe.
+- `test_runtime.py`: at least build dataset, collator, model, optimizer,
+  scheduler, and engine successfully without starting training; for this
+  scaffold skill it must also verify the recipe modules import cleanly, the
+  config schema validates, the engine class is registered under the configured
+  name, and the scaffold wiring can be resolved.
+- `test_smoke.py`: cover one real recipe-owned single step: forward, loss,
+  backward, optimizer step, logger write, and checkpoint noop or temporary
+  save, using the scaffold's own entrypoints with the smallest recipe-owned
+  config or batch that still proves the scaffold is connected correctly.
+- `test_smoke.py` must use the full real capability path for this skill: real
+  scaffold recipe entrypoints, real engine wiring, and real logger / checkpoint
+  behavior. Do not short-circuit it with monkeypatch-based fake engines, fake
+  training steps, or similar test-only stand-ins.
+- If the recipe's full-capability single step only makes sense on GPU or
+  distributed hardware, write the smoke test as a real launcher-driven smoke
+  test and set `gpu_preferred: true` in `test_spec.yaml`; do not degrade it
+  into fake logic just to make it run in a weaker environment.
 
-Then prefer:
+These skill tests are separate from the scaffold's normal `tests/` directory. Keep
+them focused on scaffold correctness, not task-specific training behavior that does
+not exist yet.
 
-```bash
-uv run --with ruff ruff check recipes/<recipe_name>
-```
+Do not swap in an unrelated toy recipe or model for this skill. Use the user's new
+recipe package, config, and engine entrypoints directly, with the smallest
+recipe-owned validation path that still exercises the scaffold landing points.
 
-If tests were generated, run the recipe-local smoke test:
-
-```bash
-uv run --with pytest pytest -q recipes/<recipe_name>/tests
-```
+When executing this skill for a user recipe, add these tests automatically. Do not
+require the user to spell out the test file list. If execution is blocked by GPU
+availability, distributed-launch constraints, or permissions, return the exact
+`tests/test_skills.py` command and any required launcher command for the user.
 
 ## Pitfalls
 

@@ -79,23 +79,38 @@ python3 skills/en/recipe/new-recipe-template/scripts/create_recipe_template.py \
 
 ## 4. 验证
 
-至少执行：
+在 `recipes/<recipe>/skill_tests/new-recipe/` 下补 recipe-local 测试：
 
-```bash
-python3 -m compileall recipes/<recipe_name>
-```
+- `test_spec.yaml`：声明这个 skill 在该 recipe 上要求哪些测试层级。
+- `test_structure.py`：至少验证 recipe import、registry 接线、config schema 校验、
+  required slots，以及 logger/checkpoint hooks；对这个 scaffold skill 还必须验证
+  生成出的目录结构存在、预期文件已创建、包名与模块名和 recipe 名一致，以及
+  README / config 中的占位内容已按用户请求改写。
+- `test_runtime.py`：至少成功构建 dataset、collator、model、optimizer、
+  scheduler 和 engine，且不直接启动训练；对这个 scaffold skill 还必须验证
+  recipe 模块可正常 import、config schema 可通过校验、engine class 以配置
+  里的名字完成注册，并且这套 scaffold 接线可被解析。
+- `test_smoke.py`：覆盖 1 个真实、recipe-owned 的 single step：forward、loss、
+  backward、optimizer step、logger write，以及 checkpoint noop 或临时保存；
+  使用 scaffold 自己的入口，并把配置或 batch 缩到仍能证明 scaffold 接通正确
+  的最小规模。
+- `test_smoke.py` 必须走该 skill 的完整真实能力路径：真实 scaffold recipe 入口、
+  真实 engine 接线，以及真实 logger / checkpoint 行为；禁止用 monkeypatch、
+  fake engine、fake training step 或类似测试桩把要验证的能力短路掉。
+- 如果该 recipe 的 full-capability single-step 只能在 GPU 或分布式环境下成立，
+  就把 smoke test 写成真实 launcher 测试，并在 `test_spec.yaml` 里把
+  `gpu_preferred` 设为 `true`；不要为了在更弱环境里跑通而退化成 fake 逻辑。
 
-然后优先执行：
+这些 skill tests 与 scaffold 自带的普通 `tests/` 目录是分开的。它们应聚焦在
+脚手架正确性上，而不是尚未实现的任务训练行为。
 
-```bash
-uv run --with ruff ruff check recipes/<recipe_name>
-```
+不要换成与该 recipe 无关的 toy recipe 或 toy model。应直接使用用户新建的
+recipe package、config 和 engine 入口，只把验证路径缩到仍能覆盖 scaffold
+落点的最小规模。
 
-如果生成了测试，再跑：
-
-```bash
-uv run --with pytest pytest -q recipes/<recipe_name>/tests
-```
+当你在用户 recipe 上执行这个 skill 时，应默认自动补齐这些测试，不要要求用户自己列出测试文件。
+如果因为 GPU、分布式启动条件或执行权限受限而无法运行，直接把准确的 `tests/test_skills.py`
+命令以及所需 launcher 命令返回给用户。
 
 ## 常见坑
 

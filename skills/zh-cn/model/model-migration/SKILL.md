@@ -53,11 +53,36 @@ diff -u SOURCE_MODEL.py CHECKPOINT_DIR/modeling_*.py
 ### 4. 添加 recipe 内部一致性测试
 
 测试放置于：
-- `recipes/<recipe>/tests/`
+- `recipes/<recipe>/skill_tests/model-migration/`
+
+至少补齐：
+- `test_spec.yaml`：声明这个 skill 在该 recipe 上要求哪些测试层级。
+- `test_structure.py`：至少验证 recipe import、registry 接线、config schema 校验、
+  required slots，以及 logger/checkpoint hooks；还必须验证迁移后的 recipe 入口
+  与迁移后的模型类接线存在。
+- `test_runtime.py`：至少成功构建 dataset、collator、model、optimizer、
+  scheduler 和 engine，且不直接启动训练；还必须验证与一致性相关的关键运行时
+  路径能通过迁移后的 recipe 入口被触发。
+- `test_smoke.py`：覆盖 1 个真实、recipe-owned 的 single step：forward、loss、
+  backward、optimizer step、logger write，以及 checkpoint noop 或临时保存；
+  还必须验证源实现 vs 迁移实现的一致性，以及通过迁移后 recipe 入口完成严格
+  checkpoint load 覆盖。
+- `test_smoke.py` 必须走该 skill 的完整真实能力路径：真实迁移后 recipe 入口、
+  真实一致性校验，以及真实 checkpoint-load / logger / checkpoint 接线；禁止用
+  monkeypatch、fake migrated model、fake load path 或类似测试桩把要验证的能力
+  短路掉。
+- 如果该 recipe 的 full-capability single-step 只能在 GPU、NPU 或分布式环境下
+  成立，就把 smoke test 写成真实 launcher 测试，并在 `test_spec.yaml` 里把
+  `gpu_preferred` 设为 `true`；不要为了在更弱环境里跑通而退化成 fake 逻辑。
 
 至少覆盖：
 - 源模型 vs 迁移模型在全部支持输入上的一致性。
 - CPU/GPU 类 vs NPU 类（fallback 路径）在共享权重下的一致性。
+- 通过迁移后 recipe 入口做严格 checkpoint load 覆盖。
+
+当你在用户 recipe 上执行这个 skill 时，应默认自动补齐这些测试，不要要求用户自己再描述测试布局。
+如果因为设备资源或执行权限限制而无法运行，直接把准确的 `tests/test_skills.py` 命令
+以及环境相关的启动命令返回给用户。
 
 如果环境允许，分别在 CPU/GPU 与 NPU 设备上运行测试，验证实现间一致性。
 
@@ -95,10 +120,10 @@ assert len(res.unexpected_keys) == 0
 
 ```bash
 # 运行 recipe 内部测试
-uv run --with pytest pytest -q recipes/<recipe>/tests/test_*migration*.py
+python tests/test_skills.py --recipe <recipe> --skill model-migration
 
 # lint 迁移相关文件
-uv run --with ruff ruff check recipes/<recipe>/model recipes/<recipe>/tests
+uv run --with ruff ruff check recipes/<recipe>/model recipes/<recipe>/skill_tests/model-migration
 
 # 查看改动文件
 git status --short --untracked-files=all

@@ -319,6 +319,31 @@ logger.log(log_dict, step=step)
   - 不会明显大于 `1`
   - 如果值可疑，需要回头检查模型 FLOPs、硬件查表、精度映射、step 时间来源和 `world_size`
 
+在 `recipes/<recipe>/skill_tests/model-flops-utilization/` 下补 recipe-local 测试：
+
+- `test_spec.yaml`：声明这个 skill 在该 recipe 上要求哪些测试层级。
+- `test_structure.py`：至少验证 recipe import、registry 接线、config schema 校验、
+  required slots，以及 logger/checkpoint hooks；还必须验证注入的方法存在，
+  且 MFU 的日志 key 已接线。
+- `test_runtime.py`：至少成功构建 dataset、collator、model、optimizer、
+  scheduler 和 engine，且不直接启动训练；还必须验证 engine 侧 MFU 计算
+  能够在该 recipe 自己的运行时输入上被触发。
+- `test_smoke.py`：覆盖 1 个真实、recipe-owned 的 single step：forward、loss、
+  backward、optimizer step、logger write，以及 checkpoint noop 或临时保存；
+  还必须验证同一步里能记录 `perf/mfu`，且不会破坏训练路径。
+- `test_smoke.py` 必须走该 skill 的完整真实能力路径：真实 engine、真实 recipe
+  入口，以及真实 MFU / logger / checkpoint 接线；禁止用 monkeypatch、fake MFU
+  calculator、fake timer、fake logger 或类似测试桩把要验证的能力短路掉。
+- 如果该 recipe 的 full-capability single-step 只能在 GPU 或分布式环境下成立，
+  就把 smoke test 写成真实 launcher 测试，并在 `test_spec.yaml` 里把
+  `gpu_preferred` 设为 `true`；不要为了在更弱环境里跑通而退化成 fake 逻辑。
+
+这些测试必须走用户自己的 recipe / model 真实入口，不要换成绕开真实训练流的 toy model。
+
+当你在用户 recipe 上执行这个 skill 时，应默认自动补齐这些测试，不要等用户自己提出。
+如果因为 GPU 资源或执行权限限制而无法运行，直接把准确的 `tests/test_skills.py` 命令
+以及所需附加启动命令返回给用户。
+
 ## Output
 
 - 说明 `calculate_model_flops(...)` 被注入到了哪里。

@@ -110,5 +110,38 @@ Generate `<MODEL_NAME>_TP_MODULE_CONFIG` for a new model under `recipes/`, then 
 - [ ] `TP_MODULE_POSTPROCESSORS` keys, if present, equal real runtime class names.
 - [ ] Postprocess hooks only change local runtime metadata and do not mutate pretrained parameter tensors.
 
+Add recipe-local tests under `recipes/<recipe>/skill_tests/tensor-parallel/`:
+
+- `test_spec.yaml`: declare the required test layers for this applied skill.
+- `test_structure.py`: at least verify recipe import, registry wiring, config
+  schema validation, required slots, and logger/checkpoint hooks; it must also
+  verify TP class attributes and config wiring exist on the user's top-level
+  model class.
+- `test_runtime.py`: at least build dataset, collator, model, optimizer,
+  scheduler, and engine successfully without starting training; it must also
+  verify runtime resolves `TP_MODULE_CONFIG` and runs required postprocessors.
+- `test_smoke.py`: cover one real recipe-owned single step: forward, loss,
+  backward, optimizer step, logger write, and checkpoint noop or temporary
+  save; it must also verify the user's own recipe/model completes that step with
+  tensor parallel enabled.
+- `test_smoke.py` must use the full real capability path for this skill: real
+  engine, real recipe entrypoints, real TP / launcher / logger / checkpoint
+  wiring. Do not short-circuit the path with monkeypatch-based fake wrappers,
+  fake `parallelize_model`, fake process groups, fake device meshes, or similar
+  test-only stand-ins.
+- If the recipe's full-capability single step only makes sense on multi-GPU or
+  distributed hardware, write the smoke test as a real launcher-driven smoke
+  test and set `gpu_preferred: true` in `test_spec.yaml`; do not degrade it
+  into fake logic just to make it run on CPU or single-process setups.
+
+Do not swap in an unrelated tiny model for this skill. The smoke test should use
+the user's real recipe/model entrypoint with the smallest recipe-owned config that
+still exercises the TP landing points.
+
+When executing this skill for a user recipe, add these tests automatically. Do not
+require the user to spell out the test file list. If execution is blocked by GPU
+availability, distributed-launch constraints, or permissions, return the exact
+`tests/test_skills.py` command and any required launcher command for the user.
+
 ## Example
 - A full ViT TP example is archived under `./references/vit_classification/`, including the TP-enabled model file, training config, and recipe-local tests.

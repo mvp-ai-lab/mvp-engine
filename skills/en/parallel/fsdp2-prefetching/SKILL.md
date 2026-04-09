@@ -90,6 +90,37 @@ The runtime contract in this repo is fixed:
 - Confirm the callable has an idempotence guard and can be called twice safely.
 - Confirm no generic prefetch DSL, graph helper, or YAML config field was introduced.
 
+Add recipe-local tests under `recipes/<recipe>/skill_tests/fsdp2-prefetching/`:
+
+- `test_spec.yaml`: declare the required test layers for this applied skill.
+- `test_structure.py`: at least verify recipe import, registry wiring, config
+  schema validation, required slots, and logger/checkpoint hooks; it must also
+  verify the top-level model class exposes `APPLY_FSDP2_CUSTOM_PREFETCHING`.
+- `test_runtime.py`: at least build dataset, collator, model, optimizer,
+  scheduler, and engine successfully without starting training; it must also
+  verify runtime calls the hook and the idempotence guard works.
+- `test_smoke.py`: cover one real recipe-owned single step: forward, loss,
+  backward, optimizer step, logger write, and checkpoint noop or temporary
+  save; it must also verify the user's own recipe/model completes that step with
+  FSDP2 prefetching applied.
+- `test_smoke.py` must use the full real capability path: real engine, real
+  parallelize entry, real FSDP2 wrap / TP / launcher / logger / checkpoint.
+  Do not short-circuit the parallel path with monkeypatch-based fake wrappers,
+  fake `parallelize_model`, fake `fully_shard`, fake process groups, fake
+  device meshes, or similar test-only stand-ins.
+- If the recipe's full-capability single step only makes sense on multi-GPU or
+  distributed hardware, write the smoke test as a real launcher-driven smoke
+  test and set `gpu_preferred: true` in `test_spec.yaml`; do not degrade it
+  into fake logic just to make it run on CPU or single-process setups.
+
+These tests must use the user's recipe/model landing points. Do not replace them
+with an unrelated tiny model just to make the hook easier to test.
+
+When executing this skill for a user recipe, add these tests automatically. Do not
+wait for the user to request them. If execution is blocked by GPU availability,
+distributed-launch constraints, or permissions, return the exact
+`tests/test_skills.py` command and any required launcher command for the user.
+
 ## Output
 
 - State which model file was added or updated and which `APPLY_FSDP2_CUSTOM_PREFETCHING` callable was bound.

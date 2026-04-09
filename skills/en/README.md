@@ -84,6 +84,49 @@ Example:
 Use @skills/en/git/pr-gate/SKILL.md
 ```
 
+## Recipe-Local Skill Tests
+
+When a skill changes a user recipe, the tests for that skill should live with that
+recipe, not under `skills/` and not under some unrelated demo recipe.
+
+Use this layout:
+
+```text
+recipes/<recipe>/
+├── skill_manifest.yaml
+└── skill_tests/
+    ├── <skill-id>/
+    │   ├── test_spec.yaml
+    │   ├── test_structure.py
+    │   ├── test_runtime.py
+    │   └── test_smoke.py
+    └── test_all_skills.py
+```
+
+- `skill_manifest.yaml` tracks recipe-relevant training skills with statuses such as
+  `pending`, `applying`, `tests_passed`, `failed`, and `not_applicable`.
+- `test_spec.yaml` declares which layers are required for that applied skill.
+- Tests must exercise the user's real recipe/model entrypoints with a minimal
+  recipe-owned config or batch, not a separate toy model unrelated to that recipe.
+- `test_structure.py` should at least verify recipe import, registry wiring, config
+  schema validation, required slots, and logger/checkpoint hooks.
+- `test_runtime.py` should build dataset, collator, model, optimizer, scheduler, and
+  engine successfully, but it does not need to run training.
+- `test_smoke.py` should cover one real step: forward, loss, backward, optimizer
+  step, logger write, and checkpoint noop or temporary save.
+- Run them with `python tests/test_skills.py --recipe <recipe> --skill <skill-id>`.
+- The user should not need to ask for these tests explicitly. When an agent applies
+  a skill to a user recipe, it should also add the matching recipe-local tests and
+  try to run them by default.
+- The agent should also initialize or update `skill_manifest.yaml` automatically,
+  and only mark a skill as `tests_passed` after its recipe-local tests succeed.
+- If running the tests needs GPU resources or higher execution permissions and those
+  are not currently available, the agent should report the exact command for the user
+  instead of asking the user to design the test flow.
+- If a recipe-local test really requires a real GPU or distributed environment, it
+  should fail with an actionable command for the user to run in that environment,
+  not `skip`.
+
 ## Skill List
 
 - `parallel/fsdp2-prefetching`: [parallel/fsdp2-prefetching/SKILL.md](parallel/fsdp2-prefetching/SKILL.md)

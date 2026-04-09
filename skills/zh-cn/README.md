@@ -85,6 +85,46 @@ Agent 会按 skill 工作流生成适配代码和测试。
 参考 @skills/zh-cn/git/pr-gate/SKILL.md
 ```
 
+## Recipe 内 Skill 测试约定
+
+当某个 skill 修改的是用户自己的 recipe 时，对应测试应放在该 recipe
+目录下，而不是放到 `skills/` 里，也不是放到无关的示例 recipe 里。
+
+推荐结构：
+
+```text
+recipes/<recipe>/
+├── skill_manifest.yaml
+└── skill_tests/
+    ├── <skill-id>/
+    │   ├── test_spec.yaml
+    │   ├── test_structure.py
+    │   ├── test_runtime.py
+    │   └── test_smoke.py
+    └── test_all_skills.py
+```
+
+- `skill_manifest.yaml` 用来记录该 recipe 相关 skill 的状态，例如 `pending`、
+  `applying`、`tests_passed`、`failed`、`not_applicable`。
+- `test_spec.yaml` 用来声明该 skill 需要哪些测试层级。
+- 测试必须围绕用户自己的 recipe / model 入口来写，使用 recipe 自己的最小配置或最小 batch，
+  不要额外造一个与该 recipe 无关的 toy model。
+- `test_structure.py` 至少应验证 recipe import、registry 接线、config schema validate、
+  required slots，以及 logger/checkpoint hooks。
+- `test_runtime.py` 至少应构建 dataset、collator、model、optimizer、scheduler、engine，
+  但这一层不直接进入训练。
+- `test_smoke.py` 至少应覆盖 1 个真实 step：forward、loss、backward、optimizer step、
+  logger write，以及 checkpoint noop 或临时保存。
+- 统一入口：`python tests/test_skills.py --recipe <recipe> --skill <skill-id>`。
+- 用户不应该还要自己提出“补这些测试”。当 agent 在用户 recipe 上应用某个 skill 时，
+  应默认同时补齐对应的 recipe-local 测试，并默认尝试执行。
+- agent 还应默认自动初始化或更新 `skill_manifest.yaml`，并且只有在该 skill
+  的 recipe-local 测试通过后，才把状态更新为 `tests_passed`。
+- 如果执行测试需要 GPU 资源或更高执行权限，而当前环境不具备，agent 应直接把准确命令返回给用户，
+  而不是让用户自己设计测试流程。
+- 如果某个 recipe-local 测试确实需要真实 GPU 或分布式环境，不应 `skip`，而应直接失败并给出
+  用户在真实环境里需要执行的准确命令。
+
 ## Skill 列表
 
 - `parallel/fsdp2-prefetching`：[parallel/fsdp2-prefetching/SKILL.md](parallel/fsdp2-prefetching/SKILL.md)

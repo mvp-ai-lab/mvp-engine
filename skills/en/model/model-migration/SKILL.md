@@ -53,11 +53,39 @@ Recommended pattern:
 ### 4. Add recipe-local parity tests
 
 Create tests in:
-- `recipes/<recipe>/tests/`
+- `recipes/<recipe>/skill_tests/model-migration/`
+
+Add:
+- `test_spec.yaml`: declare the required test layers for this applied skill.
+- `test_structure.py`: at least verify recipe import, registry wiring, config
+  schema validation, required slots, and logger/checkpoint hooks; it must also
+  verify the migrated recipe entrypoints and migrated model class wiring exist.
+- `test_runtime.py`: at least build dataset, collator, model, optimizer,
+  scheduler, and engine successfully without starting training; it must also
+  verify parity-critical runtime paths are reachable through the migrated recipe
+  entrypoints.
+- `test_smoke.py`: cover one real recipe-owned single step: forward, loss,
+  backward, optimizer step, logger write, and checkpoint noop or temporary
+  save; it must also verify source-vs-migrated parity and strict checkpoint-load
+  coverage through the migrated recipe entrypoints.
+- `test_smoke.py` must use the full real capability path for this skill: real
+  migrated recipe entrypoints, real parity checks, and real checkpoint-load /
+  logger / checkpoint wiring. Do not short-circuit it with monkeypatch-based
+  fake migrated models, fake load paths, or similar test-only stand-ins.
+- If the recipe's full-capability single step only makes sense on GPU, NPU, or
+  distributed hardware, write the smoke test as a real launcher-driven smoke
+  test and set `gpu_preferred: true` in `test_spec.yaml`; do not degrade it
+  into fake logic just to make it run in a weaker environment.
 
 Include at least:
 - Source vs migrated model parity on all supported inputs.
 - CPU/GPU class vs NPU-class (fallback path) parity with shared weights.
+- strict checkpoint-load coverage through the migrated recipe entrypoints.
+
+When executing this skill for a user recipe, add these tests automatically. Do not
+require the user to ask for the test layout separately. If execution is blocked by
+device availability or permissions, return the exact `tests/test_skills.py` command
+and any required environment-specific launch command.
 
 If the environment allows, run tests on both CPU/GPU and NPU devices to validate parity across implementations.
 
@@ -95,10 +123,10 @@ Ship only when all pass:
 
 ```bash
 # run recipe-local tests
-uv run --with pytest pytest -q recipes/<recipe>/tests/test_*migration*.py
+python tests/test_skills.py --recipe <recipe> --skill model-migration
 
 # lint migration files
-uv run --with ruff ruff check recipes/<recipe>/model recipes/<recipe>/tests
+uv run --with ruff ruff check recipes/<recipe>/model recipes/<recipe>/skill_tests/model-migration
 
 # inspect changed files
 git status --short --untracked-files=all

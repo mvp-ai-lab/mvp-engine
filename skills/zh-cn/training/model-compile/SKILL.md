@@ -76,9 +76,35 @@ if self.config.model.compile:
 至少完成：
 - config 验证
 
+在 `recipes/<recipe>/skill_tests/model-compile/` 下补 recipe-local 测试：
+
+- `test_spec.yaml`：声明这个 skill 在该 recipe 上要求哪些测试层级。
+- `test_structure.py`：至少验证 recipe import、registry 接线、config schema 校验、
+  required slots，以及 logger/checkpoint hooks；还必须验证配置字段存在，且
+  compile 接线位置符合预期。
+- `test_runtime.py`：至少成功构建 dataset、collator、model、optimizer、
+  scheduler 和 engine，且不直接启动训练；还必须验证 `torch.compile`
+  只作用在预期的训练热路径模块上。
+- `test_smoke.py`：覆盖 1 个真实、recipe-owned 的 single step：forward、loss、
+  backward、optimizer step、logger write，以及 checkpoint noop 或临时保存；
+  还必须验证 compile 开/关两种路径都能走通该 recipe 自己的训练路径。
+- `test_smoke.py` 必须走该 skill 的完整真实能力路径：真实 engine、真实 recipe
+  入口，以及真实 `torch.compile` / logger / checkpoint 接线；禁止用 monkeypatch、
+  fake compile wrapper、fake training step 或类似测试桩把要验证的能力短路掉。
+- 如果该 recipe 的 full-capability single-step 只能在 GPU 或分布式环境下成立，
+  就把 smoke test 写成真实 launcher 测试，并在 `test_spec.yaml` 里把
+  `gpu_preferred` 设为 `true`；不要为了在更弱环境里跑通而退化成 fake 逻辑。
+
 如果有 GPU 可以用，询问用户是否做如下测试：
 - 单卡或单进程 `forward/backward` 冒烟。
 - 对比 compile 开/关的 loss 与日志是否正常，不要求逐 bit 一致，但要无明显发散。
+
+这些测试必须走用户自己的 recipe / model 真实入口，只能缩到 recipe 自己的最小配置或最小 batch，
+不要替换成无关的 tiny model。
+
+当你在用户 recipe 上执行这个 skill 时，应默认自动补齐这些测试，不要等用户再单独要求。
+如果因为 GPU 资源或执行权限限制而无法运行，直接把准确的 `tests/test_skills.py` 命令
+以及所需附加启动命令返回给用户。
 
 建议记录：
 - 首步编译耗时。
