@@ -1,44 +1,39 @@
 ---
 name: new-recipe-template
-description: Create a new general recipe scaffold under recipes/ in this repo. Use when the user wants starter files for a new recipe, and first ask for the recipe name, task summary, and basic config choices before generating the files.
+description: Create a new recipe scaffold under recipes/ in this repo. Use when the user wants starter files for a new recipe and you need to collect the missing recipe name, task summary, config name, or test choice before generating files.
 ---
 
-# new-recipe-template
+# New Recipe Template
 
 ## Goal
 
-Create a new recipe folder under `recipes/<recipe_name>/` with the standard repo layout:
+- Create a new recipe folder under `recipes/<recipe_name>/` with the standard repo layout.
+- Keep experiment-specific logic inside the recipe instead of adding repo-wide abstractions.
+- Leave dataset and model implementation intentionally empty until the real task-specific logic is known.
 
-- `README.md`
-- `configs/`
-- `dataset/`
-- `model/`
-- `engine/`
-- `tests/`
+## Required Inputs
 
-Keep experiment-specific logic inside the recipe. Do not add repo-wide abstractions for one recipe.
+- The recipe name in `snake_case`.
+- A short task summary for the README and scaffold context.
+- The config filename when `train.yaml` is not desired.
+- Whether recipe-local tests should be generated.
 
-## 1. Ask for the missing inputs first
-
-Ask once, in a compact plain-text message. Do not start generating files until the following are clear:
-
-- recipe name in `snake_case`
-- short task summary for the README and TODO context
-- config name if `train.yaml` is not desired
-- whether to include recipe-local tests
-
-Reasonable defaults if the user says "just scaffold it":
-
+Reasonable defaults when the user says to just scaffold it:
 - task summary: `TODO: describe the task and training workflow.`
 - config name: `train`
 - include tests: `true`
 
-Naming rules:
+## Workflow
 
-- folder name must stay `snake_case`
-- default engine class is `<RecipeNamePascalCase>Engine`
+### 1. Collect the missing inputs first
 
-## 2. Generate with the scaffold script
+- Ask for the recipe name, task summary, config filename, and whether to include tests before generating files.
+- Ask once in a compact message instead of drip-feeding questions.
+- Keep naming rules explicit:
+  - the folder name must stay `snake_case`
+  - the default engine class is `<RecipeNamePascalCase>Engine`
+
+### 2. Generate the scaffold with the shared script
 
 Use the shared script:
 
@@ -48,7 +43,7 @@ python3 skills/en/recipe/new-recipe-template/scripts/create_recipe_template.py \
   --task-summary "<short summary>"
 ```
 
-Useful optional flags:
+Common optional flags:
 
 ```bash
 python3 skills/en/recipe/new-recipe-template/scripts/create_recipe_template.py \
@@ -58,53 +53,58 @@ python3 skills/en/recipe/new-recipe-template/scripts/create_recipe_template.py \
   --include-tests
 ```
 
-Notes:
-
 - The script defaults to `recipes/` as the output root.
-- Use `--output-root /tmp/...` when validating the scaffold without touching the repo tree.
-- Use `--force` only when you intentionally want to overwrite an existing scaffold file.
+- Use `--output-root /tmp/...` when validating a scaffold without touching the repo tree.
+- Use `--force` only when intentionally overwriting an existing scaffold file.
 
-## 3. Review the generated recipe before stopping
+### 3. Review the generated recipe before stopping
 
-Always inspect the generated files and tighten obvious placeholders:
+- Inspect the generated files and tighten obvious placeholders.
+- Confirm:
+  - `project.name` and the README title match the recipe name
+  - the config still follows repo defaults except for intended recipe-local overrides
+  - engine class and module names match the recipe name
+  - `dataset/` and `model/` remain implementation-free until the real logic is ready
+  - engine methods stay explicit and empty rather than guessing task-specific behavior
+  - the README describes the real task instead of a copied example
+- If the user later needs a concrete implementation pattern, use the closest existing recipe as a reference after the scaffold exists.
 
-- set `project.name` and README title correctly
-- confirm the generated config still matches repo defaults except for the intended recipe-specific overrides
-- confirm the engine class and module names match the recipe name
-- keep `dataset/` and `model/` code-free until the real implementation is ready
-- keep engine methods explicit and empty instead of guessing task-specific logic
-- make the README reflect the actual task, not a copied example
+### 4. Validate the scaffold
 
-If the user later needs a concrete pattern, use the closest existing recipe as a reference after the scaffold exists. Do not hard-code `vit_classification` or any other single recipe as the scaffold itself.
-
-## 4. Validate
-
-At minimum run:
+Run at least:
 
 ```bash
 python3 -m compileall recipes/<recipe_name>
 ```
 
-Then prefer:
+Prefer to run:
 
 ```bash
 uv run --with ruff ruff check recipes/<recipe_name>
 ```
 
-If tests were generated, run the recipe-local smoke test:
+If tests were generated, run:
 
 ```bash
 uv run --with pytest pytest -q recipes/<recipe_name>/tests
 ```
 
-## Pitfalls
+## Validation
 
-- Do not move recipe-only helpers into `mvp_engine/`.
-- Do not generate placeholder dataset/model logic.
-- Do not over-abstract the engine just to make the scaffold look generic.
-- Do not silently guess modality-specific code.
-- Do not omit `tests/conftest.py` for recipe-local tests that import `recipes.*`.
+- The generated tree contains the expected recipe-local directories and files.
+- The recipe name is `snake_case`, and the engine class uses the matching PascalCase form.
+- Placeholder text was tightened where the scaffold had enough information to do so.
+- `dataset/` and `model/` remain intentionally unimplemented.
+- The generated recipe was compiled and, when feasible, linted and smoke-tested.
 
-## Reference
+## Output
 
-- Example workflow and generated tree: `references/example.md`
+- State which recipe path was created.
+- State which defaults or user-provided options were used.
+- Summarize any placeholder content that still needs real implementation.
+- State which validation commands ran and which did not.
+
+## Read On Demand
+
+- Read `references/example.md` when you need the expected scaffold shape and a sample workflow.
+- Read `scripts/create_recipe_template.py` when you need to understand or adjust the script's flags and output behavior.
