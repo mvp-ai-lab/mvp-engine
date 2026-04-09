@@ -141,7 +141,7 @@ still exercises the TP landing points.
 When executing this skill for a user recipe, add these tests automatically. Do not
 require the user to spell out the test file list. If execution is blocked by GPU
 availability, distributed-launch constraints, or permissions, return the exact
-`tests/test_skills.py` command and any required launcher command for the user.
+`python -m tests.test_skills` command and any required launcher command for the user.
 
 ## Example
 - A full ViT TP example is archived under `./references/vit_classification/`, including the TP-enabled model file, training config, and recipe-local tests.

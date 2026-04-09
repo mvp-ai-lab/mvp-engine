@@ -130,7 +130,7 @@ tiny demo model just for this test.
 
 When executing this skill for a user recipe, add these tests automatically. Do not
 wait for the user to ask for test files explicitly. If execution is blocked by GPU
-availability or permissions, return the exact `tests/test_skills.py` command and any
+availability or permissions, return the exact `python -m tests.test_skills` command and any
 extra launch command the user needs.
 
 Reference tests:

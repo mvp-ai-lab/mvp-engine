@@ -341,7 +341,7 @@ logger.log(log_dict, step=step)
 这些测试必须走用户自己的 recipe / model 真实入口，不要换成绕开真实训练流的 toy model。
 
 当你在用户 recipe 上执行这个 skill 时，应默认自动补齐这些测试，不要等用户自己提出。
-如果因为 GPU 资源或执行权限限制而无法运行，直接把准确的 `tests/test_skills.py` 命令
+如果因为 GPU 资源或执行权限限制而无法运行，直接把准确的 `python -m tests.test_skills` 命令
 以及所需附加启动命令返回给用户。
 
 ## Output

@@ -84,7 +84,7 @@ Include at least:
 
 When executing this skill for a user recipe, add these tests automatically. Do not
 require the user to ask for the test layout separately. If execution is blocked by
-device availability or permissions, return the exact `tests/test_skills.py` command
+device availability or permissions, return the exact `python -m tests.test_skills` command
 and any required environment-specific launch command.
 
 If the environment allows, run tests on both CPU/GPU and NPU devices to validate parity across implementations.
@@ -123,7 +123,7 @@ Ship only when all pass:
 
 ```bash
 # run recipe-local tests
-python tests/test_skills.py --recipe <recipe> --skill model-migration
+python -m tests.test_skills --recipe <recipe> --skill model-migration
 
 # lint migration files
 uv run --with ruff ruff check recipes/<recipe>/model recipes/<recipe>/skill_tests/model-migration

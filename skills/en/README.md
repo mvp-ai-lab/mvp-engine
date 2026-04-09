@@ -114,7 +114,7 @@ recipes/<recipe>/
   engine successfully, but it does not need to run training.
 - `test_smoke.py` should cover one real step: forward, loss, backward, optimizer
   step, logger write, and checkpoint noop or temporary save.
-- Run them with `python tests/test_skills.py --recipe <recipe> --skill <skill-id>`.
+- Run them with `python -m tests.test_skills --recipe <recipe> --skill <skill-id>`.
 - The user should not need to ask for these tests explicitly. When an agent applies
   a skill to a user recipe, it should also add the matching recipe-local tests and
   try to run them by default.

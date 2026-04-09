@@ -109,7 +109,7 @@ recipe package、config 和 engine 入口，只把验证路径缩到仍能覆盖
 落点的最小规模。
 
 当你在用户 recipe 上执行这个 skill 时，应默认自动补齐这些测试，不要要求用户自己列出测试文件。
-如果因为 GPU、分布式启动条件或执行权限受限而无法运行，直接把准确的 `tests/test_skills.py`
+如果因为 GPU、分布式启动条件或执行权限受限而无法运行，直接把准确的 `python -m tests.test_skills`
 命令以及所需 launcher 命令返回给用户。
 
 ## 常见坑

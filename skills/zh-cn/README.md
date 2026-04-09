@@ -115,7 +115,7 @@ recipes/<recipe>/
   但这一层不直接进入训练。
 - `test_smoke.py` 至少应覆盖 1 个真实 step：forward、loss、backward、optimizer step、
   logger write，以及 checkpoint noop 或临时保存。
-- 统一入口：`python tests/test_skills.py --recipe <recipe> --skill <skill-id>`。
+- 统一入口：`python -m tests.test_skills --recipe <recipe> --skill <skill-id>`。
 - 用户不应该还要自己提出“补这些测试”。当 agent 在用户 recipe 上应用某个 skill 时，
   应默认同时补齐对应的 recipe-local 测试，并默认尝试执行。
 - agent 还应默认自动初始化或更新 `skill_manifest.yaml`，并且只有在该 skill

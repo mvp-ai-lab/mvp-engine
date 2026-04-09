@@ -345,7 +345,7 @@ unrelated toy model that bypasses the recipe's actual training flow.
 
 When executing this skill for a user recipe, add these tests automatically. Do not
 require the user to ask for test scaffolding separately. If execution is blocked by
-GPU availability or permissions, return the exact `tests/test_skills.py` command and
+GPU availability or permissions, return the exact `python -m tests.test_skills` command and
 any required launch command instead.
 
 ## Output

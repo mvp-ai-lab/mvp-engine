@@ -119,7 +119,7 @@ with an unrelated tiny model just to make the hook easier to test.
 When executing this skill for a user recipe, add these tests automatically. Do not
 wait for the user to request them. If execution is blocked by GPU availability,
 distributed-launch constraints, or permissions, return the exact
-`tests/test_skills.py` command and any required launcher command for the user.
+`python -m tests.test_skills` command and any required launcher command for the user.
 
 ## Output
 

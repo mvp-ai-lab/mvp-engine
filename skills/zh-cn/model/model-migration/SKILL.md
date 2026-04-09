@@ -81,7 +81,7 @@ diff -u SOURCE_MODEL.py CHECKPOINT_DIR/modeling_*.py
 - 通过迁移后 recipe 入口做严格 checkpoint load 覆盖。
 
 当你在用户 recipe 上执行这个 skill 时，应默认自动补齐这些测试，不要要求用户自己再描述测试布局。
-如果因为设备资源或执行权限限制而无法运行，直接把准确的 `tests/test_skills.py` 命令
+如果因为设备资源或执行权限限制而无法运行，直接把准确的 `python -m tests.test_skills` 命令
 以及环境相关的启动命令返回给用户。
 
 如果环境允许，分别在 CPU/GPU 与 NPU 设备上运行测试，验证实现间一致性。
@@ -120,7 +120,7 @@ assert len(res.unexpected_keys) == 0
 
 ```bash
 # 运行 recipe 内部测试
-python tests/test_skills.py --recipe <recipe> --skill model-migration
+python -m tests.test_skills --recipe <recipe> --skill model-migration
 
 # lint 迁移相关文件
 uv run --with ruff ruff check recipes/<recipe>/model recipes/<recipe>/skill_tests/model-migration
