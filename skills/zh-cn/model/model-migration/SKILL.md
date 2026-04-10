@@ -1,54 +1,52 @@
 ---
 name: model-migration
-description: 将外部模型迁移到 mvp-engine 的 recipe 中，保证数学与输出严格一致，支持可选 NPU 版本，并进行严格 checkpoint 兼容性校验。适用于迁移 modeling/configuration 代码、验证 state_dict 键对齐、补充 recipe 内部一致性测试。
+description: 将外部模型迁移到 mvp-engine 的 recipe 中，并保持行为一致、checkpoint 严格兼容，以及可选的 NPU 支持。适用于把 modeling 和 configuration 代码迁入 recipes/。
 ---
 
 # Model Migration
 
-## 目标
+## Goal
 
-在不改变行为的前提下，将源模型迁移到 `recipes/<recipe>/model/`。
+- 在不改变数学逻辑和参数命名的前提下，把源模型迁移到 `recipes/<recipe>/model/`。
+- 保持 checkpoint 兼容性，使现有权重能通过 `strict=True` 严格加载且没有 key mismatch。
+- 把一致性测试放到 recipe-local 的 `tests/` 下，而不是依赖全局 `tests/`。
 
-必须同时满足：
-- 保持相同的数学逻辑和参数命名。
-- 在相同输入与权重下产出完全一致的输出。
-- 使用 `strict=True` 加载现有 checkpoint，且无 key mismatch。
-- 迁移测试放在 recipe 目录下，而不是全局 `tests/`。
+## Required Inputs
 
-## 工作流
+- 源 `modeling_*.py`、`configuration_*.py` 以及需要兼容的 checkpoint 文件。
+- 目标 recipe 路径 `recipes/<recipe>/`。
+- 会实例化迁移后模型的运行时入口或 builder。
+- 是否需要额外提供 NPU 版本。
+- 能运行一致性测试和严格加载校验的环境。
+
+## Workflow
 
 ### 1. 定位并指纹校验源资产
 
-- 找到源 `modeling_*.py`、`configuration_*.py` 与 checkpoint 文件（`.safetensors`/`.bin`）。
-- 迁移前先通过 hash 与 diff 校验一致性。
+- 在修改前先找到源 modeling、configuration 和 checkpoint 目录。
+- 当存在多个候选副本时，用 hash 和 diff 确认哪个才是权威实现。
 
 ```bash
 sha256sum SOURCE_MODEL.py CHECKPOINT_DIR/modeling_*.py TARGET_MODEL.py
 diff -u SOURCE_MODEL.py CHECKPOINT_DIR/modeling_*.py
 ```
 
-如果文件字节级一致，视源模型代码为权威实现。
+- 如果两份文件字节级一致，就把该实现视为权威来源。
 
-### 2. 先迁移 CPU/GPU 版本
+### 2. 先迁移 CPU 或 GPU 版本
 
-- 根据用户要求将源 `configuration_*.py` 和 `modeling_*.py` 迁移到 recipe 的 model 目录。
-- 除非是 recipe 接入所必需，模块/类名与参数名保持不变。
-- 仅在基础模型可编译后，再更新 `__init__.py` 与 builder 导出。
+- 以最小接入改动把源 `configuration_*.py` 和 `modeling_*.py` 迁入目标 recipe。
+- 除非 recipe 接入边界强制要求，否则模块名、类名和参数名都保持不变。
+- 只有在基础模型已经能编译后，再更新 `__init__.py` 导出和 builder。
+- 迁移阶段不要顺手做重构；先保证接入正确，再谈优化。
 
-硬性规则：迁移阶段不要做重构，只做最小接入修改。
+### 3. 仅在需要时添加 NPU 版本
 
-### 3. 以最小改动添加 NPU 版本（可选）
-
-- 可询问用户是否需要 NPU 支持，但不应作为迁移前置条件。
-- 基于 CPU/GPU 版本近似复制出 `modeling_*_npu.py`。
-- 仅在小范围隔离代码块中做 NPU 替换（例如 fused rotary/norm/attention）。
-- 保持参数命名与模块结构和 CPU/GPU 对齐，确保单个 checkpoint 可同时加载。
-- PyTorch for NPU 文档参考：https://www.hiascend.com/document/detail/zh/Pytorch/730/index/index.html
-
-推荐模式：
-- 以 fallback 方式导入 `torch_npu`。
-- 仅在 tensor 设备为 NPU 时走 fused op。
-- 非 NPU 设备严格走原始数学 fallback 路径。
+- 如果用户需要 NPU 支持，从 CPU 或 GPU 实现近似复制出 `modeling_*_npu.py`。
+- NPU 特有替换应限制在尽可能小的代码块里，例如 fused rotary、norm 或 attention。
+- 保持参数名和模块结构一致，确保同一份 checkpoint 可以加载到两套实现上。
+- 优先使用带 fallback 的 `torch_npu` 导入，并且只有在 tensor 真正在 NPU 上时才走 fused op。
+- 非 NPU 路径必须保留严格一致的数学 fallback。
 
 ### 4. 添加 recipe 内部一致性测试
 
@@ -75,10 +73,10 @@ diff -u SOURCE_MODEL.py CHECKPOINT_DIR/modeling_*.py
   成立，就把 smoke test 写成真实 launcher 测试，并在 `test_spec.yaml` 里把
   `gpu_preferred` 设为 `true`；不要为了在更弱环境里跑通而退化成 fake 逻辑。
 
-至少覆盖：
-- 源模型 vs 迁移模型在全部支持输入上的一致性。
-- CPU/GPU 类 vs NPU 类（fallback 路径）在共享权重下的一致性。
-- 通过迁移后 recipe 入口做严格 checkpoint load 覆盖。
+- 至少覆盖：
+  - 源模型和迁移模型在支持输入上的一致性
+  - 如果存在 NPU 版本，共享权重下 CPU 或 GPU 类与 NPU 类的一致性
+- 当迁移要求严格一致时，使用 `torch.equal` 这类严格断言，而不是宽松比较。
 
 当你在用户 recipe 上执行这个 skill 时，应默认自动补齐这些测试，不要要求用户自己再描述测试布局。
 如果因为设备资源或执行权限限制而无法运行，直接把准确的 `python -m tests.test_skills` 命令
@@ -86,37 +84,33 @@ diff -u SOURCE_MODEL.py CHECKPOINT_DIR/modeling_*.py
 
 如果环境允许，分别在 CPU/GPU 与 NPU 设备上运行测试，验证实现间一致性。
 
-一致性断言标准：
-- 需要严格相等时使用 `torch.equal`。
-
 ### 5. 校验 checkpoint 兼容性
 
-对两个类都执行严格加载测试。
+- 对每个迁移后的类执行 `load_state_dict(..., strict=True)` 检查。
+- 对 checkpoint 目录执行 `from_pretrained(...)` 冒烟测试。
+- 如果严格加载失败，就对比模型 `state_dict().keys()` 与 checkpoint keys，并优先修复迁移模型中的命名或结构问题，而不是先改 checkpoint。
 
-```python
-state = load_file(".../model.safetensors")
-res = model.load_state_dict(state, strict=True)
-assert len(res.missing_keys) == 0
-assert len(res.unexpected_keys) == 0
-```
+### 6. 达到验收标准后再停止
 
-同时执行：
-- `ModelClass.from_pretrained(<checkpoint_dir>)` 冒烟测试。
+- 不能只停在“代码能 import 或能编译”。
+- 只有在行为一致、checkpoint 兼容和 recipe-local 验证都通过，或剩余缺口被明确写出后，才算完成。
 
-若严格加载失败：
-- 对比 `state_dict().keys()` 与 checkpoint keys。
-- 修复迁移模型中的命名/结构不一致（除非绝对必要，不要修改 checkpoint）。
+## Validation
 
-### 6. 最终验收清单
+- 已验证源 modeling 和 configuration 的身份；若有偏差，已记录原因。
+- 目标 recipe 下存在一致性测试，并在当前可用环境中通过。
+- 严格加载通过，没有 missing 或 unexpected keys。
+- `from_pretrained(...)` 能成功加载迁移类。
+- 已运行覆盖迁移文件的 lint 或目标检查。
 
-仅在以下都通过时交付：
-- 已确认源 modeling/config 一致性（或已记录有理由的偏差）。
-- 一致性测试通过。
-- 迁移类与 NPU 类 strict load 通过。
-- 无 missing/unexpected keys。
-- Lint/测试通过。
+## Output
 
-## 常用命令
+- 说明迁移或新建了哪些文件。
+- 说明是否新增了 NPU 版本。
+- 总结一致性测试和严格加载校验结果。
+- 说明是否还存在环境缺口，例如没有 NPU 硬件导致无法做完整验证。
+
+## Useful Commands
 
 ```bash
 # 运行 recipe 内部测试
@@ -128,3 +122,7 @@ uv run --with ruff ruff check recipes/<recipe>/model recipes/<recipe>/skill_test
 # 查看改动文件
 git status --short --untracked-files=all
 ```
+
+## Read On Demand
+
+- 这个 skill 没有附带的本地参考文件。需要时直接读取源 modeling 和 configuration 文件；只有做 NPU 特定算子替换时，再查 Ascend PyTorch for NPU 文档。

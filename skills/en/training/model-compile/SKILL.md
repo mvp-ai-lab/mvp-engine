@@ -1,60 +1,58 @@
 ---
 name: model-compile
-description: Add or adjust model.compile for a recipe, decide compile scope and placement, wire config under optim, and validate correctness and performance. The files under references/ are reference implementations for this skill. Use for enabling compile on a new model, changing compile order in an existing recipe, or investigating compile regressions.
+description: Add or adjust model.compile for a recipe, decide compile scope and placement, wire config under model, and validate correctness and performance.
 ---
 
 # Model Compile
 
 ## Goal
 
-Add or adjust `model.compile` support for a training recipe under `recipes/<recipe>/`, while keeping:
-- compile disabled by default and enabled explicitly through config.
-- compile applied to the modules actually used during training.
-- compile always placed before `parallelize_model`.
+- Add or adjust `model.compile` support for a training recipe under `recipes/<recipe>/`.
+- Keep compile disabled by default and enabled explicitly through config.
+- Compile the modules that matter on the real training hot path, and keep compile before `parallelize_model` unless there is a documented exception.
 
-## Repo conventions
+## Required Inputs
 
-- Put config keys under `model`:
-  - `model.compile`
-  - `model.compile_backend`
-  - `model.compile_mode`
-- Put compile logic in `prepare_model()` in most cases.
-- Do not compile the optimizer, scheduler, or dataloader.
+- The target recipe path and the recipe's `prepare_model()` implementation.
+- The candidate modules on the real training hot path.
+- Whether the recipe also has teacher models, EMA modules, auxiliary heads, or other independent branches.
+- The target recipe's config or schema files.
+- GPU availability if correctness or performance validation should be run.
 
 ## Workflow
 
 ### 1. Gather context first
 
-- Find the recipe's `prepare_model()`. Confirm the base model construction is already complete.
-- Read the reference implementations under `references/` first when they match the target recipe. These files are concrete examples of the expected config and engine wiring.
-- Search the repo for similar recipes as additional precedents:
+- Find the recipe's `prepare_model()` and confirm the base model construction is complete.
+- Read the reference implementation under `references/` when it matches the target recipe.
+- Search the repo for nearby compile precedents:
 
 ```bash
-rg -n "torch\\.compile|model\\.compile|compile_backend|compile_mode" recipes
+rg -n "torch\.compile|model\.compile|compile_backend|compile_mode" recipes
 ```
 
-For this skill, `references/vit_classification/configs/train.yaml` and
-`references/vit_classification/engine/vit_classification_engine.py` are the current reference implementation.
-
-### 2. Decide compile scope
+### 2. Decide the compile scope
 
 - Compile only modules on the training hot path.
-- Check whether there are teacher, EMA, auxiliary heads, distillation branches, or other independent `forward()` paths. If so, ask whether they all need compile.
-- If the top-level `forward()` mixes Python-heavy preprocessing, token building, positional encoding setup, output branching, or other recipe glue, do not compile the whole model by default.
-- In that case, ask the user whether to extract one compile-friendly core module/callable that covers the dense tensor hot path.
-- Avoid splitting compile across many small child modules unless you have evidence it helps; fragmented compile often loses cross-layer fusion and can greatly increase first-step latency.
+- If the top-level `forward()` mixes Python-heavy preprocessing, token building, positional setup, or other recipe glue, do not compile the whole model by default.
+- When the recipe has teacher, EMA, auxiliary heads, or distillation branches, evaluate them separately instead of hiding them inside the main model decision.
+- Prefer one compile-friendly core target over fragmenting compile across many tiny child modules.
 
 ### 3. Decide compile placement
 
-Default preference:
-- call `model.compile(...)` first, then `parallelize_model(...)`.
-
-Hard requirement:
-- If you do not use the default order, explain the reason in code comments or the change summary.
+- Default order is:
+  - call `model.compile(...)`
+  - then call `parallelize_model(...)`
+- If a recipe needs another order, document the reason in code comments or in the change summary.
 
 ### 4. Implement config and code
 
-Recommended pattern:
+- Put compile config under `model`:
+  - `model.compile`
+  - `model.compile_backend`
+  - `model.compile_mode`
+- Expose those keys through the recipe schema or `ConfigClass`.
+- Wire compile in `prepare_model()` with a pattern like:
 
 ```python
 if self.config.model.compile:
@@ -64,17 +62,16 @@ if self.config.model.compile:
     )
 ```
 
-Rules:
-- `model.compile` must have a default of `False`.
-- Under the new config system, expose `model.compile*` through the recipe's Pydantic `ConfigClass` and read them via attribute access.
-- Compile extra modules such as teacher or EMA separately; do not hide them inside the main-model logic.
-- If you need a recipe-specific encoder/core submodule just for compile, prefer one larger target over compiling dozens of blocks individually.
-- Do not change checkpoint format, parameter names, or the model's public interface just to fit compile.
+- Keep `model.compile` defaulted to `False`.
+- Do not change checkpoint format, parameter names, or the public interface just to fit compile.
 
-### 5. Validate
+### 5. Validate correctness and performance
 
-At minimum:
-- config validation
+- At minimum, validate config parsing and compile wiring.
+- If GPU is available, ask the user whether to run:
+  - a single-process or single-GPU forward/backward smoke test
+  - a compile-on vs compile-off comparison for loss and logs
+- Record first-step compile latency, whether steady state is reached, throughput changes, and memory changes when those measurements are available.
 
 Add recipe-local tests under `recipes/<recipe>/skill_tests/model-compile/`:
 
@@ -110,16 +107,21 @@ wait for the user to request test scaffolding separately. If execution is blocke
 GPU availability or permissions, return the exact `python -m tests.test_skills` command and
 any required launch command instead.
 
-Good to record:
-- first-step compile latency.
-- whether step 2 / steady-state is reached at all; a compile that only finishes step 1 is not usable.
-- steady-state throughput change.
-- memory change.
+## Validation
 
-## Acceptance checklist
+- `model.compile`, `model.compile_backend`, and `model.compile_mode` are wired into config.
+- The compiled target matches the real training hot path.
+- Compile is not fragmented into many tiny child modules without evidence.
+- Compile placement is either the default order or a documented exception.
+- Extra branches such as teacher or EMA paths were evaluated explicitly.
 
-- [ ] `model.compile`, `model.compile_backend`, and `model.compile_mode` are wired into config.
-- [ ] The compiled target module matches the real training hot path.
-- [ ] The compile target is not over-fragmented; one compile-friendly core is preferred over many tiny compiled children.
-- [ ] Compile placement has a clear rationale; exception order is documented.
-- [ ] Extra modules and branches have each been evaluated for compile.
+## Output
+
+- State which model, engine, and config files were updated.
+- State which module or callable is being compiled.
+- State the chosen compile order and any reason for deviating from the default.
+- Summarize what correctness or performance validation ran and what remains unverified.
+
+## Read On Demand
+
+- Read `references/vit_classification/configs/train.yaml` and `references/vit_classification/engine/vit_classification_engine.py` when you need the current reference implementation for compile wiring.

@@ -1,40 +1,40 @@
 ---
 name: gradient-checkpointing
-description: Add gradient checkpointing (activation checkpointing) to a recipe in this repo. Use when checking whether a model already supports checkpointing, wiring recipe config and engine toggles, or adding minimal model-side checkpoint logic and tests.
+description: Add gradient checkpointing to a recipe in this repo. Use when checking whether a model already supports checkpointing, wiring recipe config and engine toggles, or adding minimal model-side checkpoint logic and tests.
 ---
 
 # Gradient Checkpointing
 
-Add gradient checkpointing without introducing a repo-wide wrapper.  
-**中文：** [SKILL.md](../../../zh-cn/training/gradient-checkpointing/SKILL.md)
-
 ## Goal
 
-- Enable gradient checkpointing on the target recipe.
-- Keep model math unchanged.
-- Add recipe-local config, engine wiring, and verification tests.
+- Enable gradient checkpointing on the target recipe without changing model math.
+- Keep the implementation recipe-local instead of introducing a repo-wide wrapper.
+- Add config, engine wiring, and tests that prove the feature is actually active.
 
-## 1. Classify the model before editing
+## Required Inputs
 
-- Prefer the existing-support path.
-- Use the manual-adaptation path only when the model does not already checkpoint its repeated blocks.
+- The target recipe path and the files that build the model and engine.
+- The top-level model class or the module that owns the repeated layer loop.
+- Whether the model already exposes built-in checkpointing support.
+- The target recipe's config or schema files.
+- A place to add recipe-local tests.
 
-### Existing-support path
+## Workflow
 
-Use this path when all of the following are true:
+### 1. Classify the model before editing
 
-- The top-level model exposes `gradient_checkpointing_enable()` and `gradient_checkpointing_disable()`.
-- The model propagates `gradient_checkpointing` and `_gradient_checkpointing_func` to the modules that need them.
-- The repeated blocks already route through `_gradient_checkpointing_func` when `self.gradient_checkpointing and self.training` is true. In recent `transformers` models this is often implemented by `GradientCheckpointingLayer.__call__`.
+- Prefer the existing-support path whenever the model already knows how to checkpoint its repeated blocks.
+- Use the manual-adaptation path only when checkpointing is not already wired into the model internals.
 
-### Manual-adaptation path
+The existing-support path applies when all of the following are true:
+- the top-level model exposes `gradient_checkpointing_enable()` and `gradient_checkpointing_disable()`
+- the model propagates `gradient_checkpointing` and `_gradient_checkpointing_func` to the modules that need them
+- the repeated blocks already route through `_gradient_checkpointing_func` when `self.gradient_checkpointing and self.training` is true
 
-Use this path when the repeated compute blocks do not already checkpoint themselves.
-
-## 2. Existing-support path: only wire the recipe
+### 2. Existing-support path: wire the recipe only
 
 - Do not rewrite model internals if the model already supports checkpointing.
-- In `prepare_model()`, enable checkpointing after building the model and before FSDP/DDP/TP wrapping:
+- In `prepare_model()`, enable checkpointing after building the model and before FSDP, DDP, or TP wrapping:
 
 ```python
 gc_enabled = self.config.model.gradient_checkpointing.enabled
@@ -54,19 +54,12 @@ model:
     use_reentrant: false
 ```
 
-- Under the new config system, add `model.gradient_checkpointing` to the recipe's `ConfigClass` / schema, then read it via typed attribute access in the engine.
-
+- Under the new config system, add `model.gradient_checkpointing` to the recipe schema or `ConfigClass` and read it through typed attribute access in the engine.
 - Prefer `use_reentrant: false` unless the target model specifically requires reentrant checkpointing.
 
-### ViT reference
+### 3. Manual-adaptation path: patch the module that owns the layer loop
 
-- `recipes/vit_classification` is the canonical simple path.
-- The HuggingFace ViT layers already inherit `GradientCheckpointingLayer`, so the example only changes the recipe engine, config, and tests.
-- Archived reference files live under `references/vit_classification/`.
-
-## 3. Manual-adaptation path: patch the module with the layer loop
-
-- On the module that owns the per-layer loop, add:
+- On the module that owns the repeated-layer loop, add:
 
 ```python
 self.gradient_checkpointing = False
@@ -74,7 +67,7 @@ self._gradient_checkpointing_func = torch.utils.checkpoint.checkpoint
 ```
 
 - In the loop, call each layer through `_gradient_checkpointing_func` when training with checkpointing enabled.
-- Pass only gradient-carrying tensors as explicit checkpoint arguments. Capture masks, rope embeddings, and other non-differentiable inputs in a closure.
+- Pass only gradient-carrying tensors as explicit checkpoint arguments. Capture masks, RoPE inputs, and other non-differentiable values in a closure.
 - If checkpointed layers cannot safely return auxiliary outputs such as attentions or caches, gate checkpointing on those flags or return a consistent reduced output.
 - For `PreTrainedModel` subclasses, set `supports_gradient_checkpointing = True`.
 - For plain `nn.Module`, implement `gradient_checkpointing_enable()` and `gradient_checkpointing_disable()` locally.
@@ -94,13 +87,26 @@ for layer in self.layers:
         hidden_states = layer(hidden_states, attention_mask=attention_mask, ...)[0]
 ```
 
-## 4. Archive the example instead of committing recipe-only churn
+### 4. Add recipe-local tests
 
-- If you temporarily modify a demo recipe to validate the workflow, move the final changed files into `references/<recipe>/`.
-- Restore `recipes/<recipe>/` to the clean branch state before committing the skill.
-- Archive only the files that actually changed for checkpointing.
+Add recipe-local tests that cover at least:
+- enable and disable toggles set the expected module state
+- the checkpoint function is actually invoked during training
+- gradients match with and without checkpointing
 
-## 5. Testing
+### 5. Validate the final integration
+
+- Confirm checkpointing is enabled before distributed wrapping.
+- Confirm config, engine wiring, and tests all agree on the same feature shape.
+- If the model already inherits `GradientCheckpointingLayer` or an equivalent mechanism, do not manually rewrap those blocks.
+
+## Validation
+
+- The chosen path matches the real model capabilities.
+- The recipe config exposes `model.gradient_checkpointing.enabled` and `use_reentrant`.
+- Checkpointing is enabled before FSDP, DDP, or TP wrapping.
+- Recipe-local tests cover toggles, invocation, and gradient consistency.
+- The implementation does not introduce a repo-wide wrapper or pass non-differentiable inputs as explicit checkpoint arguments.
 
 Add recipe-local tests under `recipes/<recipe>/skill_tests/gradient-checkpointing/`:
 
@@ -133,17 +139,14 @@ wait for the user to ask for test files explicitly. If execution is blocked by G
 availability or permissions, return the exact `python -m tests.test_skills` command and any
 extra launch command the user needs.
 
-Reference tests:
+## Output
 
-- `references/vit_classification/tests/test_vit_gradient_checkpointing.py`
+- State which path was used: existing support or manual adaptation.
+- State which model, engine, config, and test files were updated.
+- Summarize how checkpointing is enabled at runtime.
+- Summarize what validation ran and what remains unverified.
 
-## Pitfalls
+## Read On Demand
 
-- Do not add a repo-wide generic wrapper.
-- Do not pass non-differentiable inputs as explicit checkpoint arguments.
-- Enable checkpointing before distributed wrapping.
-- For `transformers` models, do not manually rewrap layers that already use `GradientCheckpointingLayer`.
-
-## Reference
-
-- ViT minimal recipe integration: `references/vit_classification/`
+- Read `references/vit_classification/` when you need the minimal recipe-local integration pattern for config, engine wiring, and tests.
+- Read `references/vit_classification/tests/test_vit_gradient_checkpointing.py` when you need a concrete test example.

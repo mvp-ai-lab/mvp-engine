@@ -1,44 +1,39 @@
 ---
 name: new-recipe-template
-description: 为本仓库在 recipes/ 下创建通用 recipe 脚手架。适用于用户要新建 recipe 起始文件，并且需要先询问 recipe 名称、任务简介和基础配置项，再生成目录与文件。
+description: 为本仓库在 recipes/ 下创建新的 recipe 脚手架。适用于用户要新建 recipe 起始文件，并且需要先收集 recipe 名称、任务简介、配置文件名或测试选项后再生成目录与文件。
 ---
 
-# new-recipe-template
+# New Recipe Template
 
-## 目标
+## Goal
 
-在 `recipes/<recipe_name>/` 下创建标准 recipe 目录：
+- 在 `recipes/<recipe_name>/` 下创建标准 recipe 脚手架。
+- 把实验特定逻辑留在 recipe 内，而不是顺手加到仓库级抽象里。
+- 在真实任务逻辑明确前，让 dataset 和 model 目录保持空实现状态。
 
-- `README.md`
-- `configs/`
-- `dataset/`
-- `model/`
-- `engine/`
-- `tests/`
+## Required Inputs
 
-实验特定逻辑必须留在 recipe 内，不要为单个 recipe 往 `mvp_engine/` 里加通用抽象。
+- `snake_case` 的 recipe 名称。
+- 用于 README 和脚手架上下文的简短任务简介。
+- 如果不想用 `train.yaml`，说明 config 文件名。
+- 是否需要生成 recipe-local tests。
 
-## 1. 先把必要信息问清楚
-
-先用一条简洁消息把关键信息问完，再开始生成：
-
-- `snake_case` 的 recipe 名称
-- 任务简介，用于 README 和 TODO 上下文
-- 如果不想用 `train.yaml`，说明 config 文件名
-- 是否生成 recipe-local tests
-
-如果用户说“直接建一个”，默认值如下：
-
+当用户说“直接建一个”时，可用默认值：
 - task summary: `TODO: describe the task and training workflow.`
 - config name: `train`
 - include tests: `true`
 
-命名规则：
+## Workflow
 
-- 目录名必须保持 `snake_case`
-- 默认 engine class 名：`<RecipeNamePascalCase>Engine`
+### 1. 先把缺失输入问清楚
 
-## 2. 用脚手架脚本生成
+- 在开始生成前，先确认 recipe 名称、任务简介、config 文件名和是否包含测试。
+- 尽量用一条简洁消息问完，不要拆成很多轮零散问题。
+- 命名规则要明确：
+  - 目录名必须保持 `snake_case`
+  - 默认 engine class 名为 `<RecipeNamePascalCase>Engine`
+
+### 2. 用共享脚本生成脚手架
 
 使用共享脚本：
 
@@ -58,26 +53,37 @@ python3 skills/en/recipe/new-recipe-template/scripts/create_recipe_template.py \
   --include-tests
 ```
 
-说明：
+- 脚本默认输出到 `recipes/`。
+- 如果只是想先验证生成效果，可用 `--output-root /tmp/...`。
+- 只有明确需要覆盖已有脚手架文件时才使用 `--force`。
 
-- 默认输出到 `recipes/`
-- 验证脚手架时可先用 `--output-root /tmp/...`
-- 只有明确要覆盖已有模板文件时才用 `--force`
+### 3. 停止前人工检查生成结果
 
-## 3. 生成后必须人工检查
+- 检查生成后的文件，并收紧明显的 placeholder。
+- 至少确认：
+  - `project.name` 和 README 标题与 recipe 名称一致
+  - config 仍然遵循仓库默认值，只保留必要的 recipe 特化
+  - engine class 和模块名与 recipe 名一致
+  - `dataset/` 和 `model/` 在真实逻辑确定前保持无实现状态
+  - engine 方法保持显式空实现，而不是猜测任务逻辑
+  - README 描述的是实际任务，而不是拷贝来的现成例子
+- 如果后续用户需要具体实现模式，在脚手架创建完成后再参考最接近的现有 recipe。
 
-至少检查这些点：
+### 4. 验证脚手架
 
-- `project.name` 和 README 标题是否正确
-- 确认生成的 config 仍然继承了仓库默认值，只做了必要的 recipe 定制
-- engine class 与模块名是否和 recipe 名一致
-- `dataset/` 和 `model/` 保持无实现代码状态，等真实逻辑确定后再写
-- engine 里的大多数方法保持空实现并显式抛出 `NotImplementedError`
-- README 要写成真实任务描述，而不是复制某个现成 recipe 的说法
+至少执行：
 
-如果后续需要具体实现模式，再去参考最接近的现有 recipe。不要把 `vit_classification` 或其他单一 recipe 直接当成默认模板。
+```bash
+python3 -m compileall recipes/<recipe_name>
+```
 
-## 4. 验证
+更推荐执行：
+
+```bash
+uv run --with ruff ruff check recipes/<recipe_name>
+```
+
+## Validation
 
 在 `recipes/<recipe>/skill_tests/new-recipe/` 下补 recipe-local 测试：
 
@@ -112,14 +118,14 @@ recipe package、config 和 engine 入口，只把验证路径缩到仍能覆盖
 如果因为 GPU、分布式启动条件或执行权限受限而无法运行，直接把准确的 `python -m tests.test_skills`
 命令以及所需 launcher 命令返回给用户。
 
-## 常见坑
+## Output
 
-- 不要把 recipe 专用 helper 挪进 `mvp_engine/`
-- 不要生成 placeholder dataset/model 逻辑
-- 不要为了让脚手架“更泛化”而过度抽象 engine
-- 不要静默猜测某种模态或任务逻辑
-- 对会 import `recipes.*` 的 recipe-local tests，不要漏掉 `tests/conftest.py`
+- 说明创建了哪个 recipe 路径。
+- 说明使用了哪些默认值或用户指定选项。
+- 总结哪些 placeholder 仍需要后续真实实现。
+- 说明跑了哪些验证命令，哪些还没跑。
 
-## 参考
+## Read On Demand
 
-- 示例流程与生成树：`references/example.md`
+- 需要看期望的目录形态和示例工作流时，读取 `references/example.md`。
+- 需要理解或调整脚本参数和输出行为时，读取 `scripts/create_recipe_template.py`。
