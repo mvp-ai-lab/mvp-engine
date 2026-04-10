@@ -212,6 +212,8 @@ def load_checkpoint(
     scheduler: torch.optim.lr_scheduler.LRScheduler = None,
     scaler: GradientScaler = None,
     prefix: str = "",
+    restore_engine_state: bool = True,
+    restore_rng_state: bool = True,
 ) -> dict[str, int] | None:
     """Load checkpoint from disk.
 
@@ -223,6 +225,8 @@ def load_checkpoint(
         scheduler: (Optional) Learning rate scheduler to load state into.
         scaler: (Optional) Gradient scaler to load state into.
         prefix: (Optional) Prefix to load state into.
+        restore_engine_state: Whether to restore engine state such as step and epoch.
+        restore_rng_state: Whether to restore RNG state.
 
     Returns:
         dict: Engine state containing 'step', 'epoch', '_accumulate_step'.
@@ -268,6 +272,9 @@ def load_checkpoint(
     if prefix != "":
         return None
 
+    if not restore_engine_state:
+        return None
+
     # Load scheduler and scaler if available in checkpoint
     engine_state = torch.load(Path(ckpt_path) / "engine.pt", map_location="cpu")
 
@@ -277,27 +284,28 @@ def load_checkpoint(
         scaler.load_state_dict(engine_state["scaler"])
 
     # Restore RNG states if available in checkpoint
-    rank = get_rank()
-    rng_path = Path(ckpt_path) / "engine" / f"rank_{rank}.pt"
-    if os.path.exists(rng_path):
-        rng_state = torch.load(
-            rng_path,
-            map_location="cpu",
-            weights_only=False,
-        )
-        if "torch_rng_state" in rng_state:
-            torch.set_rng_state(rng_state["torch_rng_state"])
-        accelerator_type = rng_state.get("accelerator_type")
-        accelerator_rng_state = rng_state.get("accelerator_rng_state")
-        if accelerator_type is None and "cuda_rng_state" in rng_state:
-            # Backward compatibility for older CUDA checkpoints.
-            accelerator_type = "cuda"
-            accelerator_rng_state = rng_state["cuda_rng_state"]
-        _set_accelerator_rng_state(accelerator_type, accelerator_rng_state)
-        if "python_rng_state" in rng_state:
-            random.setstate(rng_state["python_rng_state"])
-        if "numpy_rng_state" in rng_state:
-            np.random.set_state(rng_state["numpy_rng_state"])
+    if restore_rng_state:
+        rank = get_rank()
+        rng_path = Path(ckpt_path) / "engine" / f"rank_{rank}.pt"
+        if os.path.exists(rng_path):
+            rng_state = torch.load(
+                rng_path,
+                map_location="cpu",
+                weights_only=False,
+            )
+            if "torch_rng_state" in rng_state:
+                torch.set_rng_state(rng_state["torch_rng_state"])
+            accelerator_type = rng_state.get("accelerator_type")
+            accelerator_rng_state = rng_state.get("accelerator_rng_state")
+            if accelerator_type is None and "cuda_rng_state" in rng_state:
+                # Backward compatibility for older CUDA checkpoints.
+                accelerator_type = "cuda"
+                accelerator_rng_state = rng_state["cuda_rng_state"]
+            _set_accelerator_rng_state(accelerator_type, accelerator_rng_state)
+            if "python_rng_state" in rng_state:
+                random.setstate(rng_state["python_rng_state"])
+            if "numpy_rng_state" in rng_state:
+                np.random.set_state(rng_state["numpy_rng_state"])
 
     return {
         "step": engine_state["step"],

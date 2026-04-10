@@ -322,6 +322,24 @@ class Engine(ABC):
         self.epoch = engine_state["epoch"]
         self._accumulate_step = engine_state["_accumulate_step"]
 
+    def init_from_checkpoint(self, ckpt_path: Union[str, PathLike]) -> None:
+        """Load model weights from a checkpoint without restoring training state.
+
+        Args:
+            ckpt_path: Path to checkpoint directory.
+        """
+        logger.info(f"Initializing model weights from checkpoint {ckpt_path}...")
+        load_checkpoint(
+            self.device_mesh,
+            ckpt_path,
+            self.model,
+            optimizer=None,
+            scheduler=None,
+            scaler=None,
+            restore_engine_state=False,
+            restore_rng_state=False,
+        )
+
     def accumulate_step(self, skip_increase: bool = False) -> bool:
         """Check if the gradients should be synchronized this step."""
         if not skip_increase:
@@ -361,6 +379,9 @@ class Engine(ABC):
 
         logger.info("Building Model...")
         self.model = self.prepare_model()
+
+        if self.config.init_from_checkpoint is not None:
+            self.init_from_checkpoint(self.config.init_from_checkpoint)
 
         logger.info("Building Optimizer...")
         self.optimizer = self.prepare_optimizer()
