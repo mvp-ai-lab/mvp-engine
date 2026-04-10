@@ -3,6 +3,7 @@ engine: OpenbeeEngine
 
 seed: 42
 deterministic: false
+init_from_checkpoint: "/home/z84414556/workspace/code/mvp-engine/outputs/openbee-qwen3vl_8b-alignment_20260410084939_3c74/checkpoints/iter_1762"
 
 project:
   name: "openbee-qwen3vl_8b-alignment"
@@ -17,7 +18,7 @@ parallel:
     shard: 1
     tensor: 1
 data:
-  train_path: "./data/openbee/stage1-stage2-mm-only/**/*.parquet"
+  train_path: "./data/openbee/stage1-stage2/**/*.parquet"
   enable_thinking: false
   cache: false
   cache_show_progress: true
@@ -26,7 +27,7 @@ data:
   packing_selection_strategy: "best_fit"
   packing_open_pack_limit: 8
   packing_buffer_size: 64
-  max_seq_len: 8192
+  max_seq_len: 16384
   batch_size: 1
   num_workers: 12
 model:
@@ -35,23 +36,23 @@ model:
   image_max_pixels: 1048576
   # Freeze flags — set true to stop gradient for the corresponding sub-module.
   # Defaults follow the alignment-stage convention: train merger only.
-  freeze_vit: true
+  freeze_vit: false
   freeze_merger: false
-  freeze_llm: true
+  freeze_llm: false
   compile: true
   compile_backend: "inductor"
   compile_mode: "default"
 optim:
-  lr: 1.0e-4
+  lr: 6.0e-5
   weight_decay: 0.0
-  gradient_accumulation_steps: 4
+  gradient_accumulation_steps: 2
   mixed_precision: "bf16"
   warmup_ratio: 0.0
   clip_grad_norm: 1.0
 
 loop:
   policy: "iter"
-  total_steps: 1762
+  total_steps: 2819
 
 checkpoint:
   interval: 100
