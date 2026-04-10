@@ -19,7 +19,7 @@ parallel:
 data:
   train_path: "./data/openbee/stage1-stage2-mm-only/**/*.parquet"
   enable_thinking: false
-  cache: true
+  cache: false
   cache_show_progress: true
   shuffle_buffer: 1000
   packing: true
@@ -30,7 +30,7 @@ data:
   batch_size: 1
   num_workers: 2
 model:
-  pretrained_model_name_or_path: "./recipes/openbee/pretrained/Qwen3-VL-8B-Instruct"
+  pretrained_model_name_or_path: "./pretrained/Qwen3-VL-8B-Instruct"
   attn_implementation: "flash_attention_2"
   image_max_pixels: 1048576
   # Freeze flags — set true to stop gradient for the corresponding sub-module.
@@ -44,7 +44,7 @@ model:
 optim:
   lr: 1.0e-4
   weight_decay: 0.0
-  gradient_accumulation_steps: 2
+  gradient_accumulation_steps: 4
   mixed_precision: "bf16"
   warmup_ratio: 0.0
   clip_grad_norm: 1.0
