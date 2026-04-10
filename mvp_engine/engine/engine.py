@@ -302,25 +302,43 @@ class Engine(ABC):
 
         torch.distributed.barrier()
 
-    def load(self, ckpt_path: Union[str, PathLike]) -> None:
+    def load(
+        self,
+        ckpt_path: Union[str, PathLike],
+        restore_training_state: bool = True,
+        restore_rng_state: bool = True,
+    ) -> None:
         """Load training checkpoint from disk.
 
         Args:
             ckpt_path: Path to checkpoint directory.
+            restore_training_state: Whether to restore optimizer, scheduler,
+                scaler, and engine state in addition to model weights.
+            restore_rng_state: Whether to restore RNG state when loading a
+                training checkpoint.
         """
-        logger.info(f"Loading checkpoint from {ckpt_path}...")
+        action = "Loading checkpoint" if restore_training_state else "Initializing model from checkpoint"
+        logger.info(f"{action} {ckpt_path}...")
 
         engine_state = load_checkpoint(
             self.device_mesh,
             ckpt_path,
             self.model,
-            self.optimizer,
-            self.scheduler,
-            self.scaler,
+            self.optimizer if restore_training_state else None,
+            self.scheduler if restore_training_state else None,
+            self.scaler if restore_training_state else None,
+            restore_engine_state=restore_training_state,
+            restore_rng_state=restore_rng_state,
         )
+        if engine_state is None:
+            return
+
         self.step = engine_state["step"]
         self.epoch = engine_state["epoch"]
         self._accumulate_step = engine_state["_accumulate_step"]
+
+        if hasattr(self, "timer"):
+            self.timer.set_progress(self.step, self.total_steps)
 
     def accumulate_step(self, skip_increase: bool = False) -> bool:
         """Check if the gradients should be synchronized this step."""
@@ -381,6 +399,13 @@ class Engine(ABC):
             total_batches=self.total_steps,
             window_size=self.config.log.timer_window_size,
         )
+
+        if self.config.init_from_checkpoint is not None:
+            self.load(
+                self.config.init_from_checkpoint,
+                restore_training_state=False,
+                restore_rng_state=False,
+            )
 
     def run_train(self) -> None:
         """Execute the main training loop based on loop_policy."""
