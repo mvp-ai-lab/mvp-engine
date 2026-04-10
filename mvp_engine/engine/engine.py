@@ -302,43 +302,43 @@ class Engine(ABC):
 
         torch.distributed.barrier()
 
-    def load(self, ckpt_path: Union[str, PathLike]) -> None:
+    def load(
+        self,
+        ckpt_path: Union[str, PathLike],
+        restore_training_state: bool = True,
+        restore_rng_state: bool = True,
+    ) -> None:
         """Load training checkpoint from disk.
 
         Args:
             ckpt_path: Path to checkpoint directory.
+            restore_training_state: Whether to restore optimizer, scheduler,
+                scaler, and engine state in addition to model weights.
+            restore_rng_state: Whether to restore RNG state when loading a
+                training checkpoint.
         """
-        logger.info(f"Loading checkpoint from {ckpt_path}...")
+        action = "Loading checkpoint" if restore_training_state else "Initializing model from checkpoint"
+        logger.info(f"{action} {ckpt_path}...")
 
         engine_state = load_checkpoint(
             self.device_mesh,
             ckpt_path,
             self.model,
-            self.optimizer,
-            self.scheduler,
-            self.scaler,
+            self.optimizer if restore_training_state else None,
+            self.scheduler if restore_training_state else None,
+            self.scaler if restore_training_state else None,
+            restore_engine_state=restore_training_state,
+            restore_rng_state=restore_rng_state,
         )
+        if engine_state is None:
+            return
+
         self.step = engine_state["step"]
         self.epoch = engine_state["epoch"]
         self._accumulate_step = engine_state["_accumulate_step"]
 
-    def init_from_checkpoint(self, ckpt_path: Union[str, PathLike]) -> None:
-        """Load model weights from a checkpoint without restoring training state.
-
-        Args:
-            ckpt_path: Path to checkpoint directory.
-        """
-        logger.info(f"Initializing model weights from checkpoint {ckpt_path}...")
-        load_checkpoint(
-            self.device_mesh,
-            ckpt_path,
-            self.model,
-            optimizer=None,
-            scheduler=None,
-            scaler=None,
-            restore_engine_state=False,
-            restore_rng_state=False,
-        )
+        if hasattr(self, "timer"):
+            self.timer.set_progress(self.step, self.total_steps)
 
     def accumulate_step(self, skip_increase: bool = False) -> bool:
         """Check if the gradients should be synchronized this step."""
@@ -380,9 +380,6 @@ class Engine(ABC):
         logger.info("Building Model...")
         self.model = self.prepare_model()
 
-        if self.config.init_from_checkpoint is not None:
-            self.init_from_checkpoint(self.config.init_from_checkpoint)
-
         logger.info("Building Optimizer...")
         self.optimizer = self.prepare_optimizer()
 
@@ -402,6 +399,13 @@ class Engine(ABC):
             total_batches=self.total_steps,
             window_size=self.config.log.timer_window_size,
         )
+
+        if self.config.init_from_checkpoint is not None:
+            self.load(
+                self.config.init_from_checkpoint,
+                restore_training_state=False,
+                restore_rng_state=False,
+            )
 
     def run_train(self) -> None:
         """Execute the main training loop based on loop_policy."""
