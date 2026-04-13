@@ -32,7 +32,7 @@ data:
 model:
   pretrained_model_name_or_path: "./pretrained/Qwen3-VL-8B-Base-woDS-stage2"
   attn_implementation: "flash_attention_2"
-  image_max_pixels: 1048576
+  image_max_pixels: 262144
   # Freeze flags — set true to stop gradient for the corresponding sub-module.
   # Defaults follow the alignment-stage convention: train merger only.
   freeze_vit: false
