@@ -339,7 +339,8 @@ def build_dataset(config: Any, *, processor: Any):
     context = RuntimeContext.from_runtime(seed=int(config.seed))
 
     dataset = (
-        Dataset.from_parquet(
+        Dataset.from_source(
+            "parquet",
             dataset_path,
             context=context,
             resample=True,
@@ -372,6 +373,6 @@ def build_dataset(config: Any, *, processor: Any):
         )
 
     if config.data.cache:
-        dataset = dataset.cache(show_progress=config.data.cache_show_progress)
+        dataset = dataset.cache(cache_num_workers=8)
 
     return dataset
