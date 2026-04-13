@@ -25,7 +25,7 @@ data:
   packing_selection_strategy: "best_fit"
   packing_open_pack_limit: 8
   packing_buffer_size: 64
-  max_seq_len: 8192
+  max_seq_len: 4096
   batch_size: 1
   num_workers: 12
 model:
@@ -43,14 +43,14 @@ model:
 optim:
   lr: 5.0e-5
   weight_decay: 0.0
-  gradient_accumulation_steps: 2
+  gradient_accumulation_steps: 4
   mixed_precision: "bf16"
   warmup_ratio: 0.0
   clip_grad_norm: 1.0
 
 loop:
   policy: "iter"
-  total_steps: 30000
+  total_steps: 12580
 
 checkpoint:
   interval: 200

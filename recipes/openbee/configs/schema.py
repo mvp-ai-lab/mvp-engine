@@ -35,6 +35,19 @@ class OpenbeeDataConfig(BaseModel):
             raise ValueError("`data.train_path` must not be empty.")
         return normalized
 
+    @field_validator("cache_dir", mode="before")
+    @classmethod
+    def validate_cache_dir(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise TypeError("`data.cache_dir` must be a string or null.")
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("`data.cache_dir` must not be empty when provided.")
+        return normalized
+
 
 class OpenbeeModelConfig(BaseModel):
     model_config = ConfigDict(frozen=False, extra="forbid")

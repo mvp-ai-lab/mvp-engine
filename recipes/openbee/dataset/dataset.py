@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import glob
 import io
+import os
 from collections.abc import Iterable
 from functools import partial
 from pathlib import Path
@@ -11,6 +13,7 @@ from typing import Any
 import torch
 from mvp_dataset import Dataset, set_logger
 from mvp_dataset.core import RuntimeContext
+from mvp_dataset.utils.url import normalize_paths
 from PIL import Image
 
 from mvp_engine.utils.log import logger
@@ -27,6 +30,92 @@ ROLE_MAP = {
     "tool": "tool",
     "user": "user",
 }
+
+
+def resolve_cache_dir(train_path: str, configured_cache_dir: str | None) -> Path:
+    """Resolve the cache root for the current dataset specification.
+
+    When ``configured_cache_dir`` is omitted, the cache is colocated with the
+    resolved dataset root so recipe runs keep preprocessing artifacts near the
+    source parquet files instead of under the launcher working directory.
+    """
+    if configured_cache_dir is not None:
+        return Path(configured_cache_dir).expanduser().resolve()
+
+    shard_paths = resolve_dataset_shards(train_path)
+    shard_dirs = [str(Path(shard_path).expanduser().resolve().parent) for shard_path in shard_paths]
+    dataset_root = Path(os.path.commonpath(shard_dirs))
+    return (dataset_root / ".cache").resolve()
+
+
+def resolve_dataset_shards(train_path: str) -> list[str]:
+    """Resolve one dataset shard spec into concrete absolute parquet paths.
+
+    ``mvp_dataset.normalize_paths`` expands ``*`` and brace ranges, but its glob
+    call does not enable recursive ``**`` matching. OpenBee stage configs use
+    nested parquet trees, so expand recursive globs here before constructing the
+    dataset source list.
+    """
+    shard_specs = normalize_paths(train_path)
+    shard_paths: list[str] = []
+
+    for shard_spec in shard_specs:
+        if any(char in shard_spec for char in "*?["):
+            matches = sorted(glob.glob(shard_spec, recursive=True))
+            if matches:
+                shard_paths.extend(str(Path(match).expanduser().resolve()) for match in matches)
+                continue
+        shard_paths.append(str(Path(shard_spec).expanduser().resolve()))
+
+    return shard_paths
+
+
+def build_packed_sample_assembler(
+    assemble_context: RuntimeContext,
+    *,
+    max_length: int,
+    selection_strategy: str,
+    open_pack_limit: int,
+    pack_buffer_size: int,
+) -> PackedSampleAssembler:
+    """Build one packing assembler instance for a dataset iterator."""
+    return PackedSampleAssembler(
+        max_length=max_length,
+        selection_strategy=selection_strategy,
+        open_pack_limit=open_pack_limit,
+        pack_buffer_size=pack_buffer_size,
+        seed=assemble_context.sample_shuffle_seed,
+    )
+
+
+def configure_cache_write_batch_size(batch_size: int) -> None:
+    """Override ``mvp_dataset``'s cache write chunk size for large multimodal rows.
+
+    ``mvp_dataset`` currently defaults to buffering 8192 samples per Lance write.
+    OpenBee cache rows can contain long token tensors plus image features, so that
+    default spikes host memory and can trigger OOM during cache creation.
+    """
+    import mvp_dataset.cache.store as cache_store
+
+    original = getattr(cache_store, "_openbee_original_write_lance_dataset", cache_store._write_lance_dataset)
+    if not hasattr(cache_store, "_openbee_original_write_lance_dataset"):
+        cache_store._openbee_original_write_lance_dataset = original
+
+    def _write_lance_dataset_with_openbee_batch_size(
+        stream,
+        uri,
+        *,
+        batch_size: int = batch_size,
+        max_rows_per_group=None,
+    ):
+        return original(
+            stream,
+            uri,
+            batch_size=batch_size,
+            max_rows_per_group=max_rows_per_group,
+        )
+
+    cache_store._write_lance_dataset = _write_lance_dataset_with_openbee_batch_size
 
 
 def process_image(
@@ -334,27 +423,34 @@ def build_dataset(config: Any, *, processor: Any):
     dataset_path_value = config.data.train_path
     if dataset_path_value is None:
         raise ValueError("Missing `data.train_path` for the OpenBee recipe.")
-    dataset_path = Path(dataset_path_value).expanduser().resolve()
+    dataset_paths = resolve_dataset_shards(dataset_path_value)
 
     context = RuntimeContext.from_runtime(seed=int(config.seed))
 
-    dataset = (
-        Dataset.from_source(
-            "parquet",
-            dataset_path,
-            context=context,
-            resample=True,
+    dataset = Dataset.from_source(
+        "parquet",
+        dataset_paths,
+        context=context,
+        resample=True,
+    ).map(
+        partial(
+            process_sample,
+            processor=processor,
+            max_length=int(config.data.max_seq_len),
+            skip_think_prefix=not bool(config.data.enable_thinking),
         )
-        .map(
-            partial(
-                process_sample,
-                processor=processor,
-                max_length=int(config.data.max_seq_len),
-                skip_think_prefix=not bool(config.data.enable_thinking),
-            )
-        )
-        .shuffle(buffer_size=config.data.shuffle_buffer)
     )
+
+    if config.data.cache:
+        cache_write_batch_size = int(getattr(config.data, "cache_write_batch_size", 32))
+        configure_cache_write_batch_size(cache_write_batch_size)
+        logger.info("OpenBee cache: using write batch size %d", cache_write_batch_size)
+        dataset = dataset.cache(
+            cache_dir=str(resolve_cache_dir(dataset_path_value, getattr(config.data, "cache_dir", None))),
+            cache_num_workers=int(getattr(config.data, "cache_num_workers", 1)),
+        )
+
+    dataset = dataset.shuffle(buffer_size=config.data.shuffle_buffer)
 
     if config.data.packing:
         max_length = config.data.max_seq_len
@@ -363,16 +459,13 @@ def build_dataset(config: Any, *, processor: Any):
         pack_buffer_size = config.data.packing_buffer_size
 
         dataset = dataset.assemble(
-            lambda assemble_context: PackedSampleAssembler(
+            partial(
+                build_packed_sample_assembler,
                 max_length=max_length,
                 selection_strategy=selection_strategy,
                 open_pack_limit=open_pack_limit,
                 pack_buffer_size=pack_buffer_size,
-                seed=assemble_context.sample_shuffle_seed,
             )
         )
-
-    if config.data.cache:
-        dataset = dataset.cache(cache_num_workers=8)
 
     return dataset
