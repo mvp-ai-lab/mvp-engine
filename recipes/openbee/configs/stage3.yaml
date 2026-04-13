@@ -20,7 +20,6 @@ data:
   train_path: "./data/openbee/stage3/**/*.parquet"
   enable_thinking: false
   cache: false
-  cache_show_progress: true
   shuffle_buffer: 1000
   packing: true
   packing_selection_strategy: "best_fit"

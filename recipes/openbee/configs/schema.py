@@ -13,7 +13,6 @@ class OpenbeeDataConfig(BaseModel):
     train_path: Optional[str] = "./data/openbee/alignment_demo.jsonl"
     enable_thinking: bool = True
     cache: bool = False
-    cache_show_progress: bool = True
     shuffle_buffer: int = Field(1000, ge=1)
     packing: bool = False
     packing_selection_strategy: Literal["random", "best_fit"] = "best_fit"
