@@ -12,5 +12,6 @@ def test_default_config_validates_with_base_engine_schema():
     validated = BaseEngineConfig.model_validate(OmegaConf.to_container(config, resolve=True))
 
     assert validated.engine == "Engine"
+    assert validated.checkpoint.hf_enable is False
     assert validated.parallel.backend_kwargs.fsdp2.reshard_after_forward is True
     assert validated.parallel.backend_kwargs.ddp.model_dump() == {}
