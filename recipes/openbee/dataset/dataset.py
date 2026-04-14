@@ -5,6 +5,7 @@ from __future__ import annotations
 import glob
 import io
 import os
+import warnings
 from collections.abc import Iterable
 from functools import partial
 from pathlib import Path
@@ -30,6 +31,16 @@ ROLE_MAP = {
     "tool": "tool",
     "user": "user",
 }
+
+
+def build_skipped_sample() -> ModelInputs:
+    """Return an empty sample sentinel that downstream stages can ignore safely."""
+    empty = torch.empty(0, dtype=torch.long)
+    return {
+        "input_ids": empty,
+        "attention_mask": empty,
+        "labels": empty,
+    }
 
 
 def resolve_cache_dir(train_path: str, configured_cache_dir: str | None) -> Path:
@@ -392,6 +403,13 @@ def process_sample(
         )
         if not torch.any(labels != ignore_index):
             raise ValueError("has no supervised assistant tokens after tokenization/truncation.")
+    except (OSError, SyntaxError, ValueError) as exc:
+        warnings.warn(
+            f"Skipping invalid OpenBee sample {loc}: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return build_skipped_sample()
     except Exception as exc:
         raise type(exc)(f"{loc} {exc}") from exc
 

@@ -24,7 +24,7 @@ class OpenbeeCollator:
         self.pad_token_id = pad_token_id
         self.ignore_index = ignore_index
 
-    def __call__(self, batch: list[ModelInputs]) -> ModelInputs:
+    def __call__(self, batch: list[ModelInputs]) -> ModelInputs | None:
         """Pad token tensors and concatenate optional vision tensors.
 
         Args:
@@ -33,6 +33,10 @@ class OpenbeeCollator:
         Returns:
             A batched tensor dictionary ready for model forward passes.
         """
+        batch = [sample for sample in batch if int(sample["input_ids"].numel()) > 0]
+        if not batch:
+            return None
+
         model_inputs: ModelInputs = {
             "input_ids": pad_sequence(
                 [sample["input_ids"] for sample in batch],

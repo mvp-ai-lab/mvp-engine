@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import torch
+import torch.distributed as dist
 from mvp_dataset import TorchLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from transformers.utils.logging import disable_progress_bar
@@ -162,7 +163,7 @@ class OpenbeeEngine(Engine):
             milestones=[warmup_steps],
         )
 
-    def train_pre_step(self, data: ModelInputs) -> ModelInputs:
+    def train_pre_step(self, data: ModelInputs | None) -> ModelInputs | None:
         """Move the collated batch to the local device and normalize keys.
 
         Args:
@@ -171,6 +172,18 @@ class OpenbeeEngine(Engine):
         Returns:
             A normalized batch dictionary ready for the model forward pass.
         """
+        has_data = data is not None
+        if dist.is_initialized():
+            has_data_tensor = torch.tensor(int(has_data), device=self.device)
+            dist.all_reduce(has_data_tensor, op=dist.ReduceOp.MIN)
+            has_data = bool(has_data_tensor.item())
+
+        if not has_data:
+            if is_main_process():
+                logger.warning("Skipping OpenBee batch because at least one rank only produced invalid samples.")
+            return None
+
+        assert data is not None
         batch: ModelInputs = {}
         for key, value in data.items():
             if isinstance(value, torch.Tensor):
