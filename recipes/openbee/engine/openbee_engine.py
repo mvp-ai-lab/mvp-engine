@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 import torch
+import torch.distributed as dist
+import torch.nn.functional as F
 from mvp_dataset import TorchLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from transformers.utils.logging import disable_progress_bar
@@ -26,6 +28,7 @@ from ..dataset import (
 from ..model import build_qwen3_vl_model
 from ..model.packing import apply_packed_fa2_patch, prepare_packed_model_inputs
 from ..utils.log.mfu import build_mfu_log
+from ..utils.metrics import MetricAccumulator
 
 
 @ENGINE_REGISTRY.register()
@@ -40,6 +43,10 @@ class OpenbeeEngine(Engine):
     def __init__(self, config):
         super().__init__(config)
         disable_progress_bar()
+        self.metric_accumulator = MetricAccumulator()
+        self.metric_accumulator.register("global_token_count", "last")
+        self.metric_accumulator.register("local_loss_sum", "sum")
+        self.metric_accumulator.register("local_model_flops", "sum")
 
     def prepare_dataloader(self, workflow: str = "train"):
         """Build the train-only dataloader over preprocessed multimodal samples.
@@ -162,6 +169,53 @@ class OpenbeeEngine(Engine):
             milestones=[warmup_steps],
         )
 
+    def run_iter_train(self) -> None:
+        """Run iteration-based training with window-prefetched token normalization."""
+
+        def _count_valid_loss_tokens(labels: torch.Tensor, *, ignore_index: int = -100) -> int:
+            """Count the valid shifted labels used by causal-LM cross entropy."""
+            shifted_labels = F.pad(labels, (0, 1), value=ignore_index)[..., 1:]
+            return int((shifted_labels != ignore_index).sum().item())
+
+        train_iterator = iter(self.train_loader)
+        gradient_accumulation_steps = int(self.config.optim.gradient_accumulation_steps)
+
+        while self.step < self.total_steps:
+            remaining_micro_steps = gradient_accumulation_steps - int(self._accumulate_step)
+            if remaining_micro_steps <= 0:
+                remaining_micro_steps = gradient_accumulation_steps
+
+            local_token_count = 0
+            micro_batches: list[ModelInputs] = []
+            for _ in range(remaining_micro_steps):
+                try:
+                    data = next(train_iterator)
+                except StopIteration:
+                    train_iterator = iter(self.train_loader)
+                    try:
+                        data = next(train_iterator)
+                    except StopIteration as exc:
+                        raise RuntimeError("OpenBee train loader did not yield any batches.") from exc
+                effective_token_num = _count_valid_loss_tokens(data["labels"])
+                data["effective_token_num"] = effective_token_num
+                local_token_count += effective_token_num
+
+                micro_batches.append(data)
+
+            token_count = torch.tensor(local_token_count, device=self.device, dtype=torch.long)
+            if dist.is_available() and dist.is_initialized():
+                dist.all_reduce(token_count, op=dist.ReduceOp.SUM)
+
+            self.metric_accumulator.reset()
+            self.metric_accumulator.update(global_token_count=int(token_count.item()))
+
+            global_token_count = self.metric_accumulator.get("global_token_count")
+            if global_token_count is None or int(global_token_count) <= 0:
+                raise ValueError("Accumulation window must contain at least one supervised token.")
+
+            for data in micro_batches:
+                self.train_after_step(self.train_one_step(self.train_pre_step(data)))
+
     def train_pre_step(self, data: ModelInputs) -> ModelInputs:
         """Move the collated batch to the local device and normalize keys.
 
@@ -204,14 +258,20 @@ class OpenbeeEngine(Engine):
         return {
             "loss": outputs.loss,
             "logs": {
-                "train/loss": outputs.loss.item(),
+                "train/loss": 0.0,
             },
-            "effective_tokens": int((data["labels"] != -100).sum().item()),
-            "mfu_inputs": {
-                "batch_size": int(data["input_ids"].shape[0]),
-                "seq_len": int(data["input_ids"].shape[1]),
-                "image_grid_thw": data.get("image_grid_thw"),
-            },
+            "effective_tokens": data["effective_token_num"],
+            "model_flops": float(
+                self.unwrapped_model.calculate_model_flops(
+                    batch_size=int(data["input_ids"].shape[0]),
+                    seq_len=int(data["input_ids"].shape[1]),
+                    image_grid_thw=data.get("image_grid_thw"),
+                    is_training=True,
+                    freeze_vit=bool(self.config.model.freeze_vit),
+                    freeze_merger=bool(self.config.model.freeze_merger),
+                    freeze_llm=bool(self.config.model.freeze_llm),
+                )
+            ),
         }
 
     def train_after_step(self, outputs: dict[str, Any]) -> dict[str, Any]:
@@ -220,69 +280,67 @@ class OpenbeeEngine(Engine):
         assert "logs" in outputs, "The model output must contain 'logs' key."
 
         is_sync = self.accumulate_step()
+        global_token_count = self.metric_accumulator.get("global_token_count")
+        if global_token_count is None or int(global_token_count) <= 0:
+            raise ValueError("OpenBee accumulation window is missing a valid global token count.")
 
-        gradient_accumulation_steps = self.config.optim.gradient_accumulation_steps
-        loss = outputs["loss"] / gradient_accumulation_steps
-
-        # Accumulate loss for logging: average across all micro-batches in the window.
-        self._loss_accumulator = getattr(self, "_loss_accumulator", 0.0) + outputs["loss"].item()
-        self._effective_tokens_accumulator = getattr(self, "_effective_tokens_accumulator", 0) + int(
-            outputs["effective_tokens"]
+        self.metric_accumulator.update(
+            local_loss_sum=outputs["loss"].detach().to(device=self.device, dtype=torch.float64),
+            local_model_flops=float(outputs["model_flops"]),
         )
+
+        # DDP/FSDP averages gradients across ranks, so each micro-step uses the local summed
+        # loss with the globally reduced token denominator and compensates by world size.
+        loss = outputs["loss"] / int(global_token_count)
+        if dist.is_available() and dist.is_initialized():
+            loss = loss * float(dist.get_world_size())
 
         with accumulate_gradients(self.model, sync=is_sync):
             self.scaler.scale(loss).backward()
 
-        if is_sync:
-            self.scaler.unscale_(self.optimizer)
+        if not is_sync:
+            return outputs
 
-            max_grad_norm = self.config.optim.clip_grad_norm
-            if max_grad_norm is not None:
-                clip_grad_norm_(self.model, max_grad_norm)
+        self.scaler.unscale_(self.optimizer)
 
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            self.scheduler.step()
-            self.optimizer.zero_grad(set_to_none=True)
+        max_grad_norm = self.config.optim.clip_grad_norm
+        if max_grad_norm is not None:
+            clip_grad_norm_(self.model, max_grad_norm)
 
-            self.step += 1
-            self.timer.tick()
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        self.scheduler.step()
+        self.optimizer.zero_grad(set_to_none=True)
 
-            other_logs = {
-                "eta": self.timer.eta_string,
-                "perf/batch_time": self.timer.batch_time,
-            }
-            effective_tokens = self._effective_tokens_accumulator
-            self._effective_tokens_accumulator = 0
-            other_logs["perf/toks_per_sec"] = effective_tokens / self.timer.batch_time
-            other_logs.update(
-                build_mfu_log(
-                    model=self.unwrapped_model,
-                    device_type=self.device.type,
-                    precision=str(self.config.optim.mixed_precision),
-                    batch_size=int(outputs["mfu_inputs"]["batch_size"]),
-                    seq_len=int(outputs["mfu_inputs"]["seq_len"]),
-                    image_grid_thw=outputs["mfu_inputs"].get("image_grid_thw"),
-                    step_time_seconds=float(self.timer.batch_time_latest),
-                    gradient_accumulation_steps=int(self.config.optim.gradient_accumulation_steps),
-                    freeze_vit=bool(self.config.model.freeze_vit),
-                    freeze_merger=bool(self.config.model.freeze_merger),
-                    freeze_llm=bool(self.config.model.freeze_llm),
-                )
+        self.step += 1
+        self.timer.tick()
+
+        accumulated_metrics = self.metric_accumulator.finalize()
+        other_logs = {
+            "eta": self.timer.eta_string,
+            "perf/batch_time": self.timer.batch_time,
+            "perf/toks_per_sec": int(global_token_count) / self.timer.batch_time,
+        }
+        other_logs.update(
+            build_mfu_log(
+                model_flops_per_step=float(accumulated_metrics["local_model_flops"]),
+                device_type=self.device.type,
+                precision=str(self.config.optim.mixed_precision),
+                step_time_seconds=float(self.timer.batch_time_latest),
             )
+        )
 
-            for i, lr in enumerate(self.scheduler.get_last_lr()):
-                other_logs[f"lr/group_{i}"] = lr
+        for i, lr in enumerate(self.scheduler.get_last_lr()):
+            other_logs[f"lr/group_{i}"] = lr
 
-            averaged_loss = self._loss_accumulator / gradient_accumulation_steps
-            self._loss_accumulator = 0.0
-            outputs["logs"]["train/loss"] = averaged_loss
+        outputs["logs"]["train/loss"] = float(accumulated_metrics["local_loss_sum"] / int(global_token_count))
+        logger.log_metrics(
+            {**outputs["logs"], **other_logs},
+            step=self.step,
+        )
 
-            logger.log_metrics(
-                {**outputs["logs"], **other_logs},
-                step=self.step,
-            )
+        self.metric_accumulator.reset()
 
-            self.save()
+        self.save()
 
         return outputs

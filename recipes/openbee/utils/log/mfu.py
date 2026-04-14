@@ -140,14 +140,15 @@ def resolve_peak_tflops(
 
 def build_mfu_log(
     *,
-    model: Any,
+    model_flops_per_step: float | None = None,
+    model: Any | None = None,
     device_type: str,
     precision: str,
-    batch_size: int,
-    seq_len: int,
-    image_grid_thw: Any,
+    batch_size: int | None = None,
+    seq_len: int | None = None,
+    image_grid_thw: Any = None,
     step_time_seconds: float,
-    gradient_accumulation_steps: int,
+    gradient_accumulation_steps: int = 1,
     freeze_vit: bool = False,
     freeze_merger: bool = False,
     freeze_llm: bool = False,
@@ -164,15 +165,20 @@ def build_mfu_log(
     if resolved_device_name is None or device_peak_tflops is None:
         return {}
 
-    local_model_flops_per_step = model.calculate_model_flops(
-        batch_size=int(batch_size),
-        seq_len=int(seq_len),
-        image_grid_thw=image_grid_thw,
-        is_training=True,
-        freeze_vit=freeze_vit,
-        freeze_merger=freeze_merger,
-        freeze_llm=freeze_llm,
-    ) * int(gradient_accumulation_steps)
+    local_model_flops_per_step = model_flops_per_step
+    if local_model_flops_per_step is None:
+        if model is None or batch_size is None or seq_len is None:
+            raise ValueError("Either model_flops_per_step or model/batch_size/seq_len must be provided.")
+        local_model_flops_per_step = model.calculate_model_flops(
+            batch_size=int(batch_size),
+            seq_len=int(seq_len),
+            image_grid_thw=image_grid_thw,
+            is_training=True,
+            freeze_vit=freeze_vit,
+            freeze_merger=freeze_merger,
+            freeze_llm=freeze_llm,
+        ) * int(gradient_accumulation_steps)
+
     global_model_flops_per_step, global_step_time_seconds = reduce_to_global_flops_and_step_time(
         model_flops_per_step=float(local_model_flops_per_step),
         step_time_seconds=float(step_time_seconds),
