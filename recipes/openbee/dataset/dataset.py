@@ -35,11 +35,10 @@ ROLE_MAP = {
 
 def build_skipped_sample() -> ModelInputs:
     """Return an empty sample sentinel that downstream stages can ignore safely."""
-    empty = torch.empty(0, dtype=torch.long)
     return {
-        "input_ids": empty,
-        "attention_mask": empty,
-        "labels": empty,
+        "input_ids": torch.empty(0, dtype=torch.long),
+        "attention_mask": torch.empty(0, dtype=torch.long),
+        "labels": torch.empty(0, dtype=torch.long),
     }
 
 
