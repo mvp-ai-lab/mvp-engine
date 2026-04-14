@@ -11,6 +11,7 @@ class OpenbeeDataConfig(BaseModel):
     model_config = ConfigDict(frozen=False, extra="forbid")
 
     train_path: Optional[str] = "./data/openbee/alignment_demo.jsonl"
+    cache_dir: str | None = None
     enable_thinking: bool = True
     cache: bool = False
     shuffle_buffer: int = Field(1000, ge=1)
