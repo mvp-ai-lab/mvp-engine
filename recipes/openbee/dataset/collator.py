@@ -33,7 +33,7 @@ class OpenbeeCollator:
         Returns:
             A batched tensor dictionary ready for model forward passes.
         """
-        batch = [sample for sample in batch if int(sample["input_ids"].numel()) > 0]
+        batch = [sample for sample in batch if sample["input_ids"].numel() > 0]
         if not batch:
             return None
 
