@@ -212,6 +212,32 @@ def inject_model_flops_calculation(model):
     return model
 
 
+def apply_qwen3_vl_compat_patches(model):
+    """Mirror the LLaMA-Factory Qwen3-VL vision/runtime patches.
+
+    These are behavior patches, not optimizations:
+    - run vision patch embedding as fp32 linear math instead of Conv3D
+    - replace the vision RoPE helper with the LF implementation
+    """
+
+    def patch_embed_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        target_dtype = self.proj.weight.dtype
+        proj_weight = self.proj.weight
+        proj_bias = self.proj.bias
+
+        with torch.amp.autocast(device_type="cuda", enabled=False):
+            hidden_states_fp32 = hidden_states.float()
+            weight_fp32 = proj_weight.view(self.embed_dim, -1).float()
+            bias_fp32 = proj_bias.float() if proj_bias is not None else None
+            hidden_states = F.linear(hidden_states_fp32, weight_fp32, bias_fp32)
+
+        return hidden_states.to(dtype=target_dtype)
+
+    model.model.visual.patch_embed.forward = MethodType(patch_embed_forward, model.model.visual.patch_embed)
+
+    return model
+
+
 def inject_sum_loss_forward(model, *, chunk_size: int = 4096):
     """Patch Qwen3-VL forward to return summed CE loss."""
 
@@ -303,5 +329,6 @@ def build_qwen3_vl_model(model_config: Any):
         freeze_merger=model_config.freeze_merger,
         freeze_llm=model_config.freeze_llm,
     )
+    model = apply_qwen3_vl_compat_patches(model)
 
     return model

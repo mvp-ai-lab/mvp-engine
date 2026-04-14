@@ -45,6 +45,7 @@ class OpenbeeEngine(Engine):
         disable_progress_bar()
         self.metric_accumulator = MetricAccumulator()
         self.metric_accumulator.register("global_token_count", "last")
+        self.metric_accumulator.register("local_token_count", "last")
         self.metric_accumulator.register("local_loss_sum", "sum")
         self.metric_accumulator.register("local_model_flops", "sum")
 
@@ -99,8 +100,7 @@ class OpenbeeEngine(Engine):
             # flash_attn_varlen_func directly (not via _get_unpad_data), so dynamo cannot
             # trace it — flash_attn C++ requires a Python int but receives a FakeTensor.
             # Wrapping its forward with compiler.disable causes a graph break there so it
-            # runs eagerly.  The ViT is frozen anyway, so there is no training benefit to
-            # compiling it; the LLM and merger (the actual training targets) are compiled.
+            # runs eagerly.
             if hasattr(model, "model") and hasattr(model.model, "visual"):
                 model.model.visual.forward = torch.compiler.disable(model.model.visual.forward)
             model.compile(
@@ -207,7 +207,10 @@ class OpenbeeEngine(Engine):
                 dist.all_reduce(token_count, op=dist.ReduceOp.SUM)
 
             self.metric_accumulator.reset()
-            self.metric_accumulator.update(global_token_count=int(token_count.item()))
+            self.metric_accumulator.update(
+                global_token_count=int(token_count.item()),
+                local_token_count=local_token_count,
+            )
 
             global_token_count = self.metric_accumulator.get("global_token_count")
             if global_token_count is None or int(global_token_count) <= 0:
@@ -283,6 +286,9 @@ class OpenbeeEngine(Engine):
         global_token_count = self.metric_accumulator.get("global_token_count")
         if global_token_count is None or int(global_token_count) <= 0:
             raise ValueError("OpenBee accumulation window is missing a valid global token count.")
+        local_token_count = self.metric_accumulator.get("local_token_count")
+        if local_token_count is None or int(local_token_count) <= 0:
+            raise ValueError("OpenBee accumulation window is missing a valid local token count.")
 
         self.metric_accumulator.update(
             local_loss_sum=outputs["loss"].detach().to(device=self.device, dtype=torch.float64),
@@ -333,7 +339,7 @@ class OpenbeeEngine(Engine):
         for i, lr in enumerate(self.scheduler.get_last_lr()):
             other_logs[f"lr/group_{i}"] = lr
 
-        outputs["logs"]["train/loss"] = float(accumulated_metrics["local_loss_sum"] / int(global_token_count))
+        outputs["logs"]["train/loss"] = float(accumulated_metrics["local_loss_sum"] / int(local_token_count))
         logger.log_metrics(
             {**outputs["logs"], **other_logs},
             step=self.step,
