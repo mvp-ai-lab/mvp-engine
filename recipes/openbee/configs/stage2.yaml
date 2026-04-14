@@ -55,3 +55,4 @@ loop:
 checkpoint:
   interval: 200
   keep_n: 2
+  hf_enable: true
