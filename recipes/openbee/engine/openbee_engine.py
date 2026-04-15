@@ -59,6 +59,7 @@ class OpenbeeEngine(Engine):
 
         collate_fn = OpenbeeCollator(
             pad_token_id=int(self.processor.tokenizer.pad_token_id),
+            processor=self.processor,
         )
 
         loader = TorchLoader(

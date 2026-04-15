@@ -14,5 +14,6 @@ class ModelInputs(TypedDict):
     attention_mask: torch.Tensor
     labels: torch.Tensor
     pack_segment_ids: NotRequired[torch.Tensor]
+    dummy_image_grid_count: NotRequired[int]
     pixel_values: NotRequired[torch.Tensor]
     image_grid_thw: NotRequired[torch.Tensor]

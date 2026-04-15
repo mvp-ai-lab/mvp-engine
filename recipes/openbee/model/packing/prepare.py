@@ -31,7 +31,10 @@ def prepare_packed_model_inputs(
     batch["position_ids"] = build_qwen3_vl_packed_position_ids(
         input_ids=batch["input_ids"],
         pack_segment_ids=pack_segment_ids,
-        image_grid_thw=batch.get("image_grid_thw"),
+        image_grid_thw=_drop_batch_level_dummy_image_grid(
+            batch.get("image_grid_thw"),
+            batch.get("dummy_image_grid_count", 0),
+        ),
         model_config=model_config,
     )
 
@@ -45,6 +48,19 @@ def prepare_packed_model_inputs(
         batch["attention_mask"] = _build_packed_block_causal_mask(pack_segment_ids, dtype=mask_dtype)
 
     return batch
+
+
+def _drop_batch_level_dummy_image_grid(
+    image_grid_thw: torch.Tensor | None,
+    dummy_image_grid_count: int,
+) -> torch.Tensor | None:
+    """Drop batch-level dummy-image metadata when packed position ids only see active tokens."""
+    if image_grid_thw is None or dummy_image_grid_count <= 0:
+        return image_grid_thw
+    remaining = int(image_grid_thw.shape[0]) - int(dummy_image_grid_count)
+    if remaining <= 0:
+        return None
+    return image_grid_thw[:remaining]
 
 
 def _build_packed_block_causal_mask(

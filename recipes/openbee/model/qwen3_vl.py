@@ -7,6 +7,7 @@ from typing import Any
 
 import torch
 from transformers import AutoModelForImageTextToText
+from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLModelOutputWithPast
 
 # ---------------------------------------------------------------------------
 # Parameter-name prefixes for each logical sub-module
@@ -181,6 +182,176 @@ def inject_model_flops_calculation(model):
     return model
 
 
+def _build_active_token_mask(
+    input_ids: torch.Tensor | None,
+    attention_mask: torch.Tensor | None,
+) -> torch.Tensor | None:
+    """Return a per-token valid mask that ignores fully masked dummy-image suffixes."""
+    if input_ids is None:
+        return None
+    if attention_mask is None:
+        return torch.ones_like(input_ids, dtype=torch.bool)
+    if attention_mask.ndim == 2:
+        return attention_mask.ne(0)
+    if attention_mask.ndim == 4:
+        diagonal = torch.diagonal(attention_mask[:, 0], dim1=1, dim2=2)
+        if torch.is_floating_point(diagonal):
+            return diagonal.eq(0)
+        return diagonal.ne(0)
+    raise ValueError(f"Unsupported attention_mask shape for dummy-image handling: {tuple(attention_mask.shape)}.")
+
+
+def _has_active_multimodal_tokens(
+    input_ids: torch.Tensor | None,
+    attention_mask: torch.Tensor | None,
+    *,
+    token_id: int,
+) -> bool:
+    """Check whether a token id is present among active tokens only."""
+    if input_ids is None or input_ids.numel() == 0:
+        return False
+    active_token_mask = _build_active_token_mask(input_ids, attention_mask)
+    if active_token_mask is None:
+        return False
+    return bool(((input_ids == token_id) & active_token_mask).any().item())
+
+
+def _attach_zero_visual_dependency(
+    inputs_embeds: torch.Tensor,
+    visual_embeds: torch.Tensor,
+    deepstack_visual_embeds: list[torch.Tensor] | None,
+) -> torch.Tensor:
+    """Keep visual parameters in the autograd graph without injecting visual content."""
+    inputs_embeds = inputs_embeds + visual_embeds.mean() * 0
+    if deepstack_visual_embeds is not None:
+        for deepstack_embed in deepstack_visual_embeds:
+            inputs_embeds = inputs_embeds + deepstack_embed.mean() * 0
+    return inputs_embeds
+
+
+def inject_batch_level_dummy_image_handling(model):
+    """Patch Qwen3-VL to follow HK-style local-batch dummy-image behaviour."""
+
+    def model_forward_with_batch_level_dummy_image(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values=None,
+        inputs_embeds: torch.FloatTensor | None = None,
+        pixel_values: torch.Tensor | None = None,
+        pixel_values_videos: torch.FloatTensor | None = None,
+        image_grid_thw: torch.LongTensor | None = None,
+        video_grid_thw: torch.LongTensor | None = None,
+        mm_token_type_ids: torch.IntTensor | None = None,
+        cache_position: torch.LongTensor | None = None,
+        **kwargs,
+    ):
+        if (input_ids is None) ^ (inputs_embeds is not None):
+            raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
+
+        if inputs_embeds is None:
+            inputs_embeds = self.get_input_embeddings()(input_ids)
+
+        image_mask = None
+        video_mask = None
+        deepstack_image_embeds = None
+        deepstack_video_embeds = None
+
+        has_image_tokens = _has_active_multimodal_tokens(
+            input_ids,
+            attention_mask,
+            token_id=int(self.config.image_token_id),
+        )
+        has_video_tokens = _has_active_multimodal_tokens(
+            input_ids,
+            attention_mask,
+            token_id=int(self.config.video_token_id),
+        )
+
+        if pixel_values is not None:
+            image_outputs = self.get_image_features(pixel_values, image_grid_thw, return_dict=True)
+            image_embeds = torch.cat(image_outputs.pooler_output, dim=0).to(inputs_embeds.device, inputs_embeds.dtype)
+            deepstack_image_embeds = image_outputs.deepstack_features
+            if has_image_tokens:
+                image_mask, _ = self.get_placeholder_mask(
+                    input_ids,
+                    inputs_embeds=inputs_embeds,
+                    image_features=image_embeds,
+                )
+                inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
+            else:
+                inputs_embeds = _attach_zero_visual_dependency(inputs_embeds, image_embeds, deepstack_image_embeds)
+
+        if pixel_values_videos is not None:
+            video_outputs = self.get_video_features(pixel_values_videos, video_grid_thw, return_dict=True)
+            video_embeds = torch.cat(video_outputs.pooler_output, dim=0).to(inputs_embeds.device, inputs_embeds.dtype)
+            deepstack_video_embeds = video_outputs.deepstack_features
+            if has_video_tokens:
+                _, video_mask = self.get_placeholder_mask(
+                    input_ids,
+                    inputs_embeds=inputs_embeds,
+                    video_features=video_embeds,
+                )
+                inputs_embeds = inputs_embeds.masked_scatter(video_mask, video_embeds)
+            else:
+                inputs_embeds = _attach_zero_visual_dependency(inputs_embeds, video_embeds, deepstack_video_embeds)
+
+        visual_pos_masks = None
+        deepstack_visual_embeds = None
+        if image_mask is not None and video_mask is not None:
+            image_mask = image_mask[..., 0]
+            video_mask = video_mask[..., 0]
+            visual_pos_masks = image_mask | video_mask
+            deepstack_visual_embeds = []
+            image_mask_joint = image_mask[visual_pos_masks]
+            video_mask_joint = video_mask[visual_pos_masks]
+            for img_embed, vid_embed in zip(deepstack_image_embeds, deepstack_video_embeds):
+                embed_joint = img_embed.new_zeros(visual_pos_masks.sum(), img_embed.shape[-1]).to(img_embed.device)
+                embed_joint[image_mask_joint, :] = img_embed
+                embed_joint[video_mask_joint, :] = vid_embed
+                deepstack_visual_embeds.append(embed_joint)
+        elif image_mask is not None:
+            image_mask = image_mask[..., 0]
+            visual_pos_masks = image_mask
+            deepstack_visual_embeds = deepstack_image_embeds
+        elif video_mask is not None:
+            video_mask = video_mask[..., 0]
+            visual_pos_masks = video_mask
+            deepstack_visual_embeds = deepstack_video_embeds
+
+        if position_ids is None:
+            position_ids = self.compute_3d_position_ids(
+                input_ids=input_ids,
+                image_grid_thw=image_grid_thw,
+                video_grid_thw=video_grid_thw,
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                past_key_values=past_key_values,
+                mm_token_type_ids=mm_token_type_ids,
+            )
+
+        outputs = self.language_model(
+            input_ids=None,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            cache_position=cache_position,
+            visual_pos_masks=visual_pos_masks,
+            deepstack_visual_embeds=deepstack_visual_embeds,
+            **kwargs,
+        )
+
+        return Qwen3VLModelOutputWithPast(
+            **outputs,
+            rope_deltas=self.rope_deltas,
+        )
+
+    model.model.forward = MethodType(model_forward_with_batch_level_dummy_image, model.model)
+    return model
+
+
 def build_qwen3_vl_model(model_config: Any):
     """Load the Qwen3-VL model checkpoint and apply the configured freeze policy.
 
@@ -198,6 +369,7 @@ def build_qwen3_vl_model(model_config: Any):
         attn_implementation=model_config.attn_implementation,
     )
     model = inject_model_flops_calculation(model)
+    model = inject_batch_level_dummy_image_handling(model)
 
     apply_freeze_policy(
         model,
