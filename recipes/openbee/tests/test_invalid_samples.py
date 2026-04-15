@@ -1,6 +1,7 @@
 import importlib
 import sys
 import types
+import warnings
 from types import SimpleNamespace
 
 import pytest
@@ -61,6 +62,7 @@ openbee_packing = importlib.import_module("recipes.openbee.dataset.packing")
 OpenbeeCollator = openbee_collator.OpenbeeCollator
 PackedSampleAssembler = openbee_packing.PackedSampleAssembler
 SkippedSampleFilterAssembler = openbee_packing.SkippedSampleFilterAssembler
+InvalidSampleReporter = openbee_dataset.InvalidSampleReporter
 build_skipped_sample = openbee_dataset.build_skipped_sample
 process_sample = openbee_dataset.process_sample
 
@@ -94,6 +96,30 @@ def test_packed_sample_assembler_ignores_skipped_samples():
 
     assert list(assembler.push(build_skipped_sample())) == []
     assert list(assembler.finish()) == []
+
+
+def test_invalid_sample_reporter_throttles_warnings(monkeypatch):
+    reporter = InvalidSampleReporter(warn_limit=1, summary_log_interval=2)
+    log_messages: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        openbee_dataset, "simple_info", lambda message, level="info": log_messages.append((message, level))
+    )
+
+    with pytest.warns(RuntimeWarning, match=r"sample-a.*bad image a"):
+        reporter.report(loc="sample-a", exc=ValueError("bad image a"))
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        reporter.report(loc="sample-b", exc=ValueError("bad image b"))
+        reporter.report(loc="sample-c", exc=ValueError("bad image c"))
+
+    assert caught == []
+    assert len(log_messages) == 1
+    assert log_messages[0][1] == "warning"
+    assert "Suppressed per-sample invalid OpenBee warnings" in log_messages[0][0]
+    assert "Skipped 3 invalid sample(s) so far" in log_messages[0][0]
+    assert "sample-c: bad image c" in log_messages[0][0]
 
 
 def test_skipped_sample_filter_assembler_drops_only_invalid_samples():
