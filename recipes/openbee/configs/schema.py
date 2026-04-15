@@ -4,7 +4,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from mvp_engine.config.schema import BaseEngineConfig
+from mvp_engine.config.schema import BaseEngineConfig, BaseLoopConfig
 
 
 class OpenbeeDataConfig(BaseModel):
@@ -79,8 +79,22 @@ class OpenbeeModelConfig(BaseModel):
         return normalized
 
 
+class OpenbeeLoopConfig(BaseLoopConfig):
+    model_config = ConfigDict(frozen=False)
+
+    total_steps: int = 10000
+
+    @field_validator("total_steps")
+    @classmethod
+    def validate_total_steps(cls, value: int) -> int:
+        if value == 0 or value < -1:
+            raise ValueError("`loop.total_steps` must be positive or exactly -1.")
+        return value
+
+
 class OpenbeeConfig(BaseEngineConfig):
     model_config = ConfigDict(frozen=False, extra="allow")
 
     data: OpenbeeDataConfig = Field(default_factory=OpenbeeDataConfig)
     model: OpenbeeModelConfig = Field(default_factory=OpenbeeModelConfig)
+    loop: OpenbeeLoopConfig = Field(default_factory=OpenbeeLoopConfig)

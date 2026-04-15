@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import torch
@@ -24,6 +25,7 @@ from ..dataset import (
     OpenbeeCollator,
     build_dataset,
     build_qwen3_vl_processor,
+    lightweight_process_sample,
 )
 from ..model import build_qwen3_vl_model
 from ..model.packing import apply_packed_fa2_patch, prepare_packed_model_inputs
@@ -59,16 +61,119 @@ class OpenbeeEngine(Engine):
         Returns:
             A ``TorchLoader`` pipeline that yields padded multimodal batches.
         """
-        del workflow  # The shared engine still passes this, but the recipe only supports training.
-
+        # Step 1: build the shared processor once so both the temporary counting
+        # loader and the real training loader use the exact same tokenizer setup.
         if self.processor is None:
             self.processor = build_qwen3_vl_processor(self.config.model)
-        dataset = build_dataset(self.config, processor=self.processor)
 
+        # Step 2: when total_steps=-1, run one finite lightweight data pass to
+        # count packed samples and infer one-epoch optimization steps.
+        if workflow == "train" and int(self.config.loop.total_steps) == -1:
+            temp_config = self.config.model_copy(deep=True)
+
+            # Step 2.1: disable cache for the temporary counting pass so step
+            # inference does not spend time or disk on cache construction.
+            if temp_config.data.cache:
+                logger.info("OpenBee step inference: disabling cache for the temporary lightweight dataloader.")
+                temp_config.data.cache = False
+
+            # Step 2.2: build a temporary dataset/loader that uses the
+            # lightweight preprocess but keeps the same packing behaviour.
+            temp_collate_fn = OpenbeeCollator(
+                pad_token_id=int(self.processor.tokenizer.pad_token_id),
+            )
+            temp_dataset = build_dataset(
+                temp_config,
+                processor=self.processor,
+                process_fn=lightweight_process_sample,
+                resample=False,
+            )
+            temp_loader = TorchLoader(
+                temp_dataset,
+                num_workers=int(temp_config.data.num_workers),
+                pin_memory=self.device.type in ["cuda", "npu"],
+                persistent_workers=False,
+                drop_last=False,
+            ).batch(
+                batch_size=int(temp_config.data.batch_size),
+                drop_last=True,
+                collate_fn=temp_collate_fn,
+            )
+
+            # Step 2.3: count how many packed samples this rank receives from
+            # the temporary loader.
+            count_start_time = time.perf_counter()
+            last_log_time = count_start_time
+            last_log_sample_count = 0
+            local_sample_count = 0
+            for batch_index, batch in enumerate(temp_loader, start=1):
+                local_sample_count += int(batch["input_ids"].shape[0])
+                now = time.perf_counter()
+                if now - last_log_time >= 10.0:
+                    interval_elapsed = now - last_log_time
+                    interval_sample_count = local_sample_count - last_log_sample_count
+                    logger.info(
+                        f"Inferring training steps: {interval_sample_count / max(interval_elapsed, 1e-6):.2f} samples/s"
+                    )
+                    last_log_time = now
+                    last_log_sample_count = local_sample_count
+
+            # Step 2.4: reduce all local counts to get the real global packed
+            # sample count across all ranks.
+            total_sample_count = torch.tensor(local_sample_count, device=self.device, dtype=torch.long)
+            if dist.is_available() and dist.is_initialized():
+                dist.all_reduce(total_sample_count, op=dist.ReduceOp.SUM)
+
+            total_sample_count_value = int(total_sample_count.item())
+            if total_sample_count_value <= 0:
+                raise RuntimeError("OpenBee step inference found no packed training samples.")
+
+            # Step 2.5: compute the effective data-parallel world size. Tensor
+            # parallel ranks do not increase the number of samples consumed per
+            # optimization step, so they are excluded here.
+            mesh_dim_names = tuple(getattr(self.device_mesh, "mesh_dim_names", ()) or ())
+            if not mesh_dim_names:
+                dp_world_size = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
+            else:
+                dp_world_size = 1
+                for dim_name in mesh_dim_names:
+                    if dim_name == "tensor":
+                        continue
+                    dp_world_size *= int(self.device_mesh[dim_name].size())
+                dp_world_size = max(dp_world_size, 1)
+
+            # Step 2.6: infer one-epoch optimizer steps from the packed sample
+            # count, per-rank batch size, and gradient accumulation. Round up
+            # so tail samples extend training by a few extra steps instead of
+            # being dropped by the step-count math.
+            samples_per_optimization_step = (
+                dp_world_size * int(self.config.data.batch_size) * int(self.config.optim.gradient_accumulation_steps)
+            )
+            inferred_total_steps = (
+                total_sample_count_value + samples_per_optimization_step - 1
+            ) // samples_per_optimization_step
+            if inferred_total_steps <= 0:
+                raise RuntimeError("Step inference found fewer packed samples than one optimization step requires.")
+
+            extra_capacity = inferred_total_steps * samples_per_optimization_step - total_sample_count_value
+            self.config.loop.total_steps = inferred_total_steps
+
+            if is_main_process():
+                logger.info(
+                    f"Step inference: packed_samples={total_sample_count_value}, "
+                    f"dp_world_size={dp_world_size}, "
+                    f"inferred_total_steps={inferred_total_steps}, "
+                    f"extra_capacity={extra_capacity}"
+                )
+
+        # Step 3: build the real training/eval dataset with the full preprocess.
+        dataset = build_dataset(self.config, processor=self.processor)
         collate_fn = OpenbeeCollator(
             pad_token_id=int(self.processor.tokenizer.pad_token_id),
         )
 
+        # Step 4: wrap the dataset in the normal TorchLoader and return the
+        # batched dataloader used by the engine.
         loader = TorchLoader(
             dataset,
             num_workers=int(self.config.data.num_workers),

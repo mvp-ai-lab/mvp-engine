@@ -136,10 +136,10 @@ class Engine(ABC):
     @property
     def total_steps(self) -> int:
         """Total number of optimization steps for the training run."""
-        if self.config.loop.policy == "iter":
+        if self.loop_policy == "iter":
             return self.config.loop.total_steps
         else:
-            raise NotImplementedError(f"Unsupported loop policy: {self.config.loop.policy}")
+            raise NotImplementedError(f"Unsupported loop policy: {self.loop_policy}")
 
     @property
     def max_grad_norm(self) -> float | None:
@@ -160,6 +160,14 @@ class Engine(ABC):
     def loop_policy(self) -> str:
         """Training loop policy: 'iter' or 'epoch'."""
         return self.config.loop.policy
+
+    @property
+    def progress(self) -> float:
+        """Training progress as a float between 0 and 1."""
+        if self.loop_policy == "iter":
+            return self.step / self.total_steps
+        else:
+            raise ValueError(f"Unsupported loop policy: {self.loop_policy}")
 
     @property
     def unwrapped_model(self) -> torch.nn.Module:
@@ -260,7 +268,7 @@ class Engine(ABC):
             force: If True, save regardless of save_interval.
         """
         save_interval = self.config.checkpoint.interval
-        if not force and ((self.step % save_interval != 0) or self.config.dev_mode):
+        if (not force and (self.step % save_interval != 0)) or self.config.dev_mode:
             return
         logger.info(f"Saving checkpoint for step {self.step}...")
 
@@ -282,12 +290,11 @@ class Engine(ABC):
                     shutil.rmtree(checkpoints_dir / delete_path)
 
         cur_checkpoint_dir = checkpoints_dir / (
-            f"iter_{self.step}" if self.loop_policy == "iter" else f"epoch_{self.epoch}"
+            f"{self.loop_policy}_{self.epoch if self.loop_policy == 'epoch' else self.step}"
         )
         cur_checkpoint_dir.mkdir(parents=True, exist_ok=True)
         torch.distributed.barrier()
 
-        # TODO: fix this function
         save_checkpoint(
             self.device_mesh,
             cur_checkpoint_dir,
@@ -397,11 +404,13 @@ class Engine(ABC):
         )
 
         logger.info("Initializing Timer...")
+        # FIXME: use progress rather than total_steps.
         self.timer = Timer(
             total_batches=self.total_steps,
             window_size=self.config.log.timer_window_size,
         )
 
+        # FIXME: remove this.
         if self.config.init_from_checkpoint is not None:
             self.load(
                 self.config.init_from_checkpoint,
@@ -434,16 +443,16 @@ class Engine(ABC):
         self.model.train()
         self.timer.start()
 
-        if self.config.loop.policy == "iter":
+        if self.loop_policy == "iter":
             self.run_iter_train()
-        elif self.config.loop.policy == "epoch":
+        elif self.loop_policy == "epoch":
             self.run_epoch_train()
 
     def run_iter_train(self) -> None:
         """Run iteration-based training loop until total_steps is reached."""
-        while self.step < self.total_steps:
+        while self.progress < 1.0:
             for data in self.train_loader:
-                if self.step >= self.total_steps:
+                if self.progress >= 1.0:
                     # In case it's a infinity loader
                     break
                 self.train_after_step(self.train_one_step(self.train_pre_step(data)))
