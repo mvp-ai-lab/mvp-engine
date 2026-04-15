@@ -11,9 +11,9 @@ class OpenbeeDataConfig(BaseModel):
     model_config = ConfigDict(frozen=False, extra="forbid")
 
     train_path: Optional[str] = "./data/openbee/alignment_demo.jsonl"
+    cache_dir: str | None = None
     enable_thinking: bool = True
     cache: bool = False
-    cache_show_progress: bool = True
     shuffle_buffer: int = Field(1000, ge=1)
     packing: bool = False
     packing_selection_strategy: Literal["random", "best_fit"] = "best_fit"
@@ -34,6 +34,19 @@ class OpenbeeDataConfig(BaseModel):
         normalized = value.strip()
         if not normalized:
             raise ValueError("`data.train_path` must not be empty.")
+        return normalized
+
+    @field_validator("cache_dir", mode="before")
+    @classmethod
+    def validate_cache_dir(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise TypeError("`data.cache_dir` must be a string or null.")
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("`data.cache_dir` must not be empty when provided.")
         return normalized
 
 

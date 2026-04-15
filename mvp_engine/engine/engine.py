@@ -298,6 +298,7 @@ class Engine(ABC):
             step=self.step,
             epoch=self.epoch,
             _accumulate_step=self._accumulate_step,
+            hf_enable=self.config.checkpoint.hf_enable,
         )
 
         torch.distributed.barrier()
@@ -329,6 +330,7 @@ class Engine(ABC):
             self.scaler if restore_training_state else None,
             restore_engine_state=restore_training_state,
             restore_rng_state=restore_rng_state,
+            hf_enable=self.config.checkpoint.hf_enable,
         )
         if engine_state is None:
             return

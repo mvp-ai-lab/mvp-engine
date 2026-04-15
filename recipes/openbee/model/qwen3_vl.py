@@ -6,8 +6,12 @@ from types import MethodType
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 from transformers import AutoModelForImageTextToText
-from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLModelOutputWithPast
+from transformers.models.qwen3_vl.modeling_qwen3_vl import (
+    Qwen3VLCausalLMOutputWithPast,
+    Qwen3VLModelOutputWithPast,
+)
 
 # ---------------------------------------------------------------------------
 # Parameter-name prefixes for each logical sub-module
@@ -34,6 +38,35 @@ LLM_PREFIXES = (
 
 def _matches(name: str, prefixes: tuple[str, ...]) -> bool:
     return any(name.startswith(p) for p in prefixes)
+
+
+def _slice_hidden(hidden_states: torch.Tensor, logits_to_keep: int | torch.Tensor) -> torch.Tensor:
+    """Slice trailing hidden states based on ``logits_to_keep``."""
+    sl = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+    if hidden_states.dim() == 3:
+        return hidden_states[:, sl, :]
+    return hidden_states[sl, :]
+
+
+def _shift_labels(labels: torch.Tensor, ignore_index: int = -100) -> torch.Tensor:
+    """Pad-right by one token then shift left for causal LM loss."""
+    labels = F.pad(labels, (0, 1), value=ignore_index)
+    return labels[..., 1:].contiguous()
+
+
+def _get_per_token_ce(ignore_index: int):
+    """Return a per-token CE callable, preferring liger when available."""
+    try:
+        from liger_kernel.transformers import LigerCrossEntropyLoss
+
+        return LigerCrossEntropyLoss(reduction="none", ignore_index=ignore_index)
+    except ImportError:
+        return lambda logits, labels: F.cross_entropy(
+            logits,
+            labels,
+            ignore_index=ignore_index,
+            reduction="none",
+        )
 
 
 def apply_freeze_policy(
@@ -352,6 +385,98 @@ def inject_batch_level_dummy_image_handling(model):
     return model
 
 
+def apply_qwen3_vl_compat_patches(model):
+    """Mirror the LLaMA-Factory Qwen3-VL vision/runtime patches.
+
+    These are behavior patches, not optimizations:
+    - run vision patch embedding as fp32 linear math instead of Conv3D
+    - replace the vision RoPE helper with the LF implementation
+    """
+
+    def patch_embed_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        target_dtype = self.proj.weight.dtype
+        proj_weight = self.proj.weight
+        proj_bias = self.proj.bias
+
+        with torch.amp.autocast(device_type="cuda", enabled=False):
+            hidden_states_fp32 = hidden_states.float()
+            weight_fp32 = proj_weight.view(self.embed_dim, -1).float()
+            bias_fp32 = proj_bias.float() if proj_bias is not None else None
+            hidden_states = F.linear(hidden_states_fp32, weight_fp32, bias_fp32)
+
+        return hidden_states.to(dtype=target_dtype)
+
+    model.model.visual.patch_embed.forward = MethodType(patch_embed_forward, model.model.visual.patch_embed)
+
+    return model
+
+
+def inject_sum_loss_forward(model, *, chunk_size: int = 4096):
+    """Patch Qwen3-VL forward to return summed CE loss."""
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        position_ids=None,
+        past_key_values=None,
+        inputs_embeds=None,
+        labels=None,
+        pixel_values=None,
+        pixel_values_videos=None,
+        image_grid_thw=None,
+        video_grid_thw=None,
+        cache_position=None,
+        logits_to_keep=0,
+        **kwargs,
+    ):
+        outputs = self.model(
+            input_ids=input_ids,
+            pixel_values=pixel_values,
+            pixel_values_videos=pixel_values_videos,
+            image_grid_thw=image_grid_thw,
+            video_grid_thw=video_grid_thw,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            cache_position=cache_position,
+            **kwargs,
+        )
+        hidden_states = outputs[0]
+
+        loss = None
+        logits = None
+        if labels is not None:
+            hs = _slice_hidden(hidden_states, logits_to_keep)
+            shift_labels = _shift_labels(labels)
+            flat_hs = hs.reshape(-1, hs.size(-1))
+            flat_labels = shift_labels.reshape(-1)
+            lm_head_bias = getattr(self.lm_head, "bias", None)
+            ce_fn = _get_per_token_ce(ignore_index=-100)
+
+            loss = flat_hs.new_zeros(())
+            for start in range(0, flat_hs.size(0), chunk_size):
+                end = min(start + chunk_size, flat_hs.size(0))
+                chunk_logits = F.linear(flat_hs[start:end], self.lm_head.weight, lm_head_bias)
+                loss = loss + ce_fn(chunk_logits, flat_labels[start:end]).sum()
+                del chunk_logits
+        else:
+            logits = self.lm_head(_slice_hidden(hidden_states, logits_to_keep))
+
+        return Qwen3VLCausalLMOutputWithPast(
+            loss=loss,
+            logits=logits,
+            past_key_values=outputs.past_key_values,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+            rope_deltas=outputs.rope_deltas,
+        )
+
+    model.forward = MethodType(forward, model)
+    return model
+
+
 def build_qwen3_vl_model(model_config: Any):
     """Load the Qwen3-VL model checkpoint and apply the configured freeze policy.
 
@@ -370,6 +495,7 @@ def build_qwen3_vl_model(model_config: Any):
     )
     model = inject_model_flops_calculation(model)
     model = inject_batch_level_dummy_image_handling(model)
+    model = inject_sum_loss_forward(model)
 
     apply_freeze_policy(
         model,
@@ -377,5 +503,6 @@ def build_qwen3_vl_model(model_config: Any):
         freeze_merger=model_config.freeze_merger,
         freeze_llm=model_config.freeze_llm,
     )
+    model = apply_qwen3_vl_compat_patches(model)
 
     return model

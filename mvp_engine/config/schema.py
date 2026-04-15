@@ -100,6 +100,7 @@ class BaseCheckpointConfig(BaseModel):
 
     keep_n: int = Field(5, ge=1)
     interval: int = Field(5000, ge=1)
+    hf_enable: bool = False
 
 
 class BaseLoopConfig(BaseModel):

@@ -10,6 +10,7 @@ project:
 
 log:
   interval: 1
+  timer_window_size: 10
 
 parallel:
   mesh:
@@ -20,19 +21,18 @@ data:
   train_path: "./data/openbee/stage3/**/*.parquet"
   enable_thinking: false
   cache: false
-  cache_show_progress: true
   shuffle_buffer: 1000
   packing: true
   packing_selection_strategy: "best_fit"
   packing_open_pack_limit: 8
   packing_buffer_size: 64
-  max_seq_len: 8192
+  max_seq_len: 4096
   batch_size: 1
   num_workers: 12
 model:
   pretrained_model_name_or_path: "./pretrained/Qwen3-VL-8B-Base-woDS-stage2"
   attn_implementation: "flash_attention_2"
-  image_max_pixels: 1048576
+  image_max_pixels: 262144
   # Freeze flags — set true to stop gradient for the corresponding sub-module.
   # Defaults follow the alignment-stage convention: train merger only.
   freeze_vit: false
@@ -44,15 +44,16 @@ model:
 optim:
   lr: 5.0e-5
   weight_decay: 0.0
-  gradient_accumulation_steps: 2
+  gradient_accumulation_steps: 4
   mixed_precision: "bf16"
   warmup_ratio: 0.0
   clip_grad_norm: 1.0
 
 loop:
   policy: "iter"
-  total_steps: 30000
+  total_steps: 12580
 
 checkpoint:
   interval: 200
   keep_n: 2
+  hf_enable: true
