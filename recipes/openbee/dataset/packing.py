@@ -29,6 +29,25 @@ class _PendingSample:
     length: int
 
 
+class SkippedSampleFilterAssembler(Assembler[dict[str, Any], dict[str, Any]]):
+    """Drop skipped OpenBee samples before batching.
+
+    ``process_sample`` returns an empty-tensor sentinel for invalid rows so the
+    dataset pipeline can continue. This assembler removes those sentinels from
+    the stream before the dataloader batches samples, which avoids propagating
+    ``None`` batches into the training loop.
+    """
+
+    def push(self, sample: dict[str, Any]) -> Iterable[dict[str, Any]]:
+        if int(sample["input_ids"].size(0)) <= 0:
+            return []
+        return [sample]
+
+    def finish(self, *, drop_last: bool = False) -> Iterable[dict[str, Any]]:
+        del drop_last
+        return []
+
+
 class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any]]):
     """Assemble processed samples into longer packed sequences."""
 

@@ -19,7 +19,7 @@ from PIL import Image
 
 from mvp_engine.utils.log import logger
 
-from .packing import PackedSampleAssembler
+from .packing import PackedSampleAssembler, SkippedSampleFilterAssembler
 from .types import ModelInputs
 
 IMAGE_PLACEHOLDER = "<image>"
@@ -96,6 +96,12 @@ def build_packed_sample_assembler(
         pack_buffer_size=pack_buffer_size,
         seed=assemble_context.sample_shuffle_seed,
     )
+
+
+def build_skipped_sample_filter_assembler(assemble_context: RuntimeContext) -> SkippedSampleFilterAssembler:
+    """Build an assembler that removes invalid-sample sentinels from the stream."""
+    del assemble_context
+    return SkippedSampleFilterAssembler()
 
 
 def configure_cache_write_batch_size(batch_size: int) -> None:
@@ -457,6 +463,7 @@ def build_dataset(config: Any, *, processor: Any):
             skip_think_prefix=not bool(config.data.enable_thinking),
         )
     )
+    dataset = dataset.assemble(build_skipped_sample_filter_assembler)
 
     if config.data.cache:
         cache_write_batch_size = int(getattr(config.data, "cache_write_batch_size", 32))

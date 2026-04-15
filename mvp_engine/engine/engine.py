@@ -446,10 +446,7 @@ class Engine(ABC):
                 if self.step >= self.total_steps:
                     # In case it's a infinity loader
                     break
-                prepared_data = self.train_pre_step(data)
-                if prepared_data is None:
-                    continue
-                self.train_after_step(self.train_one_step(prepared_data))
+                self.train_after_step(self.train_one_step(self.train_pre_step(data)))
 
     def run_epoch_train(self) -> None:
         """Run epoch-based training loop (not yet implemented)."""

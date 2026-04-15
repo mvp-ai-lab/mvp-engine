@@ -58,11 +58,9 @@ _install_test_stubs()
 openbee_dataset = importlib.import_module("recipes.openbee.dataset.dataset")
 openbee_collator = importlib.import_module("recipes.openbee.dataset.collator")
 openbee_packing = importlib.import_module("recipes.openbee.dataset.packing")
-engine_mod = importlib.import_module("mvp_engine.engine.engine")
-
-Engine = engine_mod.Engine
 OpenbeeCollator = openbee_collator.OpenbeeCollator
 PackedSampleAssembler = openbee_packing.PackedSampleAssembler
+SkippedSampleFilterAssembler = openbee_packing.SkippedSampleFilterAssembler
 build_skipped_sample = openbee_dataset.build_skipped_sample
 process_sample = openbee_dataset.process_sample
 
@@ -98,48 +96,30 @@ def test_packed_sample_assembler_ignores_skipped_samples():
     assert list(assembler.finish()) == []
 
 
-def test_openbee_collator_filters_skipped_samples():
-    collator = OpenbeeCollator(pad_token_id=0)
+def test_skipped_sample_filter_assembler_drops_only_invalid_samples():
+    assembler = SkippedSampleFilterAssembler()
     valid_sample = {
         "input_ids": torch.tensor([11, 12, 13], dtype=torch.long),
         "attention_mask": torch.tensor([1, 1, 1], dtype=torch.long),
         "labels": torch.tensor([-100, 12, 13], dtype=torch.long),
     }
 
-    batch = collator([build_skipped_sample(), valid_sample])
-
-    assert batch is not None
-    assert tuple(batch["input_ids"].shape) == (1, 3)
-    assert torch.equal(batch["input_ids"][0], valid_sample["input_ids"])
-    assert collator([build_skipped_sample()]) is None
+    assert list(assembler.push(build_skipped_sample())) == []
+    assert list(assembler.push(valid_sample)) == [valid_sample]
+    assert list(assembler.finish()) == []
 
 
-def test_run_iter_train_skips_none_batches():
-    processed_batches: list[int] = []
-
-    def train_pre_step(data):
-        if data == "skip":
-            return None
-        return data
-
-    def train_one_step(data):
-        processed_batches.append(data)
-        return {"loss": torch.tensor(0.0), "logs": {}}
-
-    def train_after_step(_outputs):
-        engine.step += 1
-        return _outputs
-
-    engine = SimpleNamespace(
-        step=0,
-        total_steps=2,
-        train_loader=["skip", 3, 4],
-        train_pre_step=train_pre_step,
-        train_one_step=train_one_step,
-        train_after_step=train_after_step,
+def test_openbee_collator_pads_valid_samples():
+    collator = OpenbeeCollator(pad_token_id=0)
+    batch = collator(
+        [
+            {
+                "input_ids": torch.tensor([11, 12, 13], dtype=torch.long),
+                "attention_mask": torch.tensor([1, 1, 1], dtype=torch.long),
+                "labels": torch.tensor([-100, 12, 13], dtype=torch.long),
+            }
+        ]
     )
 
-    Engine.run_iter_train(engine)
-
-    assert processed_batches == [3, 4]
-    assert engine.step == 2
+    assert tuple(batch["input_ids"].shape) == (1, 3)
+    assert torch.equal(batch["input_ids"][0], torch.tensor([11, 12, 13], dtype=torch.long))
