@@ -44,6 +44,7 @@ class OpenbeeEngine(Engine):
 
     def __init__(self, config):
         super().__init__(config)
+        self.dp_world_size = 1
         disable_progress_bar()
         self.metric_accumulator = MetricAccumulator()
         self.metric_accumulator.register("global_token_count", "last")
@@ -128,19 +129,17 @@ class OpenbeeEngine(Engine):
             if total_sample_count_value <= 0:
                 raise RuntimeError("OpenBee step inference found no packed training samples.")
 
-            # Step 2.5: compute the effective data-parallel world size. Tensor
-            # parallel ranks do not increase the number of samples consumed per
-            # optimization step, so they are excluded here.
+            # Step 2.5: compute the real DP/FSDP size from the device mesh.
+            # Tensor-parallel ranks do not consume extra samples per optimizer
+            # step, so only the non-tensor mesh dimensions belong here.
             mesh_dim_names = tuple(getattr(self.device_mesh, "mesh_dim_names", ()) or ())
-            if not mesh_dim_names:
-                dp_world_size = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
-            else:
+            dp_dim_names = tuple(dim_name for dim_name in mesh_dim_names if dim_name != "tensor")
+            if not dp_dim_names:
                 dp_world_size = 1
-                for dim_name in mesh_dim_names:
-                    if dim_name == "tensor":
-                        continue
-                    dp_world_size *= int(self.device_mesh[dim_name].size())
-                dp_world_size = max(dp_world_size, 1)
+            elif len(dp_dim_names) == 1:
+                dp_world_size = int(self.device_mesh[dp_dim_names[0]].size())
+            else:
+                dp_world_size = int(self.device_mesh[dp_dim_names[0], dp_dim_names[1]].size())
 
             # Step 2.6: infer one-epoch optimizer steps from the packed sample
             # count, per-rank batch size, and gradient accumulation. Round up
@@ -282,6 +281,16 @@ class OpenbeeEngine(Engine):
             shifted_labels = F.pad(labels, (0, 1), value=ignore_index)[..., 1:]
             return int((shifted_labels != ignore_index).sum().item())
 
+        mesh_dim_names = tuple(getattr(self.device_mesh, "mesh_dim_names", ()) or ())
+        dp_dim_names = tuple(dim_name for dim_name in mesh_dim_names if dim_name != "tensor")
+        if not dp_dim_names:
+            dp_world_size = 1
+        elif len(dp_dim_names) == 1:
+            dp_world_size = int(self.device_mesh[dp_dim_names[0]].size())
+        else:
+            dp_world_size = int(self.device_mesh[dp_dim_names[0], dp_dim_names[1]].size())
+        self.dp_world_size = dp_world_size
+
         train_iterator = iter(self.train_loader)
         gradient_accumulation_steps = int(self.config.optim.gradient_accumulation_steps)
 
@@ -400,11 +409,12 @@ class OpenbeeEngine(Engine):
             local_model_flops=float(outputs["model_flops"]),
         )
 
-        # DDP/FSDP averages gradients across ranks, so each micro-step uses the local summed
-        # loss with the globally reduced token denominator and compensates by world size.
+        # DDP/FSDP averages gradients across the DP/FSDP ranks, so each
+        # micro-step uses the local summed loss with the globally reduced token
+        # denominator and compensates by the real DP world size.
         loss = outputs["loss"] / int(global_token_count)
-        if dist.is_available() and dist.is_initialized():
-            loss = loss * float(dist.get_world_size())
+        if self.dp_world_size > 1:
+            loss = loss * float(self.dp_world_size)
 
         with accumulate_gradients(self.model, sync=is_sync):
             self.scaler.scale(loss).backward()
