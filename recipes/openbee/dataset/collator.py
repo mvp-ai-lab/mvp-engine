@@ -12,7 +12,8 @@ from .types import ModelInputs
 class OpenbeeCollator:
     """Pad and merge preprocessed multimodal samples."""
 
-    DUMMY_IMAGE_SIZE = (16, 16)
+    DUMMY_IMAGE_SIZE = (32, 32)
+    DUMMY_IMAGE_PIXELS = 32 * 32
 
     def __init__(self, pad_token_id: int, processor, *, ignore_index: int = -100) -> None:
         """Store padding values used during batch collation.
@@ -52,6 +53,8 @@ class OpenbeeCollator:
             add_generation_prompt=False,
             return_dict=True,
             return_tensors="pt",
+            min_pixels=self.DUMMY_IMAGE_PIXELS,
+            max_pixels=self.DUMMY_IMAGE_PIXELS,
         )
         self._cached_dummy_inputs = {
             "input_ids": model_inputs["input_ids"][0].to(dtype=torch.long),
