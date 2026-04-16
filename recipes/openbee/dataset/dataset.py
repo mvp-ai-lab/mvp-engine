@@ -394,13 +394,163 @@ def process_sample(
     return processed_sample
 
 
-def build_dataset(config: Any, *, processor: Any):
+def lightweight_process_sample(
+    sample: dict[str, Any],
+    *,
+    processor: Any,
+    max_length: int,
+    image_placeholder: str = IMAGE_PLACEHOLDER,
+    ignore_index: int = -100,
+) -> ModelInputs:
+    """Build a fake sample whose token length matches the real multimodal prompt.
+
+    This lightweight path is intended for pre-training accounting such as
+    estimating packed sample counts before the real training preprocess runs.
+    It skips vision tensor creation and only preserves the token-length
+    behaviour of ``process_sample``.
+    """
+    if not isinstance(sample, dict):
+        raise ValueError(f"Expected a dictionary sample, got {type(sample).__name__}.")
+
+    apply_chat_template = processor.apply_chat_template
+    tokenizer = getattr(processor, "tokenizer", None)
+    if tokenizer is None:
+        raise ValueError("Processor must expose a tokenizer for lightweight preprocessing.")
+
+    source_file = sample.get("__file__")
+    index_in_file = sample.get("__index_in_file__")
+    if not isinstance(source_file, str) or not source_file:
+        raise ValueError("mvp_dataset samples must include a string `__file__` field.")
+    if not isinstance(index_in_file, int) or index_in_file < 0:
+        raise ValueError("mvp_dataset samples must include a non-negative integer `__index_in_file__` field.")
+
+    source_file = Path(source_file).expanduser().resolve()
+    row_number = index_in_file + 1
+    loc = f"{source_file}:{row_number}"
+
+    def resolve_image_size(image: str | bytes | dict[str, Any]) -> tuple[int, int]:
+        """Read only image metadata needed to recover multimodal token length."""
+        if isinstance(image, dict):
+            image_bytes = image.get("bytes")
+            if isinstance(image_bytes, (bytes, bytearray, memoryview)):
+                return resolve_image_size(bytes(image_bytes))
+
+            image_path = image.get("path")
+            if isinstance(image_path, str) and image_path:
+                return resolve_image_size(image_path)
+
+            raise ValueError("contains an invalid image record.")
+
+        if isinstance(image, bytes):
+            with Image.open(io.BytesIO(image)) as decoded:
+                width, height = decoded.size
+            return height, width
+
+        if not isinstance(image, str):
+            raise ValueError(f"contains an invalid image value: {type(image).__name__}.")
+        if not image:
+            raise ValueError(f"contains an invalid image path: {image!r}")
+
+        resolved = Path(image).expanduser()
+        if not resolved.is_absolute():
+            resolved = source_file.parent / resolved
+        resolved = resolved.resolve()
+
+        if not resolved.is_file():
+            raise FileNotFoundError(f"references missing image: {resolved}")
+
+        with Image.open(resolved) as decoded:
+            width, height = decoded.size
+        return height, width
+
+    try:
+        messages = sample.get("messages")
+        if messages is None:
+            messages = sample.get("conversations")
+        images = sample.get("images", [])
+        if not isinstance(messages, list) or not messages:
+            raise ValueError("has invalid `messages`/`conversations`.")
+        if not isinstance(images, list):
+            raise ValueError("has invalid `images`.")
+
+        image_sizes = [resolve_image_size(image) for image in images]
+        image_iter = iter([f"__openbee_fake_image_{index}__" for index in range(len(image_sizes))])
+        rendered_messages = [process_message(msg, image_iter, image_placeholder=image_placeholder) for msg in messages]
+
+        unused = list(image_iter)
+        if unused:
+            raise ValueError(f"has {len(unused)} unused image(s).")
+
+        prompt = apply_chat_template(
+            rendered_messages,
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+        if not isinstance(prompt, str):
+            raise ValueError("processor.apply_chat_template must return a prompt string when tokenize=False.")
+
+        expanded_prompt = prompt
+        if image_sizes:
+            image_processor = getattr(processor, "image_processor", None)
+            image_token = getattr(processor, "image_token", None)
+            if image_processor is None:
+                raise ValueError("Processor must expose an image_processor for multimodal lightweight preprocessing.")
+            if not callable(getattr(image_processor, "get_number_of_image_patches", None)):
+                raise ValueError("Processor image_processor must expose get_number_of_image_patches.")
+            if not isinstance(image_token, str) or not image_token:
+                raise ValueError("Processor must expose a valid image token.")
+
+            merge_size = getattr(image_processor, "merge_size", None)
+            if not isinstance(merge_size, int) or merge_size <= 0:
+                raise ValueError("Processor image_processor must expose a positive integer merge_size.")
+
+            placeholder_token = "<|openbee_image_token_placeholder|>"
+            for height, width in image_sizes:
+                num_image_patches = image_processor.get_number_of_image_patches(height, width, {})
+                num_image_tokens = num_image_patches // (merge_size**2)
+                expanded_prompt = expanded_prompt.replace(image_token, placeholder_token * num_image_tokens, 1)
+            expanded_prompt = expanded_prompt.replace(placeholder_token, image_token)
+
+        tokenizer_kwargs: dict[str, Any] = {
+            "truncation": True,
+            "max_length": max_length,
+            "return_attention_mask": True,
+            "return_tensors": "pt",
+        }
+        bos_token = getattr(tokenizer, "bos_token", None)
+        if isinstance(bos_token, str) and bos_token and expanded_prompt.startswith(bos_token):
+            tokenizer_kwargs["add_special_tokens"] = False
+
+        tokenized = tokenizer(expanded_prompt, **tokenizer_kwargs)
+        input_ids = tokenized["input_ids"][0]
+        attention_mask = tokenized["attention_mask"][0]
+    except (OSError, SyntaxError, ValueError) as exc:
+        logger.warning(f"Skipping invalid sample {loc}: {exc}")
+        return build_skipped_sample()
+    except Exception as exc:
+        raise type(exc)(f"{loc} {exc}") from exc
+
+    return {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+        "labels": torch.full_like(input_ids, ignore_index),
+    }
+
+
+def build_dataset(
+    config: Any,
+    *,
+    processor: Any,
+    process_fn: Any = process_sample,
+    resample: bool = True,
+) -> Dataset:
     """Build the training dataset pipeline for the recipe.
 
     Args:
         config: Recipe config with dataset, runtime, and shuffle settings.
         processor: Hugging Face processor used during sample processing.
-
+        process_fn: Function to process individual samples.
+        resample: Whether to loop dataset shards indefinitely across rounds.
     Returns:
         An ``mvp_dataset.Dataset`` pipeline with parquet loading, processing, and
         sample-level shuffling.
@@ -413,19 +563,19 @@ def build_dataset(config: Any, *, processor: Any):
 
     context = RuntimeContext.from_runtime(seed=int(config.seed))
 
+    process_kwargs: dict[str, Any] = {
+        "processor": processor,
+        "max_length": int(config.data.max_seq_len),
+    }
+    if process_fn is process_sample:
+        process_kwargs["skip_think_prefix"] = not bool(config.data.enable_thinking)
+
     dataset = Dataset.from_source(
         "parquet",
         dataset_paths,
         context=context,
-        resample=True,
-    ).map(
-        partial(
-            process_sample,
-            processor=processor,
-            max_length=int(config.data.max_seq_len),
-            skip_think_prefix=not bool(config.data.enable_thinking),
-        )
-    )
+        resample=resample,
+    ).map(partial(process_fn, **process_kwargs))
     dataset = dataset.assemble(build_invalid_sample_gate_assembler)
 
     if config.data.cache:

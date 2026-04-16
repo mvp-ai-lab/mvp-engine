@@ -10,6 +10,7 @@ project:
 
 log:
   interval: 1
+  timer_window_size: 10
 
 parallel:
   mesh:
@@ -17,7 +18,7 @@ parallel:
     shard: 1
     tensor: 1
 data:
-  train_path: "./data/openbee/stage1/**/*.parquet"
+  train_path: "./data/openbee/stage1-stage2-mm-only/stage1/**/*.parquet"
   enable_thinking: false
   cache: false
   shuffle_buffer: 1000
@@ -50,7 +51,7 @@ optim:
 
 loop:
   policy: "iter"
-  total_steps: 1762
+  total_steps: -1
 
 checkpoint:
   interval: 100
