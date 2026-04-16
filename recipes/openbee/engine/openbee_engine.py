@@ -82,6 +82,7 @@ class OpenbeeEngine(Engine):
             # lightweight preprocess but keeps the same packing behaviour.
             temp_collate_fn = OpenbeeCollator(
                 pad_token_id=int(self.processor.tokenizer.pad_token_id),
+                processor=self.processor,
             )
             temp_dataset = build_dataset(
                 temp_config,
@@ -169,6 +170,7 @@ class OpenbeeEngine(Engine):
         dataset = build_dataset(self.config, processor=self.processor)
         collate_fn = OpenbeeCollator(
             pad_token_id=int(self.processor.tokenizer.pad_token_id),
+            processor=self.processor,
         )
 
         # Step 4: wrap the dataset in the normal TorchLoader and return the
