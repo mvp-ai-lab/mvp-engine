@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import torch
-from mvp_dataset.core import Assembler
+from mvp_dataset.core import Assembler, RuntimeContext
 
 
 @dataclass(slots=True)
@@ -276,3 +276,21 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any]]):
             packed_sample["image_grid_thw"] = torch.cat(image_grid_thw, dim=0)
 
         return packed_sample
+
+
+def build_packed_sample_assembler(
+    assemble_context: RuntimeContext,
+    *,
+    max_length: int,
+    selection_strategy: str,
+    open_pack_limit: int,
+    pack_buffer_size: int,
+) -> PackedSampleAssembler:
+    """Build one packing assembler instance for a dataset iterator."""
+    return PackedSampleAssembler(
+        max_length=max_length,
+        selection_strategy=selection_strategy,
+        open_pack_limit=open_pack_limit,
+        pack_buffer_size=pack_buffer_size,
+        seed=assemble_context.sample_shuffle_seed,
+    )

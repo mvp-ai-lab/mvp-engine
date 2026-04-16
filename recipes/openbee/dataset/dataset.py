@@ -18,7 +18,8 @@ from PIL import Image
 
 from mvp_engine.utils.log import logger
 
-from .packing import PackedSampleAssembler
+from .gate import build_invalid_sample_gate_assembler, build_skipped_sample
+from .packing import build_packed_sample_assembler
 from .types import ModelInputs
 
 IMAGE_PLACEHOLDER = "<image>"
@@ -68,24 +69,6 @@ def resolve_dataset_shards(train_path: str) -> list[str]:
         shard_paths.append(str(Path(shard_spec).expanduser().resolve()))
 
     return shard_paths
-
-
-def build_packed_sample_assembler(
-    assemble_context: RuntimeContext,
-    *,
-    max_length: int,
-    selection_strategy: str,
-    open_pack_limit: int,
-    pack_buffer_size: int,
-) -> PackedSampleAssembler:
-    """Build one packing assembler instance for a dataset iterator."""
-    return PackedSampleAssembler(
-        max_length=max_length,
-        selection_strategy=selection_strategy,
-        open_pack_limit=open_pack_limit,
-        pack_buffer_size=pack_buffer_size,
-        seed=assemble_context.sample_shuffle_seed,
-    )
 
 
 def configure_cache_write_batch_size(batch_size: int) -> None:
@@ -392,6 +375,9 @@ def process_sample(
         )
         if not torch.any(labels != ignore_index):
             raise ValueError("has no supervised assistant tokens after tokenization/truncation.")
+    except (OSError, SyntaxError, ValueError) as exc:
+        logger.warning(f"Skipping invalid sample {loc}: {exc}")
+        return build_skipped_sample()
     except Exception as exc:
         raise type(exc)(f"{loc} {exc}") from exc
 
@@ -538,6 +524,9 @@ def lightweight_process_sample(
         tokenized = tokenizer(expanded_prompt, **tokenizer_kwargs)
         input_ids = tokenized["input_ids"][0]
         attention_mask = tokenized["attention_mask"][0]
+    except (OSError, SyntaxError, ValueError) as exc:
+        logger.warning(f"Skipping invalid sample {loc}: {exc}")
+        return build_skipped_sample()
     except Exception as exc:
         raise type(exc)(f"{loc} {exc}") from exc
 
@@ -587,6 +576,7 @@ def build_dataset(
         context=context,
         resample=resample,
     ).map(partial(process_fn, **process_kwargs))
+    dataset = dataset.assemble(build_invalid_sample_gate_assembler)
 
     if config.data.cache:
         cache_write_batch_size = int(getattr(config.data, "cache_write_batch_size", 32))
