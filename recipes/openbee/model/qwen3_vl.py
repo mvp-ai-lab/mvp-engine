@@ -103,6 +103,26 @@ def apply_freeze_policy(
     return frozen_counts
 
 
+def apply_gradient_checkpointing_policy(
+    model,
+    *,
+    enabled: bool = False,
+    use_reentrant: bool = False,
+):
+    """Enable model-native gradient checkpointing when requested by the recipe."""
+
+    if not enabled:
+        return model
+
+    if not hasattr(model, "gradient_checkpointing_enable"):
+        raise AttributeError(f"{model.__class__.__name__} does not support gradient checkpointing.")
+
+    model.gradient_checkpointing_enable(
+        gradient_checkpointing_kwargs={"use_reentrant": use_reentrant},
+    )
+    return model
+
+
 def inject_model_flops_calculation(model):
     """Inject per-process FLOPs estimation onto the loaded Qwen3-VL model."""
 
@@ -321,6 +341,11 @@ def build_qwen3_vl_model(model_config: Any):
         attn_implementation=model_config.attn_implementation,
     )
     model = inject_model_flops_calculation(model)
+    model = apply_gradient_checkpointing_policy(
+        model,
+        enabled=bool(model_config.gradient_checkpointing.enabled),
+        use_reentrant=bool(model_config.gradient_checkpointing.use_reentrant),
+    )
     model = inject_sum_loss_forward(model)
 
     apply_freeze_policy(

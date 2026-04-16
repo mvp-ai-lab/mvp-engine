@@ -50,12 +50,22 @@ class OpenbeeDataConfig(BaseModel):
         return normalized
 
 
+class OpenbeeGradientCheckpointingConfig(BaseModel):
+    model_config = ConfigDict(frozen=False, extra="forbid")
+
+    enabled: bool = False
+    use_reentrant: bool = False
+
+
 class OpenbeeModelConfig(BaseModel):
     model_config = ConfigDict(frozen=False, extra="forbid")
 
     pretrained_model_name_or_path: str = "./recipes/openbee/pretrained/Qwen3-VL-8B-Instruct"
     attn_implementation: Literal["eager", "sdpa", "flash_attention_2"] = "flash_attention_2"
     image_max_pixels: int | None = Field(None, ge=1)
+    gradient_checkpointing: OpenbeeGradientCheckpointingConfig = Field(
+        default_factory=OpenbeeGradientCheckpointingConfig
+    )
 
     # Freeze flags for each sub-module.  Default follows the alignment-stage
     # convention: train only the merger while keeping ViT and LLM frozen.
