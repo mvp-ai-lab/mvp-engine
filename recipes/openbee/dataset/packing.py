@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import torch
-from mvp_dataset.core import Assembler
+from mvp_dataset.core import Assembler, RuntimeContext
 
 
 @dataclass(slots=True)
@@ -27,25 +27,6 @@ class _PendingSample:
 
     sample: dict[str, Any]
     length: int
-
-
-class SkippedSampleFilterAssembler(Assembler[dict[str, Any], dict[str, Any]]):
-    """Drop skipped OpenBee samples before batching.
-
-    ``process_sample`` returns an empty-tensor sentinel for invalid rows so the
-    dataset pipeline can continue. This assembler removes those sentinels from
-    the stream before the dataloader batches samples, which avoids propagating
-    ``None`` batches into the training loop.
-    """
-
-    def push(self, sample: dict[str, Any]) -> Iterable[dict[str, Any]]:
-        if int(sample["input_ids"].size(0)) <= 0:
-            return []
-        return [sample]
-
-    def finish(self, *, drop_last: bool = False) -> Iterable[dict[str, Any]]:
-        del drop_last
-        return []
 
 
 class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any]]):
@@ -295,3 +276,21 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any]]):
             packed_sample["image_grid_thw"] = torch.cat(image_grid_thw, dim=0)
 
         return packed_sample
+
+
+def build_packed_sample_assembler(
+    assemble_context: RuntimeContext,
+    *,
+    max_length: int,
+    selection_strategy: str,
+    open_pack_limit: int,
+    pack_buffer_size: int,
+) -> PackedSampleAssembler:
+    """Build one packing assembler instance for a dataset iterator."""
+    return PackedSampleAssembler(
+        max_length=max_length,
+        selection_strategy=selection_strategy,
+        open_pack_limit=open_pack_limit,
+        pack_buffer_size=pack_buffer_size,
+        seed=assemble_context.sample_shuffle_seed,
+    )

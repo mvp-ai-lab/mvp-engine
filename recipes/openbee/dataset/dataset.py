@@ -5,9 +5,7 @@ from __future__ import annotations
 import glob
 import io
 import os
-import warnings
 from collections.abc import Iterable
-from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -18,9 +16,10 @@ from mvp_dataset.core import RuntimeContext
 from mvp_dataset.utils.url import normalize_paths
 from PIL import Image
 
-from mvp_engine.utils.log import logger, simple_info
+from mvp_engine.utils.log import logger
 
-from .packing import PackedSampleAssembler, SkippedSampleFilterAssembler
+from .gate import build_invalid_sample_gate_assembler, build_skipped_sample
+from .packing import build_packed_sample_assembler
 from .types import ModelInputs
 
 IMAGE_PLACEHOLDER = "<image>"
@@ -32,41 +31,6 @@ ROLE_MAP = {
     "tool": "tool",
     "user": "user",
 }
-
-
-@dataclass(slots=True)
-class InvalidSampleReporter:
-    """Report invalid OpenBee samples without flooding warnings output."""
-
-    warn_limit: int = 1
-    summary_log_interval: int = 100
-    skipped_count: int = 0
-
-    def report(self, *, loc: str, exc: Exception) -> None:
-        """Emit a few per-sample warnings, then switch to throttled summaries."""
-        self.skipped_count += 1
-        message = f"Skipping invalid OpenBee sample {loc}: {exc}"
-        if self.skipped_count <= self.warn_limit:
-            warnings.warn(message, RuntimeWarning, stacklevel=2)
-            return
-
-        suppressed_count = self.skipped_count - self.warn_limit
-        if self.summary_log_interval > 0 and suppressed_count % self.summary_log_interval == 0:
-            simple_info(
-                "Suppressed per-sample invalid OpenBee warnings after the first "
-                f"{self.warn_limit} sample(s). Skipped {self.skipped_count} invalid sample(s) so far. "
-                f"Latest: {loc}: {exc}",
-                level="warning",
-            )
-
-
-def build_skipped_sample() -> ModelInputs:
-    """Return an empty sample sentinel that downstream stages can ignore safely."""
-    return {
-        "input_ids": torch.empty(0, dtype=torch.long),
-        "attention_mask": torch.empty(0, dtype=torch.long),
-        "labels": torch.empty(0, dtype=torch.long),
-    }
 
 
 def resolve_cache_dir(train_path: str, configured_cache_dir: str | None) -> Path:
@@ -105,30 +69,6 @@ def resolve_dataset_shards(train_path: str) -> list[str]:
         shard_paths.append(str(Path(shard_spec).expanduser().resolve()))
 
     return shard_paths
-
-
-def build_packed_sample_assembler(
-    assemble_context: RuntimeContext,
-    *,
-    max_length: int,
-    selection_strategy: str,
-    open_pack_limit: int,
-    pack_buffer_size: int,
-) -> PackedSampleAssembler:
-    """Build one packing assembler instance for a dataset iterator."""
-    return PackedSampleAssembler(
-        max_length=max_length,
-        selection_strategy=selection_strategy,
-        open_pack_limit=open_pack_limit,
-        pack_buffer_size=pack_buffer_size,
-        seed=assemble_context.sample_shuffle_seed,
-    )
-
-
-def build_skipped_sample_filter_assembler(assemble_context: RuntimeContext) -> SkippedSampleFilterAssembler:
-    """Build an assembler that removes invalid-sample sentinels from the stream."""
-    del assemble_context
-    return SkippedSampleFilterAssembler()
 
 
 def configure_cache_write_batch_size(batch_size: int) -> None:
@@ -357,7 +297,6 @@ def process_sample(
     image_placeholder: str = IMAGE_PLACEHOLDER,
     ignore_index: int = -100,
     skip_think_prefix: bool = False,
-    invalid_sample_reporter: InvalidSampleReporter | None = None,
 ) -> ModelInputs:
     """Validate one dataset row and convert it into training tensors.
 
@@ -437,14 +376,7 @@ def process_sample(
         if not torch.any(labels != ignore_index):
             raise ValueError("has no supervised assistant tokens after tokenization/truncation.")
     except (OSError, SyntaxError, ValueError) as exc:
-        if invalid_sample_reporter is None:
-            warnings.warn(
-                f"Skipping invalid OpenBee sample {loc}: {exc}",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-        else:
-            invalid_sample_reporter.report(loc=loc, exc=exc)
+        logger.warning(f"Skipping invalid sample {loc}: {exc}")
         return build_skipped_sample()
     except Exception as exc:
         raise type(exc)(f"{loc} {exc}") from exc
@@ -480,10 +412,6 @@ def build_dataset(config: Any, *, processor: Any):
     dataset_paths = resolve_dataset_shards(dataset_path_value)
 
     context = RuntimeContext.from_runtime(seed=int(config.seed))
-    invalid_sample_reporter = InvalidSampleReporter(
-        warn_limit=int(getattr(config.data, "invalid_sample_warn_limit", 3)),
-        summary_log_interval=int(getattr(config.data, "invalid_sample_summary_log_interval", 100)),
-    )
 
     dataset = Dataset.from_source(
         "parquet",
@@ -496,10 +424,9 @@ def build_dataset(config: Any, *, processor: Any):
             processor=processor,
             max_length=int(config.data.max_seq_len),
             skip_think_prefix=not bool(config.data.enable_thinking),
-            invalid_sample_reporter=invalid_sample_reporter,
         )
     )
-    dataset = dataset.assemble(build_skipped_sample_filter_assembler)
+    dataset = dataset.assemble(build_invalid_sample_gate_assembler)
 
     if config.data.cache:
         cache_write_batch_size = int(getattr(config.data, "cache_write_batch_size", 32))

@@ -1,10 +1,8 @@
 import importlib
 import sys
 import types
-import warnings
 from types import SimpleNamespace
 
-import pytest
 import torch
 
 
@@ -58,23 +56,29 @@ def _install_test_stubs() -> None:
 _install_test_stubs()
 openbee_dataset = importlib.import_module("recipes.openbee.dataset.dataset")
 openbee_collator = importlib.import_module("recipes.openbee.dataset.collator")
+openbee_gate = importlib.import_module("recipes.openbee.dataset.gate")
 openbee_packing = importlib.import_module("recipes.openbee.dataset.packing")
 OpenbeeCollator = openbee_collator.OpenbeeCollator
+InvalidSampleGateAssembler = openbee_gate.InvalidSampleGateAssembler
 PackedSampleAssembler = openbee_packing.PackedSampleAssembler
-SkippedSampleFilterAssembler = openbee_packing.SkippedSampleFilterAssembler
-InvalidSampleReporter = openbee_dataset.InvalidSampleReporter
-build_skipped_sample = openbee_dataset.build_skipped_sample
+build_skipped_sample = openbee_gate.build_skipped_sample
 process_sample = openbee_dataset.process_sample
 
 
 def test_process_sample_skips_invalid_image_with_warning(monkeypatch, tmp_path):
     sample_path = tmp_path / "train-00000-of-00001.parquet"
     processor = SimpleNamespace(apply_chat_template=lambda *args, **kwargs: None)
+    log_messages: list[str] = []
 
     def _raise_broken_png(*_args, **_kwargs):
         raise SyntaxError("broken PNG file (chunk b'WU\\x95\\xe3')")
 
     monkeypatch.setattr(openbee_dataset, "process_image", _raise_broken_png)
+    monkeypatch.setattr(
+        openbee_dataset,
+        "logger",
+        SimpleNamespace(warning=lambda message, *args: log_messages.append(message % args)),
+    )
 
     sample = {
         "__file__": str(sample_path),
@@ -83,12 +87,14 @@ def test_process_sample_skips_invalid_image_with_warning(monkeypatch, tmp_path):
         "images": [{"bytes": b"bad"}],
     }
 
-    with pytest.warns(RuntimeWarning, match=r"Skipping invalid OpenBee sample .*broken PNG file"):
-        processed = process_sample(sample, processor=processor, max_length=128)
+    processed = process_sample(sample, processor=processor, max_length=128)
 
     assert processed["input_ids"].numel() == 0
     assert processed["attention_mask"].numel() == 0
     assert processed["labels"].numel() == 0
+    assert len(log_messages) == 1
+    assert "Skipping invalid sample" in log_messages[0]
+    assert "broken PNG file" in log_messages[0]
 
 
 def test_packed_sample_assembler_ignores_skipped_samples():
@@ -98,32 +104,8 @@ def test_packed_sample_assembler_ignores_skipped_samples():
     assert list(assembler.finish()) == []
 
 
-def test_invalid_sample_reporter_throttles_warnings(monkeypatch):
-    reporter = InvalidSampleReporter(warn_limit=1, summary_log_interval=2)
-    log_messages: list[tuple[str, str]] = []
-
-    monkeypatch.setattr(
-        openbee_dataset, "simple_info", lambda message, level="info": log_messages.append((message, level))
-    )
-
-    with pytest.warns(RuntimeWarning, match=r"sample-a.*bad image a"):
-        reporter.report(loc="sample-a", exc=ValueError("bad image a"))
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        reporter.report(loc="sample-b", exc=ValueError("bad image b"))
-        reporter.report(loc="sample-c", exc=ValueError("bad image c"))
-
-    assert caught == []
-    assert len(log_messages) == 1
-    assert log_messages[0][1] == "warning"
-    assert "Suppressed per-sample invalid OpenBee warnings" in log_messages[0][0]
-    assert "Skipped 3 invalid sample(s) so far" in log_messages[0][0]
-    assert "sample-c: bad image c" in log_messages[0][0]
-
-
-def test_skipped_sample_filter_assembler_drops_only_invalid_samples():
-    assembler = SkippedSampleFilterAssembler()
+def test_invalid_sample_gate_assembler_drops_only_invalid_samples():
+    assembler = InvalidSampleGateAssembler()
     valid_sample = {
         "input_ids": torch.tensor([11, 12, 13], dtype=torch.long),
         "attention_mask": torch.tensor([1, 1, 1], dtype=torch.long),
