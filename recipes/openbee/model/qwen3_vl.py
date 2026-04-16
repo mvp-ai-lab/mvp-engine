@@ -244,8 +244,9 @@ def apply_qwen3_vl_compat_patches(model):
         target_dtype = self.proj.weight.dtype
         proj_weight = self.proj.weight
         proj_bias = self.proj.bias
+        device_type = hidden_states.device.type
 
-        with torch.amp.autocast(device_type="cuda", enabled=False):
+        with torch.amp.autocast(device_type=device_type, enabled=False):
             hidden_states_fp32 = hidden_states.float()
             weight_fp32 = proj_weight.view(self.embed_dim, -1).float()
             bias_fp32 = proj_bias.float() if proj_bias is not None else None

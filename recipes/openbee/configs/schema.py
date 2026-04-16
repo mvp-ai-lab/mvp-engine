@@ -18,7 +18,7 @@ class OpenbeeDataConfig(BaseModel):
     packing: bool = False
     packing_selection_strategy: Literal["random", "best_fit"] = "best_fit"
     packing_open_pack_limit: int = Field(8, ge=1)
-    packing_buffer_size: int = Field(64, ge=-1)
+    packing_buffer_size: int = Field(64, ge=0)
     max_seq_len: int = Field(2048, ge=1)
     batch_size: int = Field(1, ge=1)
     num_workers: int = Field(0, ge=0)

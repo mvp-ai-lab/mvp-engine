@@ -45,8 +45,8 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any]]):
             raise ValueError(f"max_length must be positive, got {max_length}.")
         if open_pack_limit <= 0:
             raise ValueError(f"open_pack_limit must be positive, got {open_pack_limit}.")
-        if pack_buffer_size < -1:
-            raise ValueError(f"pack_buffer_size must be -1 or non-negative, got {pack_buffer_size}.")
+        if pack_buffer_size < 0:
+            raise ValueError(f"pack_buffer_size must be non-negative, got {pack_buffer_size}.")
         if selection_strategy not in {"random", "best_fit"}:
             raise ValueError(f"selection_strategy must be one of random/best_fit, got {selection_strategy!r}.")
 
@@ -54,7 +54,7 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any]]):
         self.selection_strategy = selection_strategy
         self.open_pack_limit = open_pack_limit
         self.pack_buffer_size = pack_buffer_size
-        self.keep_pending_sorted = pack_buffer_size >= 0 and self.selection_strategy != "random"
+        self.keep_pending_sorted = self.selection_strategy != "random"
         self.rng = random.Random(seed)
         self.open_packs: list[_OpenPack] = []
         self.open_pack_remaining: list[int] = []
