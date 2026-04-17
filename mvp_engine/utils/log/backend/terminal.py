@@ -55,9 +55,11 @@ class TerminalBackend(Backend):
         self.id = id
         self.enable: bool = is_main_process()
         self.console: Optional[Console] = None
+        self.show_location: bool = False
 
         if self.enable:
             self.console = Console(color_system="auto")
+            self.show_location = self.console.is_terminal
 
     def log_config(self, config: dict) -> None:
         """Pretty-print configuration when running on main process."""
@@ -107,10 +109,26 @@ class TerminalBackend(Backend):
         return None
 
     def _print_with_location(self, message: str, level: str, level_color: str, location: str) -> None:
-        """Print message with caller location right-aligned at the end."""
+        """Print message with caller location on TTYs and plain output otherwise."""
         if self.console is None:
             return None
         date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        if not self.show_location:
+            if level_color == "cyan":
+                self.console.print(
+                    f"[bold]{date_str}[/bold] | [bright_yellow]{self.id}[/bright_yellow] | "
+                    f"[{level_color}]{level: <5}[/{level_color}] | {message}",
+                    soft_wrap=True,
+                )
+            else:
+                self.console.print(
+                    f"[bold]{date_str}[/bold] | [bright_yellow]{self.id}[/bright_yellow] | "
+                    f"[{level_color}]{level: <5}[/{level_color}] | [{level_color}]{message}[/{level_color}]",
+                    soft_wrap=True,
+                )
+            return None
+
         terminal_width = self.console.width
         if not isinstance(terminal_width, int) or terminal_width <= 0:
             terminal_width = 120
