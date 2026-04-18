@@ -18,7 +18,7 @@ parallel:
     shard: 1
     tensor: 1
 data:
-  train_path: "./data/openbee/stage1-stage2-mm-only/stage1/**/*.parquet"
+  train_path: "./data/openbee/stage1/train/**/*.parquet"
   enable_thinking: false
   cache: false
   shuffle_buffer: 1000
