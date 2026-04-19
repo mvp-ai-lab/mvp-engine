@@ -4,7 +4,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from mvp_engine.config.schema import BaseEngineConfig, BaseLoopConfig
+from mvp_engine.config.schema import BaseEngineConfig, BaseLoopConfig, BaseOptimConfig
 
 
 class OpenbeeDataConfig(BaseModel):
@@ -20,7 +20,7 @@ class OpenbeeDataConfig(BaseModel):
     packing_open_pack_limit: int = Field(8, ge=1)
     packing_buffer_size: int = Field(64, ge=0)
     max_seq_len: int = Field(2048, ge=1)
-    batch_size: int = Field(1, ge=1)
+    batch_size: int = 1
     num_workers: int = Field(0, ge=0)
 
     @field_validator("train_path", mode="before")
@@ -48,6 +48,13 @@ class OpenbeeDataConfig(BaseModel):
         if not normalized:
             raise ValueError("`data.cache_dir` must not be empty when provided.")
         return normalized
+
+    @field_validator("batch_size")
+    @classmethod
+    def validate_batch_size(cls, value: int) -> int:
+        if value == 0 or value < -1:
+            raise ValueError("`data.batch_size` must be positive or exactly -1.")
+        return value
 
 
 class OpenbeeGradientCheckpointingConfig(BaseModel):
@@ -89,6 +96,20 @@ class OpenbeeModelConfig(BaseModel):
         return normalized
 
 
+class OpenbeeOptimConfig(BaseOptimConfig):
+    model_config = ConfigDict(frozen=False)
+
+    gradient_accumulation_steps: int = 1
+    global_batch_size: int | None = Field(None, ge=1)
+
+    @field_validator("gradient_accumulation_steps")
+    @classmethod
+    def validate_gradient_accumulation_steps(cls, value: int) -> int:
+        if value == 0 or value < -1:
+            raise ValueError("`optim.gradient_accumulation_steps` must be positive or exactly -1.")
+        return value
+
+
 class OpenbeeLoopConfig(BaseLoopConfig):
     model_config = ConfigDict(frozen=False)
 
@@ -107,4 +128,5 @@ class OpenbeeConfig(BaseEngineConfig):
 
     data: OpenbeeDataConfig = Field(default_factory=OpenbeeDataConfig)
     model: OpenbeeModelConfig = Field(default_factory=OpenbeeModelConfig)
+    optim: OpenbeeOptimConfig = Field(default_factory=OpenbeeOptimConfig)
     loop: OpenbeeLoopConfig = Field(default_factory=OpenbeeLoopConfig)

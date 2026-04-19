@@ -13,7 +13,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from transformers.utils.logging import disable_progress_bar
 
 from mvp_engine.distributed.parallelize import parallelize_model
-from mvp_engine.distributed.utils import is_main_process
+from mvp_engine.distributed.utils import get_data_parallel_world_size, is_main_process
 from mvp_engine.engine import ENGINE_REGISTRY, Engine
 from mvp_engine.utils.log import logger
 from mvp_engine.utils.misc import calculate_model_size
@@ -44,13 +44,64 @@ class OpenbeeEngine(Engine):
 
     def __init__(self, config):
         super().__init__(config)
-        self.dp_world_size = 1
+        self.dp_world_size = get_data_parallel_world_size(self.device_mesh)
         disable_progress_bar()
         self.metric_accumulator = MetricAccumulator()
         self.metric_accumulator.register("global_token_count", "last")
         self.metric_accumulator.register("local_token_count", "last")
         self.metric_accumulator.register("local_loss_sum", "sum")
         self.metric_accumulator.register("local_model_flops", "sum")
+
+    def _resolve_batching_config(self) -> None:
+        """Resolve OpenBee global batch size into micro batch size or accumulation."""
+
+        global_batch_size = self.config.optim.global_batch_size
+        gradient_accumulation_steps = int(self.config.optim.gradient_accumulation_steps)
+        micro_batch_size = int(self.config.data.batch_size)
+
+        if global_batch_size is None:
+            if gradient_accumulation_steps == -1:
+                raise ValueError("`optim.gradient_accumulation_steps=-1` requires `optim.global_batch_size`.")
+            if micro_batch_size == -1:
+                raise ValueError("`data.batch_size=-1` requires `optim.global_batch_size`.")
+            return
+
+        if micro_batch_size == -1 and gradient_accumulation_steps == -1:
+            raise ValueError(
+                "`optim.global_batch_size` cannot infer both `data.batch_size` and "
+                "`optim.gradient_accumulation_steps` at the same time."
+            )
+
+        dp_world_size = self.dp_world_size
+
+        if micro_batch_size == -1:
+            divisor = dp_world_size * gradient_accumulation_steps
+            if divisor <= 0 or global_batch_size % divisor != 0:
+                raise ValueError(
+                    "`data.batch_size` cannot be inferred exactly: "
+                    "`optim.global_batch_size` must be divisible by "
+                    "`data_parallel_world_size * optim.gradient_accumulation_steps`."
+                )
+            self.config.data.batch_size = global_batch_size // divisor
+            micro_batch_size = int(self.config.data.batch_size)
+        elif gradient_accumulation_steps == -1:
+            divisor = dp_world_size * micro_batch_size
+            if divisor <= 0 or global_batch_size % divisor != 0:
+                raise ValueError(
+                    "`optim.gradient_accumulation_steps` cannot be inferred exactly: "
+                    "`optim.global_batch_size` must be divisible by "
+                    "`data_parallel_world_size * data.batch_size`."
+                )
+            self.config.optim.gradient_accumulation_steps = global_batch_size // divisor
+            gradient_accumulation_steps = int(self.config.optim.gradient_accumulation_steps)
+
+        effective_global_batch_size = dp_world_size * micro_batch_size * gradient_accumulation_steps
+        if effective_global_batch_size != global_batch_size:
+            raise ValueError(
+                "`optim.global_batch_size` does not match the configured batching: "
+                f"expected {effective_global_batch_size} from "
+                "`data_parallel_world_size * data.batch_size * optim.gradient_accumulation_steps`."
+            )
 
     def prepare_dataloader(self, workflow: str = "train"):
         """Build the train-only dataloader over preprocessed multimodal samples.
@@ -62,6 +113,8 @@ class OpenbeeEngine(Engine):
         Returns:
             A ``TorchLoader`` pipeline that yields padded multimodal batches.
         """
+        self._resolve_batching_config()
+
         # Step 1: build the shared processor once so both the temporary counting
         # loader and the real training loader use the exact same tokenizer setup.
         if self.processor is None:
@@ -133,14 +186,7 @@ class OpenbeeEngine(Engine):
             # Step 2.5: compute the real DP/FSDP size from the device mesh.
             # Tensor-parallel ranks do not consume extra samples per optimizer
             # step, so only the non-tensor mesh dimensions belong here.
-            mesh_dim_names = tuple(getattr(self.device_mesh, "mesh_dim_names", ()) or ())
-            dp_dim_names = tuple(dim_name for dim_name in mesh_dim_names if dim_name != "tensor")
-            if not dp_dim_names:
-                dp_world_size = 1
-            elif len(dp_dim_names) == 1:
-                dp_world_size = int(self.device_mesh[dp_dim_names[0]].size())
-            else:
-                dp_world_size = int(self.device_mesh[dp_dim_names[0], dp_dim_names[1]].size())
+            dp_world_size = self.dp_world_size
 
             # Step 2.6: infer one-epoch optimizer steps from the packed sample
             # count, per-rank batch size, and gradient accumulation. Round up
@@ -282,16 +328,6 @@ class OpenbeeEngine(Engine):
             """Count the valid shifted labels used by causal-LM cross entropy."""
             shifted_labels = F.pad(labels, (0, 1), value=ignore_index)[..., 1:]
             return int((shifted_labels != ignore_index).sum().item())
-
-        mesh_dim_names = tuple(getattr(self.device_mesh, "mesh_dim_names", ()) or ())
-        dp_dim_names = tuple(dim_name for dim_name in mesh_dim_names if dim_name != "tensor")
-        if not dp_dim_names:
-            dp_world_size = 1
-        elif len(dp_dim_names) == 1:
-            dp_world_size = int(self.device_mesh[dp_dim_names[0]].size())
-        else:
-            dp_world_size = int(self.device_mesh[dp_dim_names[0], dp_dim_names[1]].size())
-        self.dp_world_size = dp_world_size
 
         train_iterator = iter(self.train_loader)
         gradient_accumulation_steps = int(self.config.optim.gradient_accumulation_steps)

@@ -30,7 +30,7 @@ data:
   batch_size: 1
   num_workers: 12
 model:
-  pretrained_model_name_or_path: "./pretrained/Qwen3-VL-8B-Base-woDS-stage0"
+  pretrained_model_name_or_path: "./pretrained/Qwen3-VL-8B-Base-woDS-stage1"
   attn_implementation: "flash_attention_2"
   image_max_pixels: 1048576
   gradient_checkpointing:
@@ -47,9 +47,10 @@ model:
 optim:
   lr: 6.0e-5
   weight_decay: 0.0
-  gradient_accumulation_steps: 2
+  global_batch_size: 256
+  gradient_accumulation_steps: -1
   mixed_precision: "bf16"
-  warmup_ratio: 0.0
+  warmup_ratio: 0.002
   clip_grad_norm: 1.0
 
 loop:

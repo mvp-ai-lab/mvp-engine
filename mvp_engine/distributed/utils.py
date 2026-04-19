@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 import torch
 import torch.distributed as dist
+from torch.distributed.device_mesh import DeviceMesh
 
 
 def get_rank() -> int:
@@ -121,6 +122,19 @@ def get_world_size() -> int:
     if not dist.is_initialized():
         return 1
     return dist.get_world_size()
+
+
+def get_data_parallel_world_size(device_mesh: DeviceMesh) -> int:
+    """Return the mesh world size that contributes samples to one optimizer step."""
+    mesh_dim_names = tuple(getattr(device_mesh, "mesh_dim_names", ()) or ())
+    dp_dim_names = tuple(dim_name for dim_name in mesh_dim_names if dim_name != "tensor")
+    if not dp_dim_names:
+        return 1
+
+    dp_world_size = 1
+    for dim_name in dp_dim_names:
+        dp_world_size *= int(device_mesh[dim_name].size())
+    return dp_world_size
 
 
 def is_main_process() -> bool:
