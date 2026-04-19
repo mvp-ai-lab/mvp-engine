@@ -54,12 +54,17 @@ def _parse_env_log_level() -> LogLevel:
         return LogLevel.INFO
 
 
-def init_logger(backends: list[Backend], interval: int = 20) -> Logger:
+def init_logger(
+    backends: list[Backend],
+    interval: int = 20,
+    accumulation_size: int = 20,
+) -> Logger:
     """Initialize the global logger with the given backends.
 
     Args:
         backends: List of logging backends to use.
         interval: Logging interval in iterations.
+        accumulation_size: Default metric smoothing window.
 
     Returns:
         The initialized Logger instance.
@@ -69,7 +74,12 @@ def init_logger(backends: list[Backend], interval: int = 20) -> Logger:
     if logger._instance is not None:
         logger._instance.destroy()
 
-    logger._instance = Logger(backends, interval, parsed_level)
+    logger._instance = Logger(
+        backends=backends,
+        interval=interval,
+        accumulation_size=accumulation_size,
+        level=parsed_level,
+    )
     return logger._instance
 
 
