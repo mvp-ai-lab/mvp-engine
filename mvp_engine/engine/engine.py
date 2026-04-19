@@ -243,6 +243,11 @@ class Engine(ABC):
         logger = init_logger(
             logger_backends,
             interval=self.config.log.interval,
+            accumulation_size=(
+                self.config.log.accumulation_size
+                if self.config.log.accumulation_size is not None
+                else self.config.log.interval
+            ),
         )
 
     @abstractmethod

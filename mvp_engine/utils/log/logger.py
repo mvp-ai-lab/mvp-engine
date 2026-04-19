@@ -54,14 +54,24 @@ class Logger:
         interval: Default aggregation interval (passed to MetricAggregator).
     """
 
-    def __init__(self, backends: List[Backend], interval: int = 20, level: LogLevel = LogLevel.INFO) -> None:
+    def __init__(
+        self,
+        backends: List[Backend],
+        interval: int = 20,
+        accumulation_size: int = 20,
+        level: LogLevel = LogLevel.INFO,
+    ) -> None:
         if get_world_size() > 1:
             os.environ["GLOO_LOG_LEVEL"] = "ERROR"
             gloo_group = dist.new_group(backend="gloo")
         else:
             gloo_group = None
 
-        self.metrics = MetricAggregator(dist_group=gloo_group, default_interval=interval)
+        self.metrics = MetricAggregator(
+            dist_group=gloo_group,
+            default_interval=interval,
+            default_accumulation_size=accumulation_size,
+        )
         self.step: int = 0
         self.backends: List[Backend] = backends
         self.level: LogLevel = level
@@ -84,7 +94,7 @@ class Logger:
     def add_metric(
         self,
         name: str,
-        accumulation_size: int = 20,
+        accumulation_size: Optional[int] = None,
         interval: Optional[int] = None,
         distributed: Optional[bool] = None,
         support_nan: bool = True,
@@ -109,7 +119,7 @@ class Logger:
     def add_metrics(
         self,
         names: List[str],
-        accumulation_size: int = 20,
+        accumulation_size: Optional[int] = None,
         interval: Optional[int] = None,
         distributed: Optional[bool] = None,
         support_nan: bool = True,

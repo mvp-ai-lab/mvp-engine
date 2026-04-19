@@ -10,6 +10,7 @@ class BaseLogConfig(BaseModel):
 
     interval: int = Field(20, ge=1)
     backends: list[Literal["terminal", "file", "wandb"]] = ["terminal", "file"]
+    accumulation_size: int | None = Field(None, ge=1)
     timer_window_size: int = Field(100, ge=1)
 
 

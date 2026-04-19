@@ -20,6 +20,7 @@ runtime:
 log:
   interval: 20
   backends: ["terminal", "file"]
+  accumulation_size: null
   timer_window_size: 100
 
 parallel:

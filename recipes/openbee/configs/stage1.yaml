@@ -10,6 +10,8 @@ project:
 
 log:
   interval: 1
+  backends: ["terminal", "file", "wandb"]
+  accumulation_size: 1
   timer_window_size: 10
 
 parallel:
