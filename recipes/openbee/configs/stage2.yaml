@@ -55,7 +55,7 @@ optim:
 
 loop:
   policy: "iter"
-  total_steps: 12000
+  total_steps: -1
 
 checkpoint:
   interval: 200
