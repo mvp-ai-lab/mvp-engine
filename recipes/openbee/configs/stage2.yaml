@@ -14,8 +14,8 @@ log:
 
 parallel:
   mesh:
-    replicate: 1
-    shard: -1
+    replicate: -1
+    shard: 8
     tensor: 1
 data:
   train_path: "./data/openbee/stage2/**/*.parquet"
