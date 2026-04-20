@@ -243,10 +243,16 @@ class OpenbeeEngine(Engine):
         Returns:
             The distributed-ready Qwen3-VL model.
         """
-        model = build_qwen3_vl_model(self.config.model).to(self.device)
+        using_fsdp2 = self.device_mesh["shard"].size() * self.device_mesh["tensor"].size() > 1
+        model_config = self.config.model.model_copy(deep=True)
+        if using_fsdp2 and bool(model_config.gradient_checkpointing.enabled):
+            model_config.gradient_checkpointing.use_reentrant = True
+            logger.info("Using model-side gradient checkpointing with use_reentrant=True under FSDP2.")
+
+        model = build_qwen3_vl_model(model_config).to(self.device)
         if self.config.data.packing and getattr(model.config, "_attn_implementation", None) == "flash_attention_2":
             apply_packed_fa2_patch()
-        logger.info(f" - Model name: {model.__class__.__name__}")
+        logger.info(f"Model name: {model.__class__.__name__}")
 
         if self.config.model.compile:
             # The ViT encoder computes data-dependent cu_seqlens/max_seqlen for

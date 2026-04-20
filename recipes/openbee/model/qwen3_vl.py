@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from types import MethodType
 from typing import Any
 
@@ -104,56 +103,19 @@ def apply_freeze_policy(
     return frozen_counts
 
 
-def apply_gradient_checkpointing_policy(
+def apply_model_gradient_checkpointing(
     model,
     *,
     enabled: bool = False,
     use_reentrant: bool = False,
 ):
-    """Enable LF-private-style gradient checkpointing when requested by the recipe."""
+    """Enable the model's built-in gradient checkpointing when requested by the recipe."""
 
     if not enabled:
         return model
 
     if not hasattr(model, "gradient_checkpointing_enable"):
         raise AttributeError(f"{model.__class__.__name__} does not support gradient checkpointing.")
-
-    from functools import partial, wraps
-
-    from torch.utils.checkpoint import checkpoint
-
-    def _custom_gradient_checkpointing_func(func, *args, **kwargs):
-        if isinstance(func, partial):
-            module = func.func.__self__
-        else:
-            module = func.__self__
-
-        has_grad = False
-        if any(parameter.requires_grad for parameter in module.parameters()):
-            has_grad = True
-            for arg in args:
-                if torch.is_tensor(arg) and torch.is_floating_point(arg):
-                    arg.requires_grad_(True)
-                    break
-
-        if has_grad:
-            return checkpoint(func, *args, **kwargs, use_reentrant=use_reentrant)
-        return func(*args, **kwargs)
-
-    @wraps(model.gradient_checkpointing_enable)
-    def gradient_checkpointing_enable_with_custom_wrapper(self, gradient_checkpointing_kwargs=None):
-        if gradient_checkpointing_kwargs is None:
-            gradient_checkpointing_kwargs = {"use_reentrant": use_reentrant}
-
-        if "value" in inspect.signature(self._set_gradient_checkpointing).parameters:
-            self.apply(partial(self._set_gradient_checkpointing, value=True))
-            self.enable_input_require_grads()
-        else:
-            self._set_gradient_checkpointing(
-                enable=True, gradient_checkpointing_func=_custom_gradient_checkpointing_func
-            )
-
-    model.gradient_checkpointing_enable = MethodType(gradient_checkpointing_enable_with_custom_wrapper, model)
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": use_reentrant})
     setattr(model.config, "use_cache", False)
     return model
@@ -408,7 +370,7 @@ def build_qwen3_vl_model(model_config: Any):
     )
     model = apply_qwen3_vl_compat_patches(model)
     model = inject_model_flops_calculation(model)
-    model = apply_gradient_checkpointing_policy(
+    model = apply_model_gradient_checkpointing(
         model,
         enabled=bool(model_config.gradient_checkpointing.enabled),
         use_reentrant=bool(model_config.gradient_checkpointing.use_reentrant),
