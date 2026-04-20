@@ -16,6 +16,8 @@ class OpenbeeDataConfig(BaseModel):
     cache: bool = False
     shuffle_buffer: int = Field(1000, ge=1)
     packing: bool = False
+    shuffle_on_packs: bool = False
+    shuffle_on_packs_buffer: int = Field(256, ge=1)
     packing_selection_strategy: Literal["random", "best_fit"] = "best_fit"
     packing_open_pack_limit: int = Field(8, ge=1)
     packing_buffer_size: int = Field(64, ge=0)

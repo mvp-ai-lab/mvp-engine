@@ -631,5 +631,7 @@ def build_dataset(
                 pack_buffer_size=pack_buffer_size,
             )
         )
+        if config.data.shuffle_on_packs:
+            dataset = dataset.shuffle(buffer_size=int(config.data.shuffle_on_packs_buffer))
 
     return dataset
