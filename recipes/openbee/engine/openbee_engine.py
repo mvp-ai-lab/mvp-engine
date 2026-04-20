@@ -485,6 +485,16 @@ class OpenbeeEngine(Engine):
         self.step += 1
         self.timer.tick()
 
+        global_loss_sum = self.metric_accumulator.get("local_loss_sum")
+        if global_loss_sum is None:
+            raise ValueError("OpenBee accumulation window is missing a valid local loss sum.")
+        if not isinstance(global_loss_sum, torch.Tensor):
+            global_loss_sum = torch.tensor(global_loss_sum, device=self.device, dtype=torch.float64)
+        else:
+            global_loss_sum = global_loss_sum.detach().clone()
+        if dist.is_available() and dist.is_initialized():
+            dist.all_reduce(global_loss_sum, op=dist.ReduceOp.SUM)
+
         accumulated_metrics = self.metric_accumulator.finalize()
         other_logs = {
             "eta": self.timer.eta_string,
@@ -503,7 +513,7 @@ class OpenbeeEngine(Engine):
         for i, lr in enumerate(step_lrs):
             other_logs[f"lr/group_{i}"] = lr
 
-        outputs["logs"]["train/loss"] = float(accumulated_metrics["local_loss_sum"] / int(local_token_count))
+        outputs["logs"]["train/loss"] = float(global_loss_sum / int(global_token_count))
         logger.log_metrics(
             {**outputs["logs"], **other_logs},
             step=self.step,
