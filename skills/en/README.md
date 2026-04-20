@@ -93,8 +93,8 @@ Use this layout:
 
 ```text
 recipes/<recipe>/
-├── skill_manifest.yaml
 └── skill_tests/
+    ├── skill_manifest.yaml
     ├── <skill-id>/
     │   ├── test_spec.yaml
     │   ├── test_structure.py
@@ -103,8 +103,8 @@ recipes/<recipe>/
     └── test_all_skills.py
 ```
 
-- `skill_manifest.yaml` tracks recipe-relevant training skills with statuses such as
-  `pending`, `applying`, `tests_passed`, `failed`, and `not_applicable`.
+- `skill_tests/skill_manifest.yaml` tracks recipe-relevant training skills with statuses such as
+  `pending`, `applied`, `failed`, and `not_applicable`.
 - `test_spec.yaml` declares which layers are required for that applied skill.
 - Tests must exercise the user's real recipe/model entrypoints with a minimal
   recipe-owned config or batch, not a separate toy model unrelated to that recipe.
@@ -118,8 +118,8 @@ recipes/<recipe>/
 - The user should not need to ask for these tests explicitly. When an agent applies
   a skill to a user recipe, it should also add the matching recipe-local tests and
   try to run them by default.
-- The agent should also initialize or update `skill_manifest.yaml` automatically,
-  and only mark a skill as `tests_passed` after its recipe-local tests succeed.
+- The agent should also initialize or update `skill_tests/skill_manifest.yaml` automatically,
+  and leave a skill as `applied` once its recipe-local tests succeed.
 - If running the tests needs GPU resources or higher execution permissions and those
   are not currently available, the agent should report the exact command for the user
   instead of asking the user to design the test flow.

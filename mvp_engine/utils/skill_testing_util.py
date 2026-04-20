@@ -4,7 +4,7 @@ This module keeps the skill-test convention intentionally small:
 
 - Tests live under ``recipes/<recipe>/skill_tests/<skill_id>/``.
 - Each applied skill owns a ``test_spec.yaml`` plus its pytest files.
-- A recipe-local ``skill_manifest.yaml`` tracks which training-related
+- A recipe-local ``recipes/<recipe>/skill_tests/skill_manifest.yaml`` tracks which training-related
   skills are pending, applied, failed, or not applicable.
 - The global CLI discovers specs, dispatches pytest for the required
   layers, and updates the manifest with validation results.
@@ -23,7 +23,7 @@ SPEC_FILENAME = "test_spec.yaml"
 MANIFEST_FILENAME = "skill_manifest.yaml"
 LAYER_ORDER = ("structure", "runtime", "smoke")
 MANIFEST_LAYER_STATUSES = ("not_run", "passed", "failed")
-MANIFEST_SKILL_STATUSES = ("pending", "applying", "tests_passed", "failed", "not_applicable")
+MANIFEST_SKILL_STATUSES = ("pending", "applied", "failed", "not_applicable")
 MANAGED_SKILL_CATEGORIES = ("training", "parallel", "model")
 DEFAULT_LAYER_FILES = {
     "structure": ("test_structure.py",),
@@ -189,8 +189,8 @@ def get_all_skills_smoke_test(recipe_dir: Path) -> Path | None:
 
 
 def get_recipe_skill_manifest_path(recipe_dir: Path) -> Path:
-    """Return the manifest path for a recipe."""
-    return (recipe_dir / MANIFEST_FILENAME).resolve()
+    """Return the canonical manifest path for a recipe."""
+    return (recipe_dir / SKILL_TESTS_DIRNAME / MANIFEST_FILENAME).resolve()
 
 
 def discover_managed_skill_ids(repo_root: Path | None = None) -> list[str]:
@@ -251,7 +251,8 @@ def load_recipe_skill_manifest(
     manifest_path = get_recipe_skill_manifest_path(recipe_dir)
     if not manifest_path.exists():
         if not create_if_missing:
-            raise SkillTestSpecError(f"Recipe '{recipe_dir.name}' does not have {MANIFEST_FILENAME}.")
+            relative_path = get_recipe_skill_manifest_path(recipe_dir).relative_to(recipe_dir)
+            raise SkillTestSpecError(f"Recipe '{recipe_dir.name}' does not have {relative_path}.")
         return initialize_recipe_skill_manifest(recipe_dir, repo_root)
 
     manifest = _load_manifest_file(manifest_path)
@@ -272,6 +273,7 @@ def load_recipe_skill_manifest(
 def save_recipe_skill_manifest(recipe_dir: Path, manifest: dict) -> None:
     """Persist a recipe skill manifest."""
     manifest_path = get_recipe_skill_manifest_path(recipe_dir)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(
         yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True),
         encoding="utf-8",

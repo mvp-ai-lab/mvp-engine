@@ -94,8 +94,8 @@ Agent 会按 skill 工作流生成适配代码和测试。
 
 ```text
 recipes/<recipe>/
-├── skill_manifest.yaml
 └── skill_tests/
+    ├── skill_manifest.yaml
     ├── <skill-id>/
     │   ├── test_spec.yaml
     │   ├── test_structure.py
@@ -104,8 +104,8 @@ recipes/<recipe>/
     └── test_all_skills.py
 ```
 
-- `skill_manifest.yaml` 用来记录该 recipe 相关 skill 的状态，例如 `pending`、
-  `applying`、`tests_passed`、`failed`、`not_applicable`。
+- `skill_tests/skill_manifest.yaml` 用来记录该 recipe 相关 skill 的状态，例如 `pending`、
+  `applied`、`failed`、`not_applicable`。
 - `test_spec.yaml` 用来声明该 skill 需要哪些测试层级。
 - 测试必须围绕用户自己的 recipe / model 入口来写，使用 recipe 自己的最小配置或最小 batch，
   不要额外造一个与该 recipe 无关的 toy model。
@@ -118,8 +118,8 @@ recipes/<recipe>/
 - 统一入口：`python -m tests.test_skills --recipe <recipe> --skill <skill-id>`。
 - 用户不应该还要自己提出“补这些测试”。当 agent 在用户 recipe 上应用某个 skill 时，
   应默认同时补齐对应的 recipe-local 测试，并默认尝试执行。
-- agent 还应默认自动初始化或更新 `skill_manifest.yaml`，并且只有在该 skill
-  的 recipe-local 测试通过后，才把状态更新为 `tests_passed`。
+- agent 还应默认自动初始化或更新 `skill_tests/skill_manifest.yaml`，并且只有在该 skill
+  的 recipe-local 测试通过后，状态才保持为 `applied`。
 - 如果执行测试需要 GPU 资源或更高执行权限，而当前环境不具备，agent 应直接把准确命令返回给用户，
   而不是让用户自己设计测试流程。
 - 如果某个 recipe-local 测试确实需要真实 GPU 或分布式环境，不应 `skip`，而应直接失败并给出

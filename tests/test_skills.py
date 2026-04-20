@@ -45,14 +45,15 @@ def main() -> int:
     args = parse_args()
     try:
         recipe_dir = skill_testing_util.resolve_recipe_dir(args.recipe)
+        manifest_relative_path = skill_testing_util.get_recipe_skill_manifest_path(recipe_dir).relative_to(recipe_dir)
         if args.init_manifest:
             skill_testing_util.initialize_recipe_skill_manifest(recipe_dir)
-            print(f"initialized {recipe_dir.name}/skill_manifest.yaml")
+            print(f"initialized {recipe_dir.name}/{manifest_relative_path}")
             return 0
 
         if args.mark_not_applicable:
             skill_testing_util.mark_manifest_skill_not_applicable(recipe_dir, skill_id=args.mark_not_applicable)
-            print(f"marked {args.mark_not_applicable} as not_applicable in {recipe_dir.name}/skill_manifest.yaml")
+            print(f"marked {args.mark_not_applicable} as not_applicable in {recipe_dir.name}/{manifest_relative_path}")
             return 0
 
         if args.skill:
@@ -71,7 +72,7 @@ def main() -> int:
 def run_one_skill(recipe_dir: Path, skill_id: str, *, language: str | None = None) -> RunResult:
     spec = skill_testing_util.find_recipe_skill_spec(recipe_dir, skill_id)
     language = language or skill_testing_util.detect_skill_language(spec.skill_id)
-    skill_testing_util.set_manifest_skill_status(recipe_dir, spec.skill_id, status="applying", language=language)
+    skill_testing_util.set_manifest_skill_status(recipe_dir, spec.skill_id, status="applied", language=language)
     print(f"[skill] {spec.skill_id} ({spec.recipe_name})")
     _print_real_env_hint_if_needed(spec, language=language, all_skills=False)
 
@@ -94,7 +95,7 @@ def run_one_skill(recipe_dir: Path, skill_id: str, *, language: str | None = Non
     skill_testing_util.set_manifest_skill_status(
         recipe_dir,
         spec.skill_id,
-        status="tests_passed",
+        status="applied",
         language=language,
         layer_results=layer_results,
     )
