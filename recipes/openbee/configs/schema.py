@@ -12,7 +12,7 @@ class OpenbeeDataConfig(BaseModel):
 
     train_path: Optional[str] = "./data/openbee/alignment_demo.jsonl"
     cache_dir: str | None = None
-    enable_thinking: bool = True
+    enable_thinking: bool | None | Literal["non-empty"] = "non-empty"
     cache: bool = False
     shuffle_buffer: int = Field(1000, ge=1)
     packing: bool = False
@@ -55,6 +55,25 @@ class OpenbeeDataConfig(BaseModel):
         if value == 0 or value < -1:
             raise ValueError("`data.batch_size` must be positive or exactly -1.")
         return value
+
+    @field_validator("enable_thinking", mode="before")
+    @classmethod
+    def validate_enable_thinking(cls, value: bool | str | None) -> bool | None | Literal["non-empty"]:
+        if value is None or isinstance(value, bool):
+            return value
+        if not isinstance(value, str):
+            raise TypeError("`data.enable_thinking` must be a bool, null, or 'non-empty'.")
+
+        normalized = value.strip().lower()
+        if normalized == "true":
+            return True
+        if normalized == "false":
+            return False
+        if normalized in {"none", "null"}:
+            return None
+        if normalized == "non-empty":
+            return "non-empty"
+        raise ValueError("`data.enable_thinking` only accepts true, false, null, or 'non-empty'.")
 
 
 class OpenbeeGradientCheckpointingConfig(BaseModel):

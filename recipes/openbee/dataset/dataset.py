@@ -5,6 +5,7 @@ from __future__ import annotations
 import glob
 import io
 import os
+import re
 from collections.abc import Iterable
 from functools import partial
 from pathlib import Path
@@ -31,6 +32,10 @@ ROLE_MAP = {
     "tool": "tool",
     "user": "user",
 }
+
+THOUGHT_PREFIX = "<think>\n"
+THOUGHT_SUFFIX = "\n</think>\n\n"
+THOUGHT_PATTERN = re.compile(f"{re.escape(THOUGHT_PREFIX)}(.*?){re.escape(THOUGHT_SUFFIX)}", re.DOTALL)
 
 
 def resolve_cache_dir(train_path: str, configured_cache_dir: str | None) -> Path:
@@ -206,7 +211,7 @@ def build_labels(
     *,
     max_length: int,
     ignore_index: int,
-    skip_think_prefix: bool = False,
+    thinking_mode: bool | None | str = True,
 ) -> torch.Tensor:
     """Build supervised labels for one tokenized conversation.
 
@@ -217,9 +222,9 @@ def build_labels(
         attention_mask: Attention mask for the full conversation.
         max_length: Maximum tokenized length after truncation.
         ignore_index: Label value used to mask tokens out of the loss.
-        skip_think_prefix: When True, the ``<think>…</think>`` opening block of
-            each assistant turn is excluded from the loss, matching the behaviour
-            of LLaMA-Factory's ``ReasoningTemplate`` with ``enable_thinking=False``.
+        thinking_mode: ``enable_thinking`` mode aligned with LF-private. ``False``
+            excludes every leading think block from supervision, ``"non-empty"``
+            excludes only empty think blocks, and ``True`` supervises them.
 
     Returns:
         A label tensor where only assistant response tokens are supervised.
@@ -244,9 +249,31 @@ def build_labels(
 
     # Token IDs for the empty thinking block the model emits when not reasoning.
     # These match Qwen3-VL's tokenizer: <think> = 151667, \n\n = 271, </think> = 151668.
-    # When skip_think_prefix=True we skip any leading run of these tokens so they
-    # are not supervised — matching LLaMA-Factory's ReasoningTemplate behaviour.
     _THINK_PREFIX_IDS = {151667, 271, 151668}
+
+    def _extract_text_content(message: dict[str, Any]) -> str:
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return ""
+
+        segments: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and isinstance(block.get("text"), str):
+                segments.append(block["text"])
+        return "".join(segments)
+
+    def _should_skip_think_prefix(message: dict[str, Any]) -> bool:
+        if thinking_mode is False:
+            return True
+        if thinking_mode != "non-empty":
+            return False
+
+        match = THOUGHT_PATTERN.search(_extract_text_content(message))
+        if match is None:
+            return False
+        return not match.group(1).strip()
 
     labels = torch.full_like(input_ids, ignore_index)
     valid_length = int(attention_mask.sum().item())
@@ -277,7 +304,7 @@ def build_labels(
         # Optionally skip the leading <think>…</think> block from supervision.
         # Advance `start` past any consecutive think-prefix tokens so that only
         # the actual answer content contributes to the loss.
-        if skip_think_prefix and start < end:
+        if _should_skip_think_prefix(message) and start < end:
             pos = start
             while pos < end and input_ids[pos].item() in _THINK_PREFIX_IDS:
                 pos += 1
@@ -296,7 +323,7 @@ def process_sample(
     max_length: int,
     image_placeholder: str = IMAGE_PLACEHOLDER,
     ignore_index: int = -100,
-    skip_think_prefix: bool = False,
+    thinking_mode: bool | None | str = True,
 ) -> ModelInputs:
     """Validate one dataset row and convert it into training tensors.
 
@@ -371,7 +398,7 @@ def process_sample(
             attention_mask,
             max_length=max_length,
             ignore_index=ignore_index,
-            skip_think_prefix=skip_think_prefix,
+            thinking_mode=thinking_mode,
         )
         if not torch.any(labels != ignore_index):
             raise ValueError("has no supervised assistant tokens after tokenization/truncation.")
@@ -568,7 +595,7 @@ def build_dataset(
         "max_length": int(config.data.max_seq_len),
     }
     if process_fn is process_sample:
-        process_kwargs["skip_think_prefix"] = not bool(config.data.enable_thinking)
+        process_kwargs["thinking_mode"] = getattr(config.data, "enable_thinking", True)
 
     dataset = Dataset.from_source(
         "parquet",

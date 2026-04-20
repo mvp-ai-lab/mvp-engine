@@ -20,7 +20,7 @@ parallel:
     shard: 8
     tensor: 1
 data:
-  train_path: "./data/openbee/stage2/**/*.parquet"
+  train_path: "./data/openbee/stage2-shuffle/*.parquet"
   enable_thinking: false
   cache: false
   shuffle_buffer: 1000
@@ -43,7 +43,7 @@ model:
   freeze_vit: false
   freeze_merger: false
   freeze_llm: false
-  compile: true
+  compile: false
   compile_backend: "inductor"
   compile_mode: "default"
 optim:

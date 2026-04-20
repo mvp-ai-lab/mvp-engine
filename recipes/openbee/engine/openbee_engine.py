@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from typing import Any
 
@@ -9,7 +10,7 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 from mvp_dataset import TorchLoader
-from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from transformers.optimization import get_scheduler
 from transformers.utils.logging import disable_progress_bar
 
 from mvp_engine.distributed.parallelize import parallelize_model
@@ -292,33 +293,21 @@ class OpenbeeEngine(Engine):
             weight_decay=float(self.config.optim.weight_decay),
         )
 
-    def prepare_scheduler(self) -> SequentialLR | CosineAnnealingLR:
+    def prepare_scheduler(self):
         """Construct the learning-rate schedule used by this recipe.
 
         Args:
             None.
 
         Returns:
-            The warmup-plus-cosine scheduler for the current optimizer.
+            The HF cosine scheduler aligned with LF-private.
         """
-        warmup_steps = int(self.total_steps * float(self.config.optim.warmup_ratio))
-        if warmup_steps <= 0:
-            return CosineAnnealingLR(self.optimizer, T_max=self.total_steps)
-
-        scheduler_warmup = LinearLR(
-            self.optimizer,
-            start_factor=1e-3,
-            end_factor=1.0,
-            total_iters=warmup_steps,
-        )
-        scheduler_main = CosineAnnealingLR(
-            self.optimizer,
-            T_max=max(self.total_steps - warmup_steps, 1),
-        )
-        return SequentialLR(
-            self.optimizer,
-            [scheduler_warmup, scheduler_main],
-            milestones=[warmup_steps],
+        warmup_steps = math.ceil(self.total_steps * float(self.config.optim.warmup_ratio))
+        return get_scheduler(
+            name="cosine",
+            optimizer=self.optimizer,
+            num_warmup_steps=warmup_steps,
+            num_training_steps=self.total_steps,
         )
 
     def run_iter_train(self) -> None:
@@ -387,12 +376,26 @@ class OpenbeeEngine(Engine):
             else:
                 batch[key] = value
 
-        return prepare_packed_model_inputs(
+        batch = prepare_packed_model_inputs(
             batch,
             model_config=self.unwrapped_model.config,
             attn_implementation=getattr(self.unwrapped_model.config, "_attn_implementation", None),
             mask_dtype=self.dtype if self.dtype.is_floating_point else torch.float32,
         )
+
+        def _cast_visual_inputs(batch: dict[str, Any]) -> dict[str, Any]:
+            """Match LF-private by casting visual tensors to the active mixed-precision dtype."""
+            if self.dtype == torch.float32:
+                return batch
+
+            for key in ("pixel_values", "pixel_values_videos"):
+                value = batch.get(key)
+                if isinstance(value, torch.Tensor) and torch.is_floating_point(value):
+                    batch[key] = value.to(dtype=self.dtype)
+            return batch
+
+        batch = _cast_visual_inputs(batch)
+        return batch
 
     def train_one_step(self, data: ModelInputs) -> dict[str, Any]:
         """Run one forward pass and collect training metrics.
@@ -443,14 +446,14 @@ class OpenbeeEngine(Engine):
             raise ValueError("OpenBee accumulation window is missing a valid local token count.")
 
         self.metric_accumulator.update(
-            local_loss_sum=outputs["loss"].detach().to(device=self.device, dtype=torch.float64),
+            local_loss_sum=outputs["loss"].detach().to(device=self.device, dtype=torch.float64).sum(),
             local_model_flops=float(outputs["model_flops"]),
         )
 
         # DDP/FSDP averages gradients across the DP/FSDP ranks, so each
         # micro-step uses the local summed loss with the globally reduced token
         # denominator and compensates by the real DP world size.
-        loss = outputs["loss"] / int(global_token_count)
+        loss = outputs["loss"].sum() / int(global_token_count)
         if self.dp_world_size > 1:
             loss = loss * float(self.dp_world_size)
 
@@ -465,6 +468,8 @@ class OpenbeeEngine(Engine):
         max_grad_norm = self.config.optim.clip_grad_norm
         if max_grad_norm is not None:
             clip_grad_norm_(self.model, max_grad_norm)
+
+        step_lrs = [float(param_group["lr"]) for param_group in self.optimizer.param_groups]
 
         self.scaler.step(self.optimizer)
         self.scaler.update()
@@ -489,7 +494,7 @@ class OpenbeeEngine(Engine):
             )
         )
 
-        for i, lr in enumerate(self.scheduler.get_last_lr()):
+        for i, lr in enumerate(step_lrs):
             other_logs[f"lr/group_{i}"] = lr
 
         outputs["logs"]["train/loss"] = float(accumulated_metrics["local_loss_sum"] / int(local_token_count))

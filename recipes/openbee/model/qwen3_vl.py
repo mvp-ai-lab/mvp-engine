@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from types import MethodType
 from typing import Any
 
@@ -109,7 +110,7 @@ def apply_gradient_checkpointing_policy(
     enabled: bool = False,
     use_reentrant: bool = False,
 ):
-    """Enable model-native gradient checkpointing when requested by the recipe."""
+    """Enable LF-private-style gradient checkpointing when requested by the recipe."""
 
     if not enabled:
         return model
@@ -117,9 +118,52 @@ def apply_gradient_checkpointing_policy(
     if not hasattr(model, "gradient_checkpointing_enable"):
         raise AttributeError(f"{model.__class__.__name__} does not support gradient checkpointing.")
 
-    model.gradient_checkpointing_enable(
-        gradient_checkpointing_kwargs={"use_reentrant": use_reentrant},
-    )
+    from functools import partial, wraps
+
+    from torch.utils.checkpoint import checkpoint
+
+    def _custom_gradient_checkpointing_func(func, *args, **kwargs):
+        if isinstance(func, partial):
+            module = func.func.__self__
+        else:
+            module = func.__self__
+
+        has_grad = False
+        if any(parameter.requires_grad for parameter in module.parameters()):
+            has_grad = True
+            for arg in args:
+                if torch.is_tensor(arg) and torch.is_floating_point(arg):
+                    arg.requires_grad_(True)
+                    break
+
+        if has_grad:
+            return checkpoint(func, *args, **kwargs, use_reentrant=use_reentrant)
+        return func(*args, **kwargs)
+
+    @wraps(model.gradient_checkpointing_enable)
+    def gradient_checkpointing_enable_with_custom_wrapper(self, gradient_checkpointing_kwargs=None):
+        if gradient_checkpointing_kwargs is None:
+            gradient_checkpointing_kwargs = {"use_reentrant": use_reentrant}
+
+        if "value" in inspect.signature(self._set_gradient_checkpointing).parameters:
+            self.apply(partial(self._set_gradient_checkpointing, value=True))
+            self.enable_input_require_grads()
+        else:
+            self._set_gradient_checkpointing(
+                enable=True, gradient_checkpointing_func=_custom_gradient_checkpointing_func
+            )
+
+    model.gradient_checkpointing_enable = MethodType(gradient_checkpointing_enable_with_custom_wrapper, model)
+    model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": use_reentrant})
+    setattr(model.config, "use_cache", False)
+    return model
+
+
+def upcast_trainable_params_to_fp32(model):
+    """Match LF-private by storing trainable weights in fp32 master precision."""
+    for _, parameter in model.named_parameters():
+        if parameter.requires_grad and parameter.dtype != torch.float32:
+            parameter.data = parameter.data.to(dtype=torch.float32)
     return model
 
 
@@ -239,6 +283,7 @@ def apply_qwen3_vl_compat_patches(model):
     - run vision patch embedding as fp32 linear math instead of Conv3D
     - replace the vision RoPE helper with the LF implementation
     """
+    from transformers.models.qwen3_vl import modeling_qwen3_vl
 
     def patch_embed_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         target_dtype = self.proj.weight.dtype
@@ -254,13 +299,32 @@ def apply_qwen3_vl_compat_patches(model):
 
         return hidden_states.to(dtype=target_dtype)
 
+    def rotate_half(x: torch.Tensor) -> torch.Tensor:
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
+
+    def apply_rotary_pos_emb_vision(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        unsqueeze_dim: int = 1,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        cos = cos.unsqueeze(unsqueeze_dim)
+        sin = sin.unsqueeze(unsqueeze_dim)
+        q_embed = (q * cos) + (rotate_half(q) * sin)
+        k_embed = (k * cos) + (rotate_half(k) * sin)
+        return q_embed, k_embed
+
     model.model.visual.patch_embed.forward = MethodType(patch_embed_forward, model.model.visual.patch_embed)
+    modeling_qwen3_vl.apply_rotary_pos_emb_vision = apply_rotary_pos_emb_vision
 
     return model
 
 
 def inject_sum_loss_forward(model, *, chunk_size: int = 4096):
-    """Patch Qwen3-VL forward to return summed CE loss."""
+    """Patch Qwen3-VL forward to return LF-style per-token CE loss."""
 
     def forward(
         self,
@@ -303,12 +367,13 @@ def inject_sum_loss_forward(model, *, chunk_size: int = 4096):
             lm_head_bias = getattr(self.lm_head, "bias", None)
             ce_fn = _get_per_token_ce(ignore_index=-100)
 
-            loss = flat_hs.new_zeros(())
+            loss_chunks: list[torch.Tensor] = []
             for start in range(0, flat_hs.size(0), chunk_size):
                 end = min(start + chunk_size, flat_hs.size(0))
                 chunk_logits = F.linear(flat_hs[start:end], self.lm_head.weight, lm_head_bias)
-                loss = loss + ce_fn(chunk_logits, flat_labels[start:end]).sum()
+                loss_chunks.append(ce_fn(chunk_logits, flat_labels[start:end]))
                 del chunk_logits
+            loss = torch.cat(loss_chunks, dim=0)
         else:
             logits = self.lm_head(_slice_hidden(hidden_states, logits_to_keep))
 
@@ -341,6 +406,7 @@ def build_qwen3_vl_model(model_config: Any):
         torch_dtype="auto",
         attn_implementation=model_config.attn_implementation,
     )
+    model = apply_qwen3_vl_compat_patches(model)
     model = inject_model_flops_calculation(model)
     model = apply_gradient_checkpointing_policy(
         model,
@@ -355,6 +421,6 @@ def build_qwen3_vl_model(model_config: Any):
         freeze_merger=model_config.freeze_merger,
         freeze_llm=model_config.freeze_llm,
     )
-    model = apply_qwen3_vl_compat_patches(model)
+    model = upcast_trainable_params_to_fp32(model)
 
     return model

@@ -7,6 +7,16 @@ from typing import Any
 from transformers import AutoProcessor
 
 
+class ProcessorFingerprint:
+    """Pickle-safe callable that returns a stable processor fingerprint."""
+
+    def __init__(self, value: str):
+        self.value = value
+
+    def __call__(self) -> str:
+        return self.value
+
+
 def build_qwen3_vl_processor(model_config: Any):
     """Load the Qwen3-VL processor and normalize tokenizer padding.
 
@@ -35,7 +45,7 @@ def build_qwen3_vl_processor(model_config: Any):
         if tokenizer.pad_token_id is None and tokenizer.eos_token is not None:
             tokenizer.pad_token = tokenizer.eos_token
 
-    processor.__fingerprint__ = lambda: _processor_fingerprint(processor)
+    processor.__fingerprint__ = ProcessorFingerprint(_processor_fingerprint(processor))
     return processor
 
 
