@@ -85,7 +85,7 @@ uv run --with ruff ruff check recipes/<recipe_name>
 
 ## Validation
 
-在 `recipes/<recipe>/skill_tests/new-recipe/` 下补 recipe-local 测试：
+在 `recipes/<recipe>/skill_tests/new-recipe-template/` 下补 recipe-local 测试：
 
 - `test_spec.yaml`：声明这个 skill 在该 recipe 上要求哪些测试层级。
 - `test_structure.py`：至少验证 recipe import、registry 接线、config schema 校验、

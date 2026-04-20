@@ -85,7 +85,7 @@ uv run --with ruff ruff check recipes/<recipe_name>
 
 ## Validation
 
-Add recipe-local tests under `recipes/<recipe>/skill_tests/new-recipe/`:
+Add recipe-local tests under `recipes/<recipe>/skill_tests/new-recipe-template/`:
 
 - `test_spec.yaml`: declare the required test layers for this applied skill.
 - `test_structure.py`: at least verify recipe import, registry wiring, config
