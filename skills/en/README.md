@@ -103,7 +103,8 @@ recipes/<recipe>/
 ```
 
 - `skill_tests/skill_manifest.yaml` tracks recipe-relevant training skills with statuses such as
-  `pending`, `applied`, `failed`, and `not_applicable`.
+  `pending`, `applied`, `failed`, and `not_applicable`, plus per-layer validation
+  results for each individual skill.
 - `test_spec.yaml` declares which layers are required for that applied skill.
 - Tests must exercise the user's real recipe/model entrypoints with a minimal
   recipe-owned config or batch, not a separate toy model unrelated to that recipe.
@@ -125,7 +126,7 @@ recipes/<recipe>/
   a skill to a user recipe, it should also add the matching recipe-local tests and
   try to run them by default.
 - The agent should also initialize or update `skill_tests/skill_manifest.yaml` automatically,
-  and leave a skill as `applied` once its recipe-local tests succeed.
+  and leave a skill as `applied` once that skill's recipe-local tests succeed.
 - The main agent should summarize the `structure` / `runtime` / `smoke` outcomes
   after those subagents finish.
 - If `test_smoke.py` needs GPU resources, distributed launch conditions, or higher

@@ -6,8 +6,8 @@ This module keeps the skill-test convention intentionally small:
 - Each applied skill owns a ``test_spec.yaml`` plus its pytest files.
 - A recipe-local ``recipes/<recipe>/skill_tests/skill_manifest.yaml`` tracks which training-related
   skills are pending, applied, failed, or not applicable.
-- The global CLI discovers specs, dispatches pytest for the required
-  layers, and updates the manifest with validation results.
+- The global CLI runs one skill at a time, dispatches pytest for the required
+  layers, and updates the manifest with per-skill validation results.
 """
 
 from __future__ import annotations
@@ -182,12 +182,6 @@ def find_recipe_skill_spec(recipe_dir: Path, skill_id: str) -> RecipeSkillTestSp
     return load_recipe_skill_spec(spec_path)
 
 
-def get_all_skills_smoke_test(recipe_dir: Path) -> Path | None:
-    """Return the optional recipe-level all-skills smoke test path."""
-    path = recipe_dir / SKILL_TESTS_DIRNAME / "test_all_skills.py"
-    return path.resolve() if path.exists() else None
-
-
 def get_recipe_skill_manifest_path(recipe_dir: Path) -> Path:
     """Return the canonical manifest path for a recipe."""
     return (recipe_dir / SKILL_TESTS_DIRNAME / MANIFEST_FILENAME).resolve()
@@ -219,19 +213,11 @@ def initialize_recipe_skill_manifest(recipe_dir: Path, repo_root: Path | None = 
         "schema_version": 1,
         "recipe": recipe_dir.name,
         "skills": {},
-        "validation": {
-            "all_skills": {
-                "status": "not_run",
-            }
-        },
     }
 
     manifest["recipe"] = recipe_dir.name
     manifest["schema_version"] = 1
     manifest.setdefault("skills", {})
-    manifest.setdefault("validation", {})
-    manifest["validation"].setdefault("all_skills", {})
-    manifest["validation"]["all_skills"].setdefault("status", "not_run")
 
     for skill_id in discover_managed_skill_ids(repo_root):
         ensure_manifest_skill_entry(manifest, skill_id)
@@ -259,9 +245,6 @@ def load_recipe_skill_manifest(
     manifest["schema_version"] = 1
     manifest["recipe"] = recipe_dir.name
     manifest.setdefault("skills", {})
-    manifest.setdefault("validation", {})
-    manifest["validation"].setdefault("all_skills", {})
-    manifest["validation"]["all_skills"].setdefault("status", "not_run")
 
     for skill_id in discover_managed_skill_ids(repo_root):
         ensure_manifest_skill_entry(manifest, skill_id)
@@ -330,17 +313,6 @@ def set_manifest_skill_status(
     return manifest
 
 
-def set_manifest_all_skills_status(recipe_dir: Path, *, passed: bool, repo_root: Path | None = None) -> dict:
-    """Update the all-skills validation state."""
-    repo_root = repo_root or find_repo_root(recipe_dir)
-    manifest = load_recipe_skill_manifest(recipe_dir, repo_root)
-    manifest.setdefault("validation", {})
-    manifest["validation"].setdefault("all_skills", {})
-    manifest["validation"]["all_skills"]["status"] = "passed" if passed else "failed"
-    save_recipe_skill_manifest(recipe_dir, manifest)
-    return manifest
-
-
 def detect_skill_language(skill_id: str, repo_root: Path | None = None) -> str | None:
     """Infer the preferred language for a skill id from repo docs."""
     repo_root = repo_root or find_repo_root()
@@ -367,25 +339,22 @@ def mark_manifest_skill_not_applicable(
 def get_default_skill_test_command(
     recipe_name: str,
     *,
-    skill_id: str | None = None,
+    skill_id: str,
     language: str | None = None,
     layer: str | None = None,
 ) -> str:
     """Build the default CLI command for recipe-local skill tests."""
+    if not skill_id.strip():
+        raise SkillTestSpecError("A skill test command requires a non-empty skill_id.")
     if layer is not None and layer not in LAYER_ORDER:
         raise SkillTestSpecError(f"Unknown test layer '{layer}'.")
-    if layer is not None and skill_id is None:
-        raise SkillTestSpecError("A layer-specific skill test command requires an explicit skill_id.")
 
     parts = ["python", "-m", "tests.test_skills", "--recipe", recipe_name]
     if language:
         parts.extend(["--language", language])
-    if skill_id is None:
-        parts.append("--all")
-    else:
-        parts.extend(["--skill", skill_id])
-        if layer is not None:
-            parts.extend(["--layer", layer])
+    parts.extend(["--skill", skill_id])
+    if layer is not None:
+        parts.extend(["--layer", layer])
     return " ".join(parts)
 
 
@@ -393,20 +362,15 @@ def get_real_env_command(
     spec: RecipeSkillTestSpec,
     *,
     language: str | None = None,
-    all_skills: bool = False,
     layer: str | None = None,
 ) -> str:
     """Resolve the best available real-environment command for a spec."""
-    if layer is not None and all_skills:
-        raise SkillTestSpecError("Layer-specific real environment commands are only supported for a single skill.")
-
-    command_key = "all" if all_skills else "skill"
-    command = spec.real_env_commands.get(command_key)
+    command = spec.real_env_commands.get("skill")
     if command:
         return command
     return get_default_skill_test_command(
         spec.recipe_name,
-        skill_id=None if all_skills else spec.skill_id,
+        skill_id=spec.skill_id,
         language=language,
         layer=layer,
     )
@@ -470,7 +434,7 @@ def _normalize_command_map(raw: object, spec_path: Path) -> dict[str, str]:
 
     normalized: dict[str, str] = {}
     for key, value in raw.items():
-        if key not in {"skill", "all"}:
+        if key != "skill":
             raise SkillTestSpecError(f"Unknown real_env_commands key '{key}' in {spec_path}")
         if not isinstance(value, str) or not value.strip():
             raise SkillTestSpecError(f"'real_env_commands.{key}' must be a non-empty string in {spec_path}")

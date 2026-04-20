@@ -104,7 +104,7 @@ recipes/<recipe>/
 ```
 
 - `skill_tests/skill_manifest.yaml` 用来记录该 recipe 相关 skill 的状态，例如 `pending`、
-  `applied`、`failed`、`not_applicable`。
+  `applied`、`failed`、`not_applicable`，以及每个单独 skill 的分层验证结果。
 - `test_spec.yaml` 用来声明该 skill 需要哪些测试层级。
 - 测试必须围绕用户自己的 recipe / model 入口来写，使用 recipe 自己的最小配置或最小 batch，
   不要额外造一个与该 recipe 无关的 toy model。
@@ -123,8 +123,8 @@ recipes/<recipe>/
   `--layer smoke`。
 - 用户不应该还要自己提出“补这些测试”。当 agent 在用户 recipe 上应用某个 skill 时，
   应默认同时补齐对应的 recipe-local 测试，并默认尝试执行。
-- agent 还应默认自动初始化或更新 `skill_tests/skill_manifest.yaml`，并且只有在该 skill
-  的 recipe-local 测试通过后，状态才保持为 `applied`。
+- agent 还应默认自动初始化或更新 `skill_tests/skill_manifest.yaml`，并且只有在该单个
+  skill 的 recipe-local 测试通过后，状态才保持为 `applied`。
 - 主 agent 应在这些 subagent 完成后统一汇总 `structure` / `runtime` / `smoke`
   的结果。
 - 如果 `test_smoke.py` 需要 GPU 资源、分布式启动条件或更高执行权限，而当前环境不具备，

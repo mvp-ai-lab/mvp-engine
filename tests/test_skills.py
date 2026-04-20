@@ -31,7 +31,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     selector = parser.add_mutually_exclusive_group(required=True)
     selector.add_argument("--skill", help="Run only one recipe-local skill test set.")
-    selector.add_argument("--all", action="store_true", help="Run all recipe-local skill test sets.")
     selector.add_argument("--init-manifest", action="store_true", help="Create or sync the recipe skill manifest.")
     selector.add_argument(
         "--mark-not-applicable",
@@ -69,12 +68,10 @@ def main() -> int:
             print_summary([result])
             return 0 if result.passed else result.returncode
 
-        results = run_all_skills(recipe_dir, language=args.language)
-        print_summary(results)
-        return 0 if all(result.passed for result in results) else 1
     except SkillTestSpecError as exc:
         print(f"skill-test error: {exc}", file=sys.stderr)
         return 2
+    raise AssertionError("unreachable")
 
 
 def run_one_skill(
@@ -87,7 +84,7 @@ def run_one_skill(
     spec = skill_testing_util.find_recipe_skill_spec(recipe_dir, skill_id)
     language = language or skill_testing_util.detect_skill_language(spec.skill_id)
     print(f"[skill] {spec.skill_id} ({spec.recipe_name})")
-    _print_real_env_hint_if_needed(spec, language=language, all_skills=False, layer=layer)
+    _print_real_env_hint_if_needed(spec, language=language, layer=layer)
 
     required_layers = spec.requirements.required_layers()
     if layer is not None and layer not in required_layers:
@@ -128,35 +125,6 @@ def run_one_skill(
     return RunResult(name=result_name, passed=True, returncode=0)
 
 
-def run_all_skills(recipe_dir: Path, *, language: str | None = None) -> list[RunResult]:
-    specs = skill_testing_util.discover_recipe_skill_specs(recipe_dir)
-    if not specs:
-        raise SkillTestSpecError(f"Recipe '{recipe_dir.name}' does not define any recipe-local skill tests.")
-
-    if _cuda_unavailable() and any(spec.requirements.gpu_preferred for spec in specs):
-        command = skill_testing_util.get_default_skill_test_command(recipe_dir.name, language=language, skill_id=None)
-        print(
-            "[all-skills] GPU-preferred checks are defined for this recipe. "
-            "If local smoke tests fail due to environment limits, rerun in a real environment with:\n"
-            f"  {command}"
-        )
-
-    results: list[RunResult] = []
-    for spec in specs:
-        results.append(run_one_skill(recipe_dir, spec.skill_id, language=language))
-
-    all_skills_smoke = skill_testing_util.get_all_skills_smoke_test(recipe_dir)
-    if all_skills_smoke is not None:
-        print(f"[all-skills] {_format_repo_relative_path(all_skills_smoke)}")
-        returncode = _run_pytest((all_skills_smoke,))
-        results.append(RunResult(name="all-skills", passed=returncode == 0, returncode=returncode))
-        skill_testing_util.set_manifest_all_skills_status(recipe_dir, passed=returncode == 0)
-    else:
-        skill_testing_util.set_manifest_all_skills_status(recipe_dir, passed=all(result.passed for result in results))
-
-    return results
-
-
 def print_summary(results: list[RunResult]) -> None:
     print("\nSummary:")
     for result in results:
@@ -174,13 +142,13 @@ def _format_repo_relative_path(path: Path) -> str:
     return str(path.relative_to(skill_testing_util.find_repo_root(path)))
 
 
-def _print_real_env_hint_if_needed(spec, *, language: str | None, all_skills: bool, layer: str | None = None) -> None:
+def _print_real_env_hint_if_needed(spec, *, language: str | None, layer: str | None = None) -> None:
     if not spec.requirements.gpu_preferred:
         return
     if not _cuda_unavailable():
         return
 
-    command = skill_testing_util.get_real_env_command(spec, language=language, all_skills=all_skills, layer=layer)
+    command = skill_testing_util.get_real_env_command(spec, language=language, layer=layer)
     print(
         f"[skill] {spec.skill_id} declares gpu_preferred=true. "
         "If local runtime/smoke tests fail because this environment has no usable GPU, "
