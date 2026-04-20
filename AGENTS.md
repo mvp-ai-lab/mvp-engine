@@ -46,7 +46,8 @@ This repository contains the core training engine and utilities for vision and l
 
 ### Skill Test
 - When a task explicitly or implicitly applies a skill, the agent must treat that skill's validation and test requirements as mandatory completion criteria rather than optional guidance.
-- Skill-required validation must be executed using the exact workflow defined by the skill and the repository's skill-testing conventions, including recipe-local artifacts such as `skill_manifest.yaml`, `skill_tests/<skill-id>/test_spec.yaml`, and the required `structure` / `runtime` / `smoke` layers when the skill calls for them.
+- Before any skill-related validation work, read the `Recipe-Local Skill Tests` section in `skills/en/README.md` and follow that workflow before proceeding.
+- Skill-required validation must be executed using the exact workflow defined by the skill and the repository's skill-testing conventions, including recipe-local artifacts such as `skill_tests/skill_manifest.yaml`, `skill_tests/<skill-id>/test_spec.yaml`, and the required `structure` / `runtime` / `smoke` layers when the skill calls for them.
 - Ordinary unit tests, ad hoc `pytest` runs, or partial smoke checks do not substitute for skill validation unless the skill documentation explicitly allows that substitution.
 - A skill-driven task is not complete until the required skill validation has been run and passed, or the environment limitation has been identified precisely and reported together with the exact command the user should run in a real environment.
 - When skill validation fails, do not mark the work complete, do not manually override the manifest to a passing state, and do not omit the failing layer from the reported validation result.

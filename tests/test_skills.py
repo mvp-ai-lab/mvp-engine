@@ -17,7 +17,7 @@ class RunResult:
     returncode: int
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run recipe-local skill tests.")
     parser.add_argument(
         "--recipe",
@@ -38,7 +38,12 @@ def parse_args() -> argparse.Namespace:
         metavar="SKILL_ID",
         help="Mark one manifest skill as not applicable for this recipe.",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--layer",
+        choices=skill_testing_util.LAYER_ORDER,
+        help="Run only one validation layer for the selected skill.",
+    )
+    return parser.parse_args(argv)
 
 
 def main() -> int:
@@ -56,8 +61,11 @@ def main() -> int:
             print(f"marked {args.mark_not_applicable} as not_applicable in {recipe_dir.name}/{manifest_relative_path}")
             return 0
 
+        if args.layer and not args.skill:
+            raise SkillTestSpecError("--layer can only be used together with --skill.")
+
         if args.skill:
-            result = run_one_skill(recipe_dir, args.skill, language=args.language)
+            result = run_one_skill(recipe_dir, args.skill, language=args.language, layer=args.layer)
             print_summary([result])
             return 0 if result.passed else result.returncode
 
@@ -69,37 +77,55 @@ def main() -> int:
         return 2
 
 
-def run_one_skill(recipe_dir: Path, skill_id: str, *, language: str | None = None) -> RunResult:
+def run_one_skill(
+    recipe_dir: Path,
+    skill_id: str,
+    *,
+    language: str | None = None,
+    layer: str | None = None,
+) -> RunResult:
     spec = skill_testing_util.find_recipe_skill_spec(recipe_dir, skill_id)
     language = language or skill_testing_util.detect_skill_language(spec.skill_id)
-    skill_testing_util.set_manifest_skill_status(recipe_dir, spec.skill_id, status="applied", language=language)
     print(f"[skill] {spec.skill_id} ({spec.recipe_name})")
-    _print_real_env_hint_if_needed(spec, language=language, all_skills=False)
+    _print_real_env_hint_if_needed(spec, language=language, all_skills=False, layer=layer)
 
-    layer_results: dict[str, bool] = {}
-    for layer, paths in spec.required_pytest_paths().items():
+    required_layers = spec.requirements.required_layers()
+    if layer is not None and layer not in required_layers:
+        raise SkillTestSpecError(f"Skill '{spec.skill_id}' does not require the '{layer}' validation layer.")
+
+    requested_layers = (layer,) if layer is not None else required_layers
+    manifest = skill_testing_util.load_recipe_skill_manifest(recipe_dir)
+    entry = skill_testing_util.ensure_manifest_skill_entry(manifest, spec.skill_id)
+    layer_statuses = dict(entry["last_validated"])
+
+    for requested_layer in requested_layers:
+        paths = spec.pytest_paths_for_layer(requested_layer)
         relative_paths = ", ".join(_format_repo_relative_path(path) for path in paths)
-        print(f"  - {layer}: {relative_paths}")
+        print(f"  - {requested_layer}: {relative_paths}")
         returncode = _run_pytest(paths)
-        layer_results[layer] = returncode == 0
+        layer_statuses[requested_layer] = "passed" if returncode == 0 else "failed"
+        status = skill_testing_util.resolve_manifest_skill_status(
+            layer_statuses=layer_statuses,
+            required_layers=required_layers,
+        )
+        layer_results = {
+            layer_name: (layer_status == "passed")
+            for layer_name, layer_status in layer_statuses.items()
+            if layer_name in skill_testing_util.LAYER_ORDER and layer_status != "not_run"
+        }
+        skill_testing_util.set_manifest_skill_status(
+            recipe_dir,
+            spec.skill_id,
+            status=status,
+            language=language,
+            layer_results=layer_results,
+        )
         if returncode != 0:
-            skill_testing_util.set_manifest_skill_status(
-                recipe_dir,
-                spec.skill_id,
-                status="failed",
-                language=language,
-                layer_results=layer_results,
-            )
-            return RunResult(name=spec.skill_id, passed=False, returncode=returncode)
+            result_name = f"{spec.skill_id}:{requested_layer}" if layer is not None else spec.skill_id
+            return RunResult(name=result_name, passed=False, returncode=returncode)
 
-    skill_testing_util.set_manifest_skill_status(
-        recipe_dir,
-        spec.skill_id,
-        status="applied",
-        language=language,
-        layer_results=layer_results,
-    )
-    return RunResult(name=spec.skill_id, passed=True, returncode=0)
+    result_name = f"{spec.skill_id}:{layer}" if layer is not None else spec.skill_id
+    return RunResult(name=result_name, passed=True, returncode=0)
 
 
 def run_all_skills(recipe_dir: Path, *, language: str | None = None) -> list[RunResult]:
@@ -148,13 +174,13 @@ def _format_repo_relative_path(path: Path) -> str:
     return str(path.relative_to(skill_testing_util.find_repo_root(path)))
 
 
-def _print_real_env_hint_if_needed(spec, *, language: str | None, all_skills: bool) -> None:
+def _print_real_env_hint_if_needed(spec, *, language: str | None, all_skills: bool, layer: str | None = None) -> None:
     if not spec.requirements.gpu_preferred:
         return
     if not _cuda_unavailable():
         return
 
-    command = skill_testing_util.get_real_env_command(spec, language=language, all_skills=all_skills)
+    command = skill_testing_util.get_real_env_command(spec, language=language, all_skills=all_skills, layer=layer)
     print(
         f"[skill] {spec.skill_id} declares gpu_preferred=true. "
         "If local runtime/smoke tests fail because this environment has no usable GPU, "

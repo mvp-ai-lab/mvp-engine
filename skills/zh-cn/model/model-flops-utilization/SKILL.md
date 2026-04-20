@@ -294,8 +294,13 @@ logger.log(log_dict, step=step)
 这些测试必须走用户自己的 recipe / model 真实入口，不要换成绕开真实训练流的 toy model。
 
 当你在用户 recipe 上执行这个 skill 时，应默认自动补齐这些测试，不要等用户自己提出。
-如果因为 GPU 资源或执行权限限制而无法运行，直接把准确的 `python -m tests.test_skills` 命令
-以及所需附加启动命令返回给用户。
+验证应交给全新的 subagent 且 `fork_context=false`：先启动一个 subagent 运行
+`python -m tests.test_skills --recipe <recipe> --skill model-flops-utilization --layer structure`，
+只有它通过后，主 agent 才再启动新的 subagent 运行 `--layer runtime`；只有
+runtime 通过后，主 agent 才再启动新的 subagent 运行 `--layer smoke`。最后由
+主 agent 统一汇总三个层级的结果。如果 `test_smoke.py` 因 GPU、分布式启动条件
+或执行权限限制而无法运行，主 agent 直接把准确的 `python -m tests.test_skills`
+命令以及所需附加启动命令返回给用户。
 
 ## Output
 

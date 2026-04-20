@@ -120,9 +120,15 @@ recipe package, config, and engine entrypoints directly, with the smallest
 recipe-owned validation path that still exercises the scaffold landing points.
 
 When executing this skill for a user recipe, add these tests automatically. Do not
-require the user to spell out the test file list. If execution is blocked by GPU
-availability, distributed-launch constraints, or permissions, return the exact
-`python -m tests.test_skills` command and any required launcher command for the user.
+require the user to spell out the test file list. Run validation in fresh
+subagents with `fork_context=false`: first
+`python -m tests.test_skills --recipe <recipe> --skill new-recipe-template --layer structure`,
+then a new subagent for `--layer runtime` only after structure passes, and then a
+new subagent for `--layer smoke` only after runtime passes. The main agent should
+summarize all three layer results. If `test_smoke.py` is blocked by GPU
+availability, distributed-launch constraints, or permissions, the main agent
+should return the exact `python -m tests.test_skills` command and any required
+launcher command for the user.
 
 ## Output
 

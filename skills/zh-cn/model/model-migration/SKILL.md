@@ -79,8 +79,13 @@ diff -u SOURCE_MODEL.py CHECKPOINT_DIR/modeling_*.py
 - 当迁移要求严格一致时，使用 `torch.equal` 这类严格断言，而不是宽松比较。
 
 当你在用户 recipe 上执行这个 skill 时，应默认自动补齐这些测试，不要要求用户自己再描述测试布局。
-如果因为设备资源或执行权限限制而无法运行，直接把准确的 `python -m tests.test_skills` 命令
-以及环境相关的启动命令返回给用户。
+验证应交给全新的 subagent 且 `fork_context=false`：先启动一个 subagent 运行
+`python -m tests.test_skills --recipe <recipe> --skill model-migration --layer structure`，
+只有它通过后，主 agent 才再启动新的 subagent 运行 `--layer runtime`；只有
+runtime 通过后，主 agent 才再启动新的 subagent 运行 `--layer smoke`。最后由
+主 agent 统一汇总三个层级的结果。如果 `test_smoke.py` 因设备资源、分布式启动条件
+或执行权限限制而无法运行，主 agent 直接把准确的 `python -m tests.test_skills`
+命令以及环境相关的启动命令返回给用户。
 
 如果环境允许，分别在 CPU/GPU 与 NPU 设备上运行测试，验证实现间一致性。
 

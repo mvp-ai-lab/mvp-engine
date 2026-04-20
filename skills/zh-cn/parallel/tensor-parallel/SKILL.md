@@ -162,7 +162,12 @@ parallel:
 真实入口，只把配置和 batch 缩到该 recipe 能接受的最小规模。
 
 当你在用户 recipe 上执行这个 skill 时，应默认自动补齐这些测试，不要要求用户自己列出测试文件。
-如果因为 GPU、分布式启动条件或执行权限受限而无法运行，直接把准确的 `python -m tests.test_skills`
+验证应交给全新的 subagent 且 `fork_context=false`：先启动一个 subagent 运行
+`python -m tests.test_skills --recipe <recipe> --skill tensor-parallel --layer structure`，
+只有它通过后，主 agent 才再启动新的 subagent 运行 `--layer runtime`；只有
+runtime 通过后，主 agent 才再启动新的 subagent 运行 `--layer smoke`。最后由
+主 agent 统一汇总三个层级的结果。如果 `test_smoke.py` 因 GPU、分布式启动条件
+或执行权限受限而无法运行，主 agent 直接把准确的 `python -m tests.test_skills`
 命令以及所需 launcher 命令返回给用户。
 
 ## Output

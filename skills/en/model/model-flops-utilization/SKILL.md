@@ -298,9 +298,15 @@ Use the user's real recipe/model entrypoints. Do not validate MFU by swapping in
 unrelated toy model that bypasses the recipe's actual training flow.
 
 When executing this skill for a user recipe, add these tests automatically. Do not
-require the user to ask for test scaffolding separately. If execution is blocked by
-GPU availability or permissions, return the exact `python -m tests.test_skills` command and
-any required launch command instead.
+require the user to ask for test scaffolding separately. Run validation in fresh
+subagents with `fork_context=false`: first
+`python -m tests.test_skills --recipe <recipe> --skill model-flops-utilization --layer structure`,
+then a new subagent for `--layer runtime` only after structure passes, and then a
+new subagent for `--layer smoke` only after runtime passes. The main agent should
+summarize all three layer results. If `test_smoke.py` is blocked by GPU
+availability, distributed-launch requirements, or permissions, the main agent
+should return the exact `python -m tests.test_skills` command and any required
+launch command instead.
 
 ## Output
 

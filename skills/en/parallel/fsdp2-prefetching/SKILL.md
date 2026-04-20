@@ -148,9 +148,15 @@ These tests must use the user's recipe/model landing points. Do not replace them
 with an unrelated tiny model just to make the hook easier to test.
 
 When executing this skill for a user recipe, add these tests automatically. Do not
-wait for the user to request them. If execution is blocked by GPU availability,
-distributed-launch constraints, or permissions, return the exact
-`python -m tests.test_skills` command and any required launcher command for the user.
+wait for the user to request them. Run validation in fresh subagents with
+`fork_context=false`: first
+`python -m tests.test_skills --recipe <recipe> --skill fsdp2-prefetching --layer structure`,
+then a new subagent for `--layer runtime` only after structure passes, and then a
+new subagent for `--layer smoke` only after runtime passes. The main agent should
+summarize all three layer results. If `test_smoke.py` is blocked by GPU
+availability, distributed-launch constraints, or permissions, the main agent
+should return the exact `python -m tests.test_skills` command and any required
+launcher command for the user.
 
 ## Output
 

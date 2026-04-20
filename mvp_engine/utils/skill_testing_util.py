@@ -365,9 +365,18 @@ def mark_manifest_skill_not_applicable(
 
 
 def get_default_skill_test_command(
-    recipe_name: str, *, skill_id: str | None = None, language: str | None = None
+    recipe_name: str,
+    *,
+    skill_id: str | None = None,
+    language: str | None = None,
+    layer: str | None = None,
 ) -> str:
     """Build the default CLI command for recipe-local skill tests."""
+    if layer is not None and layer not in LAYER_ORDER:
+        raise SkillTestSpecError(f"Unknown test layer '{layer}'.")
+    if layer is not None and skill_id is None:
+        raise SkillTestSpecError("A layer-specific skill test command requires an explicit skill_id.")
+
     parts = ["python", "-m", "tests.test_skills", "--recipe", recipe_name]
     if language:
         parts.extend(["--language", language])
@@ -375,11 +384,22 @@ def get_default_skill_test_command(
         parts.append("--all")
     else:
         parts.extend(["--skill", skill_id])
+        if layer is not None:
+            parts.extend(["--layer", layer])
     return " ".join(parts)
 
 
-def get_real_env_command(spec: RecipeSkillTestSpec, *, language: str | None = None, all_skills: bool = False) -> str:
+def get_real_env_command(
+    spec: RecipeSkillTestSpec,
+    *,
+    language: str | None = None,
+    all_skills: bool = False,
+    layer: str | None = None,
+) -> str:
     """Resolve the best available real-environment command for a spec."""
+    if layer is not None and all_skills:
+        raise SkillTestSpecError("Layer-specific real environment commands are only supported for a single skill.")
+
     command_key = "all" if all_skills else "skill"
     command = spec.real_env_commands.get(command_key)
     if command:
@@ -388,7 +408,17 @@ def get_real_env_command(spec: RecipeSkillTestSpec, *, language: str | None = No
         spec.recipe_name,
         skill_id=None if all_skills else spec.skill_id,
         language=language,
+        layer=layer,
     )
+
+
+def resolve_manifest_skill_status(*, layer_statuses: dict[str, str], required_layers: tuple[str, ...]) -> str:
+    """Derive the manifest skill status from per-layer validation states."""
+    if any(layer_statuses.get(layer) == "failed" for layer in required_layers):
+        return "failed"
+    if all(layer_statuses.get(layer) == "passed" for layer in required_layers):
+        return "applied"
+    return "pending"
 
 
 def build_real_env_required_message(*, command: str, reason: str) -> str:

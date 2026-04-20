@@ -95,12 +95,11 @@ Use this layout:
 recipes/<recipe>/
 └── skill_tests/
     ├── skill_manifest.yaml
-    ├── <skill-id>/
-    │   ├── test_spec.yaml
-    │   ├── test_structure.py
-    │   ├── test_runtime.py
-    │   └── test_smoke.py
-    └── test_all_skills.py
+    └── <skill-id>/
+        ├── test_spec.yaml
+        ├── test_structure.py
+        ├── test_runtime.py
+        └── test_smoke.py
 ```
 
 - `skill_tests/skill_manifest.yaml` tracks recipe-relevant training skills with statuses such as
@@ -115,14 +114,21 @@ recipes/<recipe>/
 - `test_smoke.py` should cover one real step: forward, loss, backward, optimizer
   step, logger write, and checkpoint noop or temporary save.
 - Run them with `python -m tests.test_skills --recipe <recipe> --skill <skill-id>`.
+- When validation is delegated, the main agent should spawn a fresh subagent with
+  `fork_context=false` for `--layer structure`, wait for it to pass, then spawn a
+  new subagent for `--layer runtime`, and only then a new subagent for
+  `--layer smoke`.
 - The user should not need to ask for these tests explicitly. When an agent applies
   a skill to a user recipe, it should also add the matching recipe-local tests and
   try to run them by default.
 - The agent should also initialize or update `skill_tests/skill_manifest.yaml` automatically,
   and leave a skill as `applied` once its recipe-local tests succeed.
-- If running the tests needs GPU resources or higher execution permissions and those
-  are not currently available, the agent should report the exact command for the user
-  instead of asking the user to design the test flow.
+- The main agent should summarize the `structure` / `runtime` / `smoke` outcomes
+  after those subagents finish.
+- If `test_smoke.py` needs GPU resources, distributed launch conditions, or higher
+  execution permissions and those are not currently available, the main agent
+  should report the exact command for the user instead of asking the user to
+  design the test flow.
 - If a recipe-local test really requires a real GPU or distributed environment, it
   should fail with an actionable command for the user to run in that environment,
   not `skip`.

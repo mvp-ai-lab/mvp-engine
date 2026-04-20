@@ -103,9 +103,15 @@ Use the user's real recipe/model entrypoints with a minimal recipe-owned config
 or batch. Do not substitute an unrelated tiny model for compile validation.
 
 When executing this skill for a user recipe, add these tests automatically. Do not
-wait for the user to request test scaffolding separately. If execution is blocked by
-GPU availability or permissions, return the exact `python -m tests.test_skills` command and
-any required launch command instead.
+wait for the user to request test scaffolding separately. Run validation in fresh
+subagents with `fork_context=false`: first
+`python -m tests.test_skills --recipe <recipe> --skill model-compile --layer structure`,
+then a new subagent for `--layer runtime` only after structure passes, and then a
+new subagent for `--layer smoke` only after runtime passes. The main agent should
+summarize all three layer results. If `test_smoke.py` is blocked by GPU,
+distributed-launch requirements, or execution permissions, the main agent should
+return the exact `python -m tests.test_skills` command and any required launch
+command instead.
 
 ## Validation
 

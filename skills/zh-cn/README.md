@@ -96,12 +96,11 @@ Agent 会按 skill 工作流生成适配代码和测试。
 recipes/<recipe>/
 └── skill_tests/
     ├── skill_manifest.yaml
-    ├── <skill-id>/
-    │   ├── test_spec.yaml
-    │   ├── test_structure.py
-    │   ├── test_runtime.py
-    │   └── test_smoke.py
-    └── test_all_skills.py
+    └── <skill-id>/
+        ├── test_spec.yaml
+        ├── test_structure.py
+        ├── test_runtime.py
+        └── test_smoke.py
 ```
 
 - `skill_tests/skill_manifest.yaml` 用来记录该 recipe 相关 skill 的状态，例如 `pending`、
@@ -116,12 +115,17 @@ recipes/<recipe>/
 - `test_smoke.py` 至少应覆盖 1 个真实 step：forward、loss、backward、optimizer step、
   logger write，以及 checkpoint noop 或临时保存。
 - 统一入口：`python -m tests.test_skills --recipe <recipe> --skill <skill-id>`。
+- 如果要把验证委托给 subagent，主 agent 应按 `fork_context=false` 的方式依次启动
+  全新 subagent：先跑 `--layer structure`，通过后再启动新的 subagent 跑
+  `--layer runtime`，再通过后才启动新的 subagent 跑 `--layer smoke`。
 - 用户不应该还要自己提出“补这些测试”。当 agent 在用户 recipe 上应用某个 skill 时，
   应默认同时补齐对应的 recipe-local 测试，并默认尝试执行。
 - agent 还应默认自动初始化或更新 `skill_tests/skill_manifest.yaml`，并且只有在该 skill
   的 recipe-local 测试通过后，状态才保持为 `applied`。
-- 如果执行测试需要 GPU 资源或更高执行权限，而当前环境不具备，agent 应直接把准确命令返回给用户，
-  而不是让用户自己设计测试流程。
+- 主 agent 应在这些 subagent 完成后统一汇总 `structure` / `runtime` / `smoke`
+  的结果。
+- 如果 `test_smoke.py` 需要 GPU 资源、分布式启动条件或更高执行权限，而当前环境不具备，
+  主 agent 应直接把准确命令返回给用户，而不是让用户自己设计测试流程。
 - 如果某个 recipe-local 测试确实需要真实 GPU 或分布式环境，不应 `skip`，而应直接失败并给出
   用户在真实环境里需要执行的准确命令。
 

@@ -81,9 +81,15 @@ Add:
 - Use strict comparisons such as `torch.equal` when the migration requires identity rather than loose closeness.
 
 When executing this skill for a user recipe, add these tests automatically. Do not
-require the user to ask for the test layout separately. If execution is blocked by
-device availability or permissions, return the exact `python -m tests.test_skills` command
-and any required environment-specific launch command.
+require the user to ask for the test layout separately. Run validation in fresh
+subagents with `fork_context=false`: first
+`python -m tests.test_skills --recipe <recipe> --skill model-migration --layer structure`,
+then a new subagent for `--layer runtime` only after structure passes, and then a
+new subagent for `--layer smoke` only after runtime passes. The main agent should
+summarize all three layer results. If `test_smoke.py` is blocked by device
+availability, distributed-launch requirements, or permissions, the main agent
+should return the exact `python -m tests.test_skills` command and any required
+environment-specific launch command.
 
 If the environment allows, run tests on both CPU/GPU and NPU devices to validate parity across implementations.
 
