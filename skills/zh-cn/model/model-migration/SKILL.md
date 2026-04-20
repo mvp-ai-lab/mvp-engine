@@ -79,7 +79,9 @@ diff -u SOURCE_MODEL.py CHECKPOINT_DIR/modeling_*.py
 - 当迁移要求严格一致时，使用 `torch.equal` 这类严格断言，而不是宽松比较。
 
 当你在用户 recipe 上执行这个 skill 时，应默认自动补齐这些测试，不要要求用户自己再描述测试布局。
-验证应交给全新的 subagent 且 `fork_context=false`：先启动一个 subagent 运行
+验证必须且只能交给全新的 subagent，并使用 `fork_context=false`。禁止主 agent
+在本地终端、后台终端会话或其他任何非 subagent shell fallback 中直接运行这些
+`python -m tests.test_skills` 命令。先启动一个 subagent 运行
 `python -m tests.test_skills --recipe <recipe> --skill model-migration --layer structure`，
 只有它通过后，主 agent 才再启动新的 subagent 运行 `--layer runtime`；只有
 runtime 通过后，主 agent 才再启动新的 subagent 运行 `--layer smoke`。最后由
@@ -118,7 +120,7 @@ runtime 通过后，主 agent 才再启动新的 subagent 运行 `--layer smoke`
 ## Useful Commands
 
 ```bash
-# 运行 recipe 内部测试
+# 在全新 subagent 中运行 recipe 内部测试
 python -m tests.test_skills --recipe <recipe> --skill model-migration
 
 # lint 迁移相关文件

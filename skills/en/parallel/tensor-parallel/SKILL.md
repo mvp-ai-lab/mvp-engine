@@ -180,8 +180,10 @@ the user's real recipe/model entrypoint with the smallest recipe-owned config th
 still exercises the TP landing points.
 
 When executing this skill for a user recipe, add these tests automatically. Do not
-require the user to spell out the test file list. Run validation in fresh
-subagents with `fork_context=false`: first
+require the user to spell out the test file list. Run validation only in fresh
+subagents with `fork_context=false`. Do not run these `python -m tests.test_skills`
+commands from the main agent's local terminal, background terminal sessions, or
+any other non-subagent shell fallback. First run
 `python -m tests.test_skills --recipe <recipe> --skill tensor-parallel --layer structure`,
 then a new subagent for `--layer runtime` only after structure passes, and then a
 new subagent for `--layer smoke` only after runtime passes. The main agent should

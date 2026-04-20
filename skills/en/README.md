@@ -114,10 +114,13 @@ recipes/<recipe>/
 - `test_smoke.py` should cover one real step: forward, loss, backward, optimizer
   step, logger write, and checkpoint noop or temporary save.
 - Run them with `python -m tests.test_skills --recipe <recipe> --skill <skill-id>`.
-- When validation is delegated, the main agent should spawn a fresh subagent with
-  `fork_context=false` for `--layer structure`, wait for it to pass, then spawn a
-  new subagent for `--layer runtime`, and only then a new subagent for
-  `--layer smoke`.
+- Recipe-local skill validation must run only in fresh subagents with
+  `fork_context=false`. Do not run `python -m tests.test_skills ...` from the
+  main agent's local terminal, background terminal sessions, or any other
+  non-subagent shell fallback.
+- Run `--layer structure` in one fresh subagent, wait for it to pass, then run
+  `--layer runtime` in a new fresh subagent, and only then run `--layer smoke`
+  in another new fresh subagent.
 - The user should not need to ask for these tests explicitly. When an agent applies
   a skill to a user recipe, it should also add the matching recipe-local tests and
   try to run them by default.

@@ -81,8 +81,10 @@ Add:
 - Use strict comparisons such as `torch.equal` when the migration requires identity rather than loose closeness.
 
 When executing this skill for a user recipe, add these tests automatically. Do not
-require the user to ask for the test layout separately. Run validation in fresh
-subagents with `fork_context=false`: first
+require the user to ask for the test layout separately. Run validation only in
+fresh subagents with `fork_context=false`. Do not run these
+`python -m tests.test_skills` commands from the main agent's local terminal,
+background terminal sessions, or any other non-subagent shell fallback. First run
 `python -m tests.test_skills --recipe <recipe> --skill model-migration --layer structure`,
 then a new subagent for `--layer runtime` only after structure passes, and then a
 new subagent for `--layer smoke` only after runtime passes. The main agent should
@@ -122,7 +124,7 @@ If the environment allows, run tests on both CPU/GPU and NPU devices to validate
 ## Useful Commands
 
 ```bash
-# run recipe-local tests
+# run recipe-local tests in a fresh subagent
 python -m tests.test_skills --recipe <recipe> --skill model-migration
 
 # lint migration files

@@ -148,8 +148,10 @@ These tests must use the user's recipe/model landing points. Do not replace them
 with an unrelated tiny model just to make the hook easier to test.
 
 When executing this skill for a user recipe, add these tests automatically. Do not
-wait for the user to request them. Run validation in fresh subagents with
-`fork_context=false`: first
+wait for the user to request them. Run validation only in fresh subagents with
+`fork_context=false`. Do not run these `python -m tests.test_skills` commands
+from the main agent's local terminal, background terminal sessions, or any
+other non-subagent shell fallback. First run
 `python -m tests.test_skills --recipe <recipe> --skill fsdp2-prefetching --layer structure`,
 then a new subagent for `--layer runtime` only after structure passes, and then a
 new subagent for `--layer smoke` only after runtime passes. The main agent should

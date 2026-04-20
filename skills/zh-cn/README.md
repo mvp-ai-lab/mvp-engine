@@ -115,9 +115,12 @@ recipes/<recipe>/
 - `test_smoke.py` 至少应覆盖 1 个真实 step：forward、loss、backward、optimizer step、
   logger write，以及 checkpoint noop 或临时保存。
 - 统一入口：`python -m tests.test_skills --recipe <recipe> --skill <skill-id>`。
-- 如果要把验证委托给 subagent，主 agent 应按 `fork_context=false` 的方式依次启动
-  全新 subagent：先跑 `--layer structure`，通过后再启动新的 subagent 跑
-  `--layer runtime`，再通过后才启动新的 subagent 跑 `--layer smoke`。
+- recipe-local skill 验证必须且只能交给全新的 subagent，并且使用
+  `fork_context=false`。禁止主 agent 在本地终端、后台终端会话或其他任何
+  非 subagent shell fallback 中直接运行 `python -m tests.test_skills ...`。
+- 执行顺序必须是：先在一个全新 subagent 中跑 `--layer structure`，通过后再在
+  另一个全新 subagent 中跑 `--layer runtime`，最后再在第三个全新 subagent 中跑
+  `--layer smoke`。
 - 用户不应该还要自己提出“补这些测试”。当 agent 在用户 recipe 上应用某个 skill 时，
   应默认同时补齐对应的 recipe-local 测试，并默认尝试执行。
 - agent 还应默认自动初始化或更新 `skill_tests/skill_manifest.yaml`，并且只有在该 skill
