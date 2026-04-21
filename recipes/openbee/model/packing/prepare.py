@@ -19,7 +19,7 @@ def prepare_packed_model_inputs(
     """Convert packed batch metadata into model-ready attention inputs.
 
     Pops ``pack_segment_ids`` from the batch and replaces it with:
-    - ``position_ids``: per-segment-reset RoPE positions (always)
+    - ``position_ids``: cumulative RoPE positions across packed segments (always)
     - ``attention_mask``: segment-id tensor for FA2, or a 4D additive mask for other backends
 
     If ``pack_segment_ids`` is absent the batch is returned unchanged.

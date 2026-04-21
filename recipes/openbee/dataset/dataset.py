@@ -36,6 +36,8 @@ ROLE_MAP = {
 THOUGHT_PREFIX = "<think>\n"
 THOUGHT_SUFFIX = "\n</think>\n\n"
 THOUGHT_PATTERN = re.compile(f"{re.escape(THOUGHT_PREFIX)}(.*?){re.escape(THOUGHT_SUFFIX)}", re.DOTALL)
+THOUGHT_MARKERS = (THOUGHT_PREFIX.strip(), THOUGHT_SUFFIX.strip())
+MULTIMODAL_PLACEHOLDER = "<|openbee_multimodal_placeholder|>"
 
 
 def resolve_cache_dir(train_path: str, configured_cache_dir: str | None) -> Path:
@@ -203,6 +205,132 @@ def process_message(
     return {"role": role, "content": blocks}
 
 
+def add_thought(content: str = "") -> str:
+    """Match LF ReasoningTemplate.add_thought for Qwen3-VL thought words."""
+    return f"{THOUGHT_PREFIX}{THOUGHT_SUFFIX}{content}"
+
+
+def remove_thought(content: str) -> str:
+    """Match LF ReasoningTemplate.remove_thought semantics."""
+    return THOUGHT_PATTERN.sub("", content).lstrip("\n")
+
+
+def extract_thought(content: str) -> str | None:
+    """Match LF ReasoningTemplate.extract_thought semantics."""
+    match = THOUGHT_PATTERN.search(content)
+    if match is None:
+        return None
+    return match.group(1)
+
+
+def is_thought_empty(content: str) -> bool:
+    """Match LF ReasoningTemplate.is_thought_empty semantics."""
+    thought = extract_thought(content)
+    if thought is None:
+        return True
+    return not thought.strip()
+
+
+def _flatten_message_content(content: Any) -> tuple[str, list[dict[str, Any]], bool]:
+    """Flatten multimodal message content into text plus ordered non-text blocks."""
+    if isinstance(content, str):
+        return content, [], False
+    if not isinstance(content, list):
+        return "", [], False
+
+    flat_parts: list[str] = []
+    non_text_blocks: list[dict[str, Any]] = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str):
+            flat_parts.append(block["text"])
+        elif isinstance(block, dict):
+            flat_parts.append(MULTIMODAL_PLACEHOLDER)
+            non_text_blocks.append(block)
+    return "".join(flat_parts), non_text_blocks, True
+
+
+def _rebuild_message_content(
+    flat_text: str,
+    non_text_blocks: list[dict[str, Any]],
+    *,
+    preserve_block_content: bool,
+) -> Any:
+    """Rebuild multimodal message content from flattened text plus non-text blocks."""
+    if not preserve_block_content:
+        return flat_text
+
+    if not non_text_blocks:
+        if not flat_text:
+            return []
+        return [{"type": "text", "text": flat_text}]
+
+    parts = flat_text.split(MULTIMODAL_PLACEHOLDER)
+    rebuilt: list[dict[str, Any]] = []
+    for index, part in enumerate(parts):
+        if part:
+            rebuilt.append({"type": "text", "text": part})
+        if index < len(non_text_blocks):
+            rebuilt.append(non_text_blocks[index])
+    return rebuilt
+
+
+def align_messages_for_thinking(
+    messages: list[dict[str, Any]],
+    *,
+    thinking_mode: bool | None | str,
+) -> tuple[list[dict[str, Any]], set[int]]:
+    """Apply LF-private `enable_thinking` rewriting to assistant messages.
+
+    Returns:
+        A pair of:
+        - rewritten messages for tokenization
+        - assistant message indices whose leading empty thought block should be
+          excluded from supervision because LF would place it in the prompt.
+    """
+    rewritten_messages: list[dict[str, Any]] = []
+    assistant_skip_think_prefix: set[int] = set()
+
+    for message_index, message in enumerate(messages):
+        if message.get("role") != "assistant":
+            rewritten_messages.append(message)
+            continue
+
+        content_text, non_text_blocks, preserve_block_content = _flatten_message_content(message.get("content"))
+        modified_content = content_text
+        was_thinking_empty = False
+
+        if thinking_mode is False:
+            modified_content = remove_thought(content_text)
+        elif thinking_mode == "non-empty":
+            was_thinking_empty = is_thought_empty(content_text)
+            if was_thinking_empty:
+                modified_content = remove_thought(content_text)
+
+        has_modified_thought = all(marker in modified_content for marker in THOUGHT_MARKERS)
+        if not has_modified_thought:
+            if thinking_mode is None:
+                pass
+            elif thinking_mode is False:
+                modified_content = add_thought(modified_content)
+                assistant_skip_think_prefix.add(message_index)
+            elif thinking_mode == "non-empty":
+                if was_thinking_empty:
+                    modified_content = add_thought(modified_content)
+                    assistant_skip_think_prefix.add(message_index)
+            else:
+                modified_content = add_thought(modified_content)
+
+        rewritten_message = dict(message)
+        rewritten_message["content"] = _rebuild_message_content(
+            modified_content,
+            non_text_blocks,
+            preserve_block_content=preserve_block_content,
+        )
+        rewritten_messages.append(rewritten_message)
+
+    return rewritten_messages, assistant_skip_think_prefix
+
+
 def build_labels(
     apply_chat_template: Any,
     messages: list[dict[str, Any]],
@@ -211,7 +339,7 @@ def build_labels(
     *,
     max_length: int,
     ignore_index: int,
-    thinking_mode: bool | None | str = True,
+    assistant_skip_think_prefix: set[int] | None = None,
 ) -> torch.Tensor:
     """Build supervised labels for one tokenized conversation.
 
@@ -222,9 +350,8 @@ def build_labels(
         attention_mask: Attention mask for the full conversation.
         max_length: Maximum tokenized length after truncation.
         ignore_index: Label value used to mask tokens out of the loss.
-        thinking_mode: ``enable_thinking`` mode aligned with LF-private. ``False``
-            excludes every leading think block from supervision, ``"non-empty"``
-            excludes only empty think blocks, and ``True`` supervises them.
+        assistant_skip_think_prefix: Assistant message indices whose leading
+            empty thought block should be excluded from supervision.
 
     Returns:
         A label tensor where only assistant response tokens are supervised.
@@ -250,30 +377,6 @@ def build_labels(
     # Token IDs for the empty thinking block the model emits when not reasoning.
     # These match Qwen3-VL's tokenizer: <think> = 151667, \n\n = 271, </think> = 151668.
     _THINK_PREFIX_IDS = {151667, 271, 151668}
-
-    def _extract_text_content(message: dict[str, Any]) -> str:
-        content = message.get("content")
-        if isinstance(content, str):
-            return content
-        if not isinstance(content, list):
-            return ""
-
-        segments: list[str] = []
-        for block in content:
-            if isinstance(block, dict) and isinstance(block.get("text"), str):
-                segments.append(block["text"])
-        return "".join(segments)
-
-    def _should_skip_think_prefix(message: dict[str, Any]) -> bool:
-        if thinking_mode is False:
-            return True
-        if thinking_mode != "non-empty":
-            return False
-
-        match = THOUGHT_PATTERN.search(_extract_text_content(message))
-        if match is None:
-            return False
-        return not match.group(1).strip()
 
     labels = torch.full_like(input_ids, ignore_index)
     valid_length = int(attention_mask.sum().item())
@@ -304,7 +407,7 @@ def build_labels(
         # Optionally skip the leading <think>…</think> block from supervision.
         # Advance `start` past any consecutive think-prefix tokens so that only
         # the actual answer content contributes to the loss.
-        if _should_skip_think_prefix(message) and start < end:
+        if assistant_skip_think_prefix is not None and message_index in assistant_skip_think_prefix and start < end:
             pos = start
             while pos < end and input_ids[pos].item() in _THINK_PREFIX_IDS:
                 pos += 1
@@ -334,6 +437,7 @@ def process_sample(
         max_length: Maximum tokenized sequence length.
         image_placeholder: Placeholder token that marks image positions in text.
         ignore_index: Label value used to mask tokens out of the loss.
+        thinking_mode: ``enable_thinking`` mode aligned to LF-private.
 
     Returns:
         A processed sample containing token tensors and optional vision tensors.
@@ -371,6 +475,10 @@ def process_sample(
         # Rewrite each message into the processor's multimodal chat structure.
         image_iter = iter(resolved_images)
         rendered_messages = [process_message(msg, image_iter, image_placeholder=image_placeholder) for msg in messages]
+        rendered_messages, assistant_skip_think_prefix = align_messages_for_thinking(
+            rendered_messages,
+            thinking_mode=thinking_mode,
+        )
 
         # Catch mismatches between declared images and <image> placeholders early.
         unused = list(image_iter)
@@ -398,7 +506,7 @@ def process_sample(
             attention_mask,
             max_length=max_length,
             ignore_index=ignore_index,
-            thinking_mode=thinking_mode,
+            assistant_skip_think_prefix=assistant_skip_think_prefix,
         )
         if not torch.any(labels != ignore_index):
             raise ValueError("has no supervised assistant tokens after tokenization/truncation.")
@@ -428,13 +536,14 @@ def lightweight_process_sample(
     max_length: int,
     image_placeholder: str = IMAGE_PLACEHOLDER,
     ignore_index: int = -100,
+    thinking_mode: bool | None | str = True,
 ) -> ModelInputs:
     """Build a fake sample whose token length matches the real multimodal prompt.
 
     This lightweight path is intended for pre-training accounting such as
     estimating packed sample counts before the real training preprocess runs.
     It skips vision tensor creation and only preserves the token-length
-    behaviour of ``process_sample``.
+    behaviour of ``process_sample``, including LF-aligned thinking rewrites.
     """
     if not isinstance(sample, dict):
         raise ValueError(f"Expected a dictionary sample, got {type(sample).__name__}.")
@@ -503,6 +612,10 @@ def lightweight_process_sample(
         image_sizes = [resolve_image_size(image) for image in images]
         image_iter = iter([f"__openbee_fake_image_{index}__" for index in range(len(image_sizes))])
         rendered_messages = [process_message(msg, image_iter, image_placeholder=image_placeholder) for msg in messages]
+        rendered_messages, _ = align_messages_for_thinking(
+            rendered_messages,
+            thinking_mode=thinking_mode,
+        )
 
         unused = list(image_iter)
         if unused:
@@ -594,7 +707,7 @@ def build_dataset(
         "processor": processor,
         "max_length": int(config.data.max_seq_len),
     }
-    if process_fn is process_sample:
+    if process_fn in {process_sample, lightweight_process_sample}:
         process_kwargs["thinking_mode"] = getattr(config.data, "enable_thinking", True)
 
     dataset = Dataset.from_source(

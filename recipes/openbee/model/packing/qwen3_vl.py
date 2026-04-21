@@ -14,7 +14,7 @@ def build_qwen3_vl_packed_position_ids(
     image_grid_thw: torch.Tensor | None,
     model_config: Any,
 ) -> torch.Tensor:
-    """Build packed Qwen3-VL RoPE position ids with per-sample resets."""
+    """Build packed Qwen3-VL RoPE position ids with cumulative packed offsets."""
     if input_ids.ndim != 2:
         raise ValueError(f"Expected 2D input_ids, got shape {tuple(input_ids.shape)}.")
     if pack_segment_ids.shape != input_ids.shape:
@@ -31,6 +31,7 @@ def build_qwen3_vl_packed_position_ids(
     for batch_index in range(batch_size):
         segment_ids = pack_segment_ids[batch_index]
         sample_tokens = input_ids[batch_index]
+        next_position = 0
         for segment_id in segment_ids[segment_ids > 0].unique_consecutive().tolist():
             segment_mask = segment_ids == segment_id
             segment_tokens = sample_tokens[segment_mask]
@@ -49,11 +50,14 @@ def build_qwen3_vl_packed_position_ids(
                     raise ValueError("image_grid_thw does not match the number of packed image samples.")
                 image_cursor += segment_image_count
 
-            position_ids[:, batch_index, segment_mask] = _build_qwen3_vl_segment_position_ids(
+            segment_position_ids = _build_qwen3_vl_segment_position_ids(
                 input_ids=segment_tokens,
                 image_grid_thw=segment_grids,
                 model_config=model_config,
             )
+            segment_position_ids = segment_position_ids + next_position
+            position_ids[:, batch_index, segment_mask] = segment_position_ids
+            next_position = int(segment_position_ids.max().item()) + 1
 
     if image_grid_thw is not None and image_cursor != int(image_grid_thw.shape[0]):
         raise ValueError(
