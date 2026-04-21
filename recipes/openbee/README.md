@@ -85,6 +85,22 @@ The builder keeps the `Qwen/Qwen3-VL-8B-Instruct` model structure and visual
 tower weights, swaps in `Qwen/Qwen3-8B-Base` for `language_model.*` and
 `lm_head.*`, and randomly initializes `model.visual.merger.*`.
 
+## Shuffle Stage2 Parquet Shards
+
+This recipe also includes a stage2 parquet reshuffler that mixes samples from
+different source folders into new flat parquet shards:
+
+```bash
+python3 recipes/openbee/tools/shuffle_stage2_parquet.py \
+  --input-root data/openbee/stage2 \
+  --output-dir data/openbee/stage2_shuffled \
+  --num-workers 8
+```
+
+The tool plans work on parquet row groups, assigns mixed-source shard plans to
+multiple worker processes, and renders one global progress bar plus one bar per
+worker.
+
 ## Quick Start
 
 Run the alignment-stage config:

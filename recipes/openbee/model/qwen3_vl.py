@@ -10,6 +10,16 @@ import torch.nn.functional as F
 from transformers import AutoModelForImageTextToText
 from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLCausalLMOutputWithPast
 
+try:
+    from liger_kernel.transformers import (
+        LigerCrossEntropyLoss as _LigerCrossEntropyLoss,
+    )
+
+    _HAS_LIGER_CE = True
+except Exception:
+    _LigerCrossEntropyLoss = None
+    _HAS_LIGER_CE = False
+
 # ---------------------------------------------------------------------------
 # Parameter-name prefixes for each logical sub-module
 # ---------------------------------------------------------------------------
@@ -52,18 +62,16 @@ def _shift_labels(labels: torch.Tensor, ignore_index: int = -100) -> torch.Tenso
 
 
 def _get_per_token_ce(ignore_index: int):
-    """Return a per-token CE callable, preferring liger when available."""
-    try:
-        from liger_kernel.transformers import LigerCrossEntropyLoss
+    """Return a per-token CE callable selected from the top-level liger flag."""
+    if _HAS_LIGER_CE:
+        return _LigerCrossEntropyLoss(reduction="none", ignore_index=ignore_index)
 
-        return LigerCrossEntropyLoss(reduction="none", ignore_index=ignore_index)
-    except ImportError:
-        return lambda logits, labels: F.cross_entropy(
-            logits,
-            labels,
-            ignore_index=ignore_index,
-            reduction="none",
-        )
+    return lambda logits, labels: F.cross_entropy(
+        logits,
+        labels,
+        ignore_index=ignore_index,
+        reduction="none",
+    )
 
 
 def apply_freeze_policy(
