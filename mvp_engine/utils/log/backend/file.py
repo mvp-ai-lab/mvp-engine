@@ -51,6 +51,7 @@ class FileBackend(Backend):
         metrics: Mapping[str, Union[float, str]],
         step: int,
         epoch: Optional[int] = None,
+        total_steps: Optional[int] = None,
     ) -> None:
         """Append aggregated metrics to the log file.
 
@@ -58,17 +59,20 @@ class FileBackend(Backend):
             metrics: Mapping of metric names to aggregated values.
             step: Training step.
             epoch: Optional epoch index.
+            total_steps: Optional total number of training steps for progress display.
         """
         if not self.enable or self.log_file is None:
             return
         if len(metrics) == 0:
             return
-        eta = metrics.pop("eta", None)
+        metrics_dict = dict(metrics)
+        eta = metrics_dict.pop("eta", None)
         date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         eta_str = f" | ETA {eta}" if eta is not None else ""
         epoch_str = f"Epoch {epoch} - " if epoch is not None else ""
-        log_str = f"{date_str} | {self.id}{eta_str} | {epoch_str}Step {step:>8} || "
-        for key, value in metrics.items():
+        step_display = f"{step:>8}/{total_steps}" if total_steps is not None else f"{step:>8}"
+        log_str = f"{date_str} | {self.id}{eta_str} | {epoch_str}Step {step_display} || "
+        for key, value in metrics_dict.items():
             log_str += f"{key}: {value} | "
 
         self.log_file.write(log_str + "\n")

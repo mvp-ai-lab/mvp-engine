@@ -517,6 +517,7 @@ class OpenbeeEngine(Engine):
         logger.log_metrics(
             {**outputs["logs"], **other_logs},
             step=self.step,
+            total_steps=self.total_steps,
         )
 
         self.metric_accumulator.reset()
