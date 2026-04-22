@@ -65,14 +65,15 @@ class FileBackend(Backend):
             return
         if len(metrics) == 0:
             return
-        metrics_dict = dict(metrics)
-        eta = metrics_dict.pop("eta", None)
+        eta = metrics.get("eta")
         date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         eta_str = f" | ETA {eta}" if eta is not None else ""
         epoch_str = f"Epoch {epoch} - " if epoch is not None else ""
-        step_display = f"{step:>8}/{total_steps}" if total_steps is not None else f"{step:>8}"
-        log_str = f"{date_str} | {self.id}{eta_str} | {epoch_str}Step {step_display} || "
-        for key, value in metrics_dict.items():
+        step_str = f"{step:>8}/{total_steps}" if total_steps is not None else f"{step:>8}"
+        log_str = f"{date_str} | {self.id}{eta_str} | {epoch_str}Step {step_str} || "
+        for key, value in metrics.items():
+            if key == "eta":
+                continue
             log_str += f"{key}: {value} | "
 
         self.log_file.write(log_str + "\n")
