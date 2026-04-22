@@ -34,7 +34,7 @@ data:
 model:
   pretrained_model_name_or_path: "./pretrained/Qwen3-VL-8B-Base-woDS-stage2"
   attn_implementation: "flash_attention_2"
-  image_max_pixels: 12845056
+  image_max_pixels: 5062500
   gradient_checkpointing:
     enabled: true
     use_reentrant: false
