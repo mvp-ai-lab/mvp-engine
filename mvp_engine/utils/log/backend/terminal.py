@@ -94,9 +94,9 @@ class TerminalBackend(Backend):
         eta_str = f" | [bold]ETA[/bold] {eta}" if eta is not None else ""
         epoch_str = f"[bold]Epoch[/bold] {epoch} - " if epoch is not None else ""
 
-        step_display = f"{step:>8}/{total_steps}" if total_steps is not None else f"{step:>8}"
+        step_str = f"{step:>8}/{total_steps}" if total_steps is not None else f"{step:>8}"
         parts = [
-            f"[bold]{date_str}[/bold] | [bright_yellow]{self.id}[/bright_yellow]{eta_str} | {epoch_str}[bold]Step[/bold] {step_display} ||",
+            f"[bold]{date_str}[/bold] | [bright_yellow]{self.id}[/bright_yellow]{eta_str} | {epoch_str}[bold]Step[/bold] {step_str} ||",
         ]
 
         for key, value in metrics_dict.items():
