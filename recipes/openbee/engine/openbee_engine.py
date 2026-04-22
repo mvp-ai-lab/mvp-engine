@@ -48,6 +48,7 @@ class OpenbeeEngine(Engine):
         self.dp_world_size = get_data_parallel_world_size(self.device_mesh)
         disable_progress_bar()
         self.metric_accumulator = MetricAccumulator()
+        self.metric_accumulator.register("global_total_token_count", "last")
         self.metric_accumulator.register("global_token_count", "last")
         self.metric_accumulator.register("local_token_count", "last")
         self.metric_accumulator.register("local_loss_sum", "sum")
@@ -319,6 +320,10 @@ class OpenbeeEngine(Engine):
     def run_iter_train(self) -> None:
         """Run iteration-based training with window-prefetched token normalization."""
 
+        def _count_total_tokens(attention_mask: torch.Tensor) -> int:
+            """Count all non-padding tokens in one collated micro-batch."""
+            return int(attention_mask.sum().item())
+
         def _count_valid_loss_tokens(labels: torch.Tensor, *, ignore_index: int = -100) -> int:
             """Count the valid shifted labels used by causal-LM cross entropy."""
             shifted_labels = F.pad(labels, (0, 1), value=ignore_index)[..., 1:]
@@ -332,6 +337,7 @@ class OpenbeeEngine(Engine):
             if remaining_micro_steps <= 0:
                 remaining_micro_steps = gradient_accumulation_steps
 
+            local_total_token_count = 0
             local_token_count = 0
             micro_batches: list[ModelInputs] = []
             for _ in range(remaining_micro_steps):
@@ -343,24 +349,30 @@ class OpenbeeEngine(Engine):
                         data = next(train_iterator)
                     except StopIteration as exc:
                         raise RuntimeError("OpenBee train loader did not yield any batches.") from exc
+                local_total_token_count += _count_total_tokens(data["attention_mask"])
                 effective_token_num = _count_valid_loss_tokens(data["labels"])
                 data["effective_token_num"] = effective_token_num
                 local_token_count += effective_token_num
 
                 micro_batches.append(data)
 
-            token_count = torch.tensor(local_token_count, device=self.device, dtype=torch.long)
+            token_counts = torch.tensor(
+                [local_total_token_count, local_token_count],
+                device=self.device,
+                dtype=torch.long,
+            )
             if dist.is_available() and dist.is_initialized():
-                dist.all_reduce(token_count, op=dist.ReduceOp.SUM)
+                dist.all_reduce(token_counts, op=dist.ReduceOp.SUM)
 
             self.metric_accumulator.reset()
             self.metric_accumulator.update(
-                global_token_count=int(token_count.item()),
+                global_total_token_count=int(token_counts[0].item()),
+                global_token_count=int(token_counts[1].item()),
                 local_token_count=local_token_count,
             )
 
-            global_token_count = self.metric_accumulator.get("global_token_count")
-            if global_token_count is None or int(global_token_count) <= 0:
+            global_loss_token_count = self.metric_accumulator.get("global_token_count")
+            if global_loss_token_count is None or int(global_loss_token_count) <= 0:
                 raise ValueError("Accumulation window must contain at least one supervised token.")
 
             for data in micro_batches:
@@ -444,8 +456,11 @@ class OpenbeeEngine(Engine):
         assert "logs" in outputs, "The model output must contain 'logs' key."
 
         is_sync = self.accumulate_step()
-        global_token_count = self.metric_accumulator.get("global_token_count")
-        if global_token_count is None or int(global_token_count) <= 0:
+        global_total_token_count = self.metric_accumulator.get("global_total_token_count")
+        if global_total_token_count is None or int(global_total_token_count) <= 0:
+            raise ValueError("OpenBee accumulation window is missing a valid global total token count.")
+        global_loss_token_count = self.metric_accumulator.get("global_token_count")
+        if global_loss_token_count is None or int(global_loss_token_count) <= 0:
             raise ValueError("OpenBee accumulation window is missing a valid global token count.")
         local_token_count = self.metric_accumulator.get("local_token_count")
         if local_token_count is None or int(local_token_count) <= 0:
@@ -459,7 +474,7 @@ class OpenbeeEngine(Engine):
         # DDP/FSDP averages gradients across the DP/FSDP ranks, so each
         # micro-step uses the local summed loss with the globally reduced token
         # denominator and compensates by the real DP world size.
-        loss = outputs["loss"].sum() / int(global_token_count)
+        loss = outputs["loss"].sum() / int(global_loss_token_count)
         if self.dp_world_size > 1:
             loss = loss * float(self.dp_world_size)
 
@@ -499,7 +514,9 @@ class OpenbeeEngine(Engine):
         other_logs = {
             "eta": self.timer.eta_string,
             "perf/batch_time": self.timer.batch_time,
-            "perf/toks_per_sec": int(global_token_count) / self.timer.batch_time,
+            "perf/toks_per_sec": int(global_loss_token_count) / self.timer.batch_time,
+            "tokens/global_total": int(global_total_token_count),
+            "tokens/global_loss": int(global_loss_token_count),
         }
         other_logs.update(
             build_mfu_log(
@@ -513,7 +530,7 @@ class OpenbeeEngine(Engine):
         for i, lr in enumerate(step_lrs):
             other_logs[f"lr/group_{i}"] = lr
 
-        outputs["logs"]["train/loss"] = float(global_loss_sum / int(global_token_count))
+        outputs["logs"]["train/loss"] = float(global_loss_sum / int(global_loss_token_count))
         logger.log_metrics(
             {**outputs["logs"], **other_logs},
             step=self.step,
