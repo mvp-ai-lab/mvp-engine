@@ -1,13 +1,16 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./assets/logo-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="./assets/logo-light.png">
-    <img alt="MVP Engine" src="./assets/logo-dark.png">
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/banner.png">
+    <source media="(prefers-color-scheme: light)" srcset="./assets/banner.png">
+    <img alt="MVP Engine" src="./assets/banner.png">
   </picture>
 </p>
 
 <p align="center">
-  <strong>The Next-Generation Framework for Multimodal Model Training with Agents</strong>
+  <h1 align="center">MVP Engine</h1>
+  <p align="center" style="font-weight: bold;">
+    The Next-Generation Framework for Multimodal Model Training with Agents
+  </p>
   <p align="center">
     by MVP Lab.
   </p>
