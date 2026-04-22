@@ -45,3 +45,16 @@ checkpoint:
   keep_n: 5
   interval: 5000
   hf_enable: false
+
+auto_research:
+  enabled: false
+  endpoint: "http://127.0.0.1:8787"
+  cwd: null
+  session_id: null
+  transport: "codex_mvp_exec"
+  strict: false
+  auto_bind: true
+  progress_interval: 1
+  flush_timeout_seconds: 60.0
+  metadata: {}
+  lmms_eval: {}

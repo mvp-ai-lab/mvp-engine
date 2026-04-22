@@ -28,11 +28,13 @@ from mvp_engine.distributed.utils import (
     is_main_process,
 )
 from mvp_engine.utils.checkpointing.parallel_sl_util import (
+    HF_MODEL_DIRNAME,
     load_checkpoint,
     save_checkpoint,
 )
 from mvp_engine.utils.log import init_logger, logger
 from mvp_engine.utils.log.backend import FileBackend, TerminalBackend, WandbBackend
+from mvp_engine.utils.log.backend.auto_research import AutoResearchBackend
 from mvp_engine.utils.misc import Timer, get_device, get_git_info
 from mvp_engine.utils.training import (
     GradientScaler,
@@ -93,6 +95,7 @@ class Engine(ABC):
     _accumulate_step: int = 0  # internal counter for gradient accumulation
 
     timer: Timer  # timer for tracking per-batch time and ETA
+    auto_research: AutoResearchBackend | None
 
     def __init__(self, config: DictConfig):
         self.config = self.prepare_config(config)
@@ -100,6 +103,7 @@ class Engine(ABC):
         self.prepare_runtime_info()
         self.set_seed(self.config.seed, self.config.deterministic)
         self.prepare_logger()
+        self.prepare_auto_research()
 
     def prepare_config(self, config: DictConfig) -> BaseEngineConfig:
         """Convert an OmegaConf config into the validated Pydantic config model."""
@@ -245,6 +249,75 @@ class Engine(ABC):
             interval=self.config.log.interval,
         )
 
+    def prepare_auto_research(self) -> None:
+        if not is_main_process() or not self.config.auto_research.enabled:
+            self.auto_research = None
+            return
+        self.auto_research = AutoResearchBackend.from_engine_config(self.config)
+        self.auto_research.bind()
+
+    def _normalize_auto_research_metrics(self, metrics: dict[str, Any]) -> dict[str, Any]:
+        normalized: dict[str, Any] = {}
+        for key, value in metrics.items():
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                normalized[str(key)] = int(value)
+            elif isinstance(value, (int, float, str)):
+                normalized[str(key)] = value
+            else:
+                normalized[str(key)] = str(value)
+        if "step_time_s" not in normalized:
+            if "time/batch" in normalized:
+                normalized["step_time_s"] = normalized["time/batch"]
+            elif "perf/batch_time" in normalized:
+                normalized["step_time_s"] = normalized["perf/batch_time"]
+        normalized.setdefault("progress", self.progress)
+        return normalized
+
+    def emit_progress_updated(self, metrics: dict[str, Any]) -> None:
+        if self.auto_research is None:
+            return
+        interval = int(self.config.auto_research.progress_interval)
+        if self.step <= 0 or self.step % interval != 0:
+            return
+        self._emit_auto_research_event(
+            "progress_updated",
+            summary=f"training progress update at step {self.step}",
+            step=self.step,
+            epoch=self.epoch,
+            metrics=self._normalize_auto_research_metrics(metrics),
+            artifacts={"run_output_dir": str(self.project_dir)},
+        )
+
+    def _emit_auto_research_event(
+        self,
+        event_type: str,
+        *,
+        summary: str | None = None,
+        step: int | None = None,
+        epoch: int | None = None,
+        metrics: dict[str, Any] | None = None,
+        artifacts: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        if self.auto_research is None:
+            return
+        self.auto_research.emit_event(
+            event_type=event_type,
+            summary=summary,
+            step=step,
+            epoch=epoch,
+            metrics=metrics,
+            artifacts=artifacts,
+            metadata=metadata,
+        )
+
+    def _flush_auto_research(self) -> None:
+        if self.auto_research is None:
+            return
+        self.auto_research.flush(timeout_seconds=float(self.config.auto_research.flush_timeout_seconds))
+
     @abstractmethod
     def prepare_model(self) -> torch.nn.Module:
         """Build and return the model instance."""
@@ -310,6 +383,21 @@ class Engine(ABC):
 
         torch.distributed.barrier()
 
+        checkpoint_artifacts = {
+            "checkpoint_dir": str(cur_checkpoint_dir),
+            "run_output_dir": str(self.project_dir),
+        }
+        if self.config.checkpoint.hf_enable:
+            checkpoint_artifacts["checkpoint_hf_dir"] = str(cur_checkpoint_dir / HF_MODEL_DIRNAME)
+        self._emit_auto_research_event(
+            "checkpoint_saved",
+            summary=f"checkpoint saved at step {self.step}",
+            step=self.step,
+            epoch=self.epoch,
+            artifacts=checkpoint_artifacts,
+            metadata={"force": force},
+        )
+
     def load(
         self,
         ckpt_path: Union[str, PathLike],
@@ -374,9 +462,29 @@ class Engine(ABC):
 
     def train(self) -> None:
         """Execute complete training pipeline."""
-        self.before_train()
-        self.run_train()
-        self.after_train()
+        try:
+            self.before_train()
+            self._emit_auto_research_event(
+                "run_started",
+                summary="training started",
+                step=self.step,
+                epoch=self.epoch,
+                artifacts={"run_output_dir": str(self.project_dir)},
+                metadata={"total_steps": self.total_steps},
+            )
+            self.run_train()
+            self.after_train()
+        except Exception as exc:
+            self._emit_auto_research_event(
+                "run_failed",
+                summary=f"training failed: {type(exc).__name__}: {exc}",
+                step=self.step,
+                epoch=self.epoch,
+                artifacts={"run_output_dir": str(self.project_dir)},
+                metadata={"exception_type": type(exc).__name__},
+            )
+            self._flush_auto_research()
+            raise
 
     def before_train(self) -> None:
         """Initialize all components before training starts."""
@@ -558,6 +666,7 @@ class Engine(ABC):
                 {**outputs["logs"], **other_logs},
                 step=self.step,
             )
+            self.emit_progress_updated({**outputs["logs"], **other_logs})
 
             # Save checkpoint if needed
             self.save()
@@ -567,6 +676,14 @@ class Engine(ABC):
     def after_train(self) -> None:
         """Finalize training with checkpoint save, evaluation, and cleanup."""
         self.save(force=True and not self.config.dev_mode)
+        self._emit_auto_research_event(
+            "run_finished",
+            summary="training finished",
+            step=self.step,
+            epoch=self.epoch,
+            artifacts={"run_output_dir": str(self.project_dir)},
+        )
+        self._flush_auto_research()
         logger.info("Training finished!")
         logger.destroy()
 

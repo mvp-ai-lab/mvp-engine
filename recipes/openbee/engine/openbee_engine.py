@@ -461,6 +461,7 @@ class OpenbeeEngine(Engine):
             {**outputs["logs"], **other_logs},
             step=self.step,
         )
+        self.emit_progress_updated({**outputs["logs"], **other_logs})
 
         self.metric_accumulator.reset()
 

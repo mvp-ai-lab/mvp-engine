@@ -60,3 +60,11 @@ checkpoint:
   interval: 100
   keep_n: 2
   hf_enable: true
+auto_research:
+  enabled: true
+  endpoint: "http://127.0.0.1:8787"
+  auto_bind: true
+  progress_interval: 1
+  flush_timeout_seconds: 300.0
+  metadata: {}
+  lmms_eval: {}

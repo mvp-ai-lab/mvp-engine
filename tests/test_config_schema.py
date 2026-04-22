@@ -13,5 +13,7 @@ def test_default_config_validates_with_base_engine_schema():
 
     assert validated.engine == "Engine"
     assert validated.checkpoint.hf_enable is False
+    assert validated.auto_research.enabled is False
+    assert validated.auto_research.endpoint == "http://127.0.0.1:8787"
     assert validated.parallel.backend_kwargs.fsdp2.reshard_after_forward is True
     assert validated.parallel.backend_kwargs.ddp.model_dump() == {}

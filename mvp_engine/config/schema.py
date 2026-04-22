@@ -1,6 +1,6 @@
 """Pydantic v2 schemas for the mvp-engine configuration."""
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -107,7 +107,50 @@ class BaseLoopConfig(BaseModel):
     model_config = ConfigDict(frozen=False)
 
     policy: Literal["iter", "epoch"] = "iter"
-    total_steps: int = Field(10000, ge=1)
+    total_steps: int = Field(10000, ge=-1)
+
+
+class BaseAutoResearchConfig(BaseModel):
+    model_config = ConfigDict(frozen=False)
+
+    enabled: bool = False
+    endpoint: str = "http://127.0.0.1:8787"
+    cwd: str | None = None
+    session_id: str | None = None
+    transport: str = "codex_mvp_exec"
+    strict: bool = False
+    auto_bind: bool = True
+    progress_interval: int = Field(1, ge=1)
+    flush_timeout_seconds: float = Field(60.0, ge=0.0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    lmms_eval: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("endpoint", mode="before")
+    @classmethod
+    def validate_endpoint(cls, value: str) -> str:
+        normalized = str(value).strip()
+        if not normalized:
+            raise ValueError("`auto_research.endpoint` must not be empty.")
+        return normalized
+
+    @field_validator("cwd", "session_id", mode="before")
+    @classmethod
+    def validate_optional_strings(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        if not normalized:
+            raise ValueError("optional auto_research strings must not be empty when provided.")
+        return normalized
+
+    @field_validator("metadata", "lmms_eval", mode="before")
+    @classmethod
+    def validate_json_objects(cls, value: dict[str, Any] | None) -> dict[str, Any]:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise TypeError("auto_research metadata blocks must be JSON objects")
+        return value
 
 
 class BaseEngineConfig(BaseModel):
@@ -125,6 +168,7 @@ class BaseEngineConfig(BaseModel):
     optim: BaseOptimConfig = Field(default_factory=BaseOptimConfig)
     loop: BaseLoopConfig = Field(default_factory=BaseLoopConfig)
     checkpoint: BaseCheckpointConfig = Field(default_factory=BaseCheckpointConfig)
+    auto_research: BaseAutoResearchConfig = Field(default_factory=BaseAutoResearchConfig)
 
     @field_validator("init_from_checkpoint", mode="before")
     @classmethod

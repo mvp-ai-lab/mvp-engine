@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 from typing import Mapping, Optional, Union
@@ -7,9 +8,7 @@ try:
 
     _WANDB_AVAILABLE = True
 except ImportError:
-    from mvp_engine.utils.log import simple_info
-
-    simple_info("Wandb is not installed!")
+    logging.getLogger(__name__).warning("Wandb is not installed!")
     _WANDB_AVAILABLE = False
 
 from numbers import Number
