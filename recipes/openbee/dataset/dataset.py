@@ -564,6 +564,22 @@ def lightweight_process_sample(
     row_number = index_in_file + 1
     loc = f"{source_file}:{row_number}"
 
+    def parse_precomputed_image_size(size_entry: Any) -> tuple[int, int] | None:
+        """Parse one parquet ``img_size`` entry into ``(height, width)``."""
+        if isinstance(size_entry, dict):
+            width = size_entry.get("width")
+            height = size_entry.get("height")
+            if isinstance(width, int) and width > 0 and isinstance(height, int) and height > 0:
+                return height, width
+            return None
+
+        if isinstance(size_entry, (list, tuple)) and len(size_entry) >= 2:
+            width = size_entry[0]
+            height = size_entry[1]
+            if isinstance(width, int) and width > 0 and isinstance(height, int) and height > 0:
+                return height, width
+        return None
+
     def resolve_image_size(image: str | bytes | dict[str, Any]) -> tuple[int, int]:
         """Read only image metadata needed to recover multimodal token length."""
         if isinstance(image, dict):
@@ -604,12 +620,22 @@ def lightweight_process_sample(
         if messages is None:
             messages = sample.get("conversations")
         images = sample.get("images", [])
+        precomputed_image_sizes = sample.get("img_size")
         if not isinstance(messages, list) or not messages:
             raise ValueError("has invalid `messages`/`conversations`.")
         if not isinstance(images, list):
             raise ValueError("has invalid `images`.")
+        if precomputed_image_sizes is not None and not isinstance(precomputed_image_sizes, list):
+            precomputed_image_sizes = None
 
-        image_sizes = [resolve_image_size(image) for image in images]
+        image_sizes = []
+        for image_index, image in enumerate(images):
+            if isinstance(precomputed_image_sizes, list) and image_index < len(precomputed_image_sizes):
+                image_size = parse_precomputed_image_size(precomputed_image_sizes[image_index])
+                if image_size is not None:
+                    image_sizes.append(image_size)
+                    continue
+            image_sizes.append(resolve_image_size(image))
         image_iter = iter([f"__openbee_fake_image_{index}__" for index in range(len(image_sizes))])
         rendered_messages = [process_message(msg, image_iter, image_placeholder=image_placeholder) for msg in messages]
         rendered_messages, _ = align_messages_for_thinking(

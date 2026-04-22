@@ -1,11 +1,11 @@
 dev_mode: false
 engine: OpenbeeEngine
 
-seed: 42
+seed: 219
 deterministic: false
 
 project:
-  name: "openbee-qwen3vl_8b-sft"
+  name: "openbee"
   dir: "./outputs"
 
 log:
@@ -23,18 +23,18 @@ data:
   train_path: "./data/openbee/stage3/**/*.parquet"
   enable_thinking: "non-empty"
   cache: false
-  shuffle_buffer: 1000
+  shuffle_buffer: 4096
   packing: true
   packing_selection_strategy: "best_fit"
   packing_open_pack_limit: 8
   packing_buffer_size: 64
   max_seq_len: 16384
   batch_size: 1
-  num_workers: 12
+  num_workers: 4
 model:
   pretrained_model_name_or_path: "./pretrained/Qwen3-VL-8B-Base-woDS-stage2"
   attn_implementation: "flash_attention_2"
-  image_max_pixels: 1048576
+  image_max_pixels: 12845056
   gradient_checkpointing:
     enabled: true
     use_reentrant: false
@@ -43,15 +43,16 @@ model:
   freeze_vit: false
   freeze_merger: false
   freeze_llm: false
-  compile: true
+  compile: false
   compile_backend: "inductor"
   compile_mode: "default"
 optim:
   lr: 5.0e-5
   weight_decay: 0.0
-  gradient_accumulation_steps: 2
+  global_batch_size: 256
+  gradient_accumulation_steps: -1
   mixed_precision: "bf16"
-  warmup_ratio: 0.0
+  warmup_ratio: 0.002
   clip_grad_norm: 1.0
 
 loop:
