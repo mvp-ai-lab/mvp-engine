@@ -120,6 +120,13 @@ for layer in self.layers:
 - `test_smoke.py`：覆盖 1 个真实、recipe-owned 的 single step：forward、loss、
   backward、optimizer step、logger write，以及 checkpoint noop 或临时保存；
   还必须验证开启和关闭 checkpointing 时梯度一致。
+- 优先先把 `tests/test_structure_template.py`、
+  `tests/test_runtime_template.py`、`tests/test_smoke_template.py` 复制到
+  recipe-local skill 目录，再只改 import 区块和 checkpointing 相关断言。
+- 如果这个 skill 在目标 recipe 上的 smoke 路径需要分布式执行，复制出来的
+  `test_smoke.py` 应使用 `tests/test_smoke_template.py` 里的
+  `multi_rank_distributed_env(...)`，并根据 skill 要求或用户偏好，把运行模式
+  配置成 DDP、FSDP2 shard、Tensor Parallel 或其他需要的分布式模式。
 - `test_smoke.py` 必须走该 skill 的完整真实能力路径：真实 engine、真实 recipe
   入口，以及真实 checkpointing / logger / checkpoint 接线；禁止用 monkeypatch、
   fake checkpoint 函数、fake training step 或类似测试桩把要验证的能力短路掉。

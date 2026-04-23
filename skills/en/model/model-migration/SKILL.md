@@ -66,6 +66,15 @@ Add:
   backward, optimizer step, logger write, and checkpoint noop or temporary
   save; it must also verify source-vs-migrated parity and strict checkpoint-load
   coverage through the migrated recipe entrypoints.
+- Prefer copying `tests/test_structure_template.py`,
+  `tests/test_runtime_template.py`, and `tests/test_smoke_template.py` into the
+  recipe-local skill directory first, then only edit the import block and the
+  migration-specific assertions you need.
+- If this skill's smoke path needs distributed execution on the target recipe,
+  the copied `test_smoke.py` should use `multi_rank_distributed_env(...)` from
+  `tests/test_smoke_template.py` and configure the run as DDP, FSDP2 sharding,
+  tensor parallel, or another required mode based on the skill requirement or
+  user preference.
 - `test_smoke.py` must use the full real capability path for this skill: real
   migrated recipe entrypoints, real parity checks, and real checkpoint-load /
   logger / checkpoint wiring. Do not short-circuit it with monkeypatch-based

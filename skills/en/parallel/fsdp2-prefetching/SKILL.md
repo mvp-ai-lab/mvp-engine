@@ -134,6 +134,15 @@ Add recipe-local tests under `recipes/<recipe>/skill_tests/fsdp2-prefetching/`:
   backward, optimizer step, logger write, and checkpoint noop or temporary
   save; it must also verify the user's own recipe/model completes that step with
   FSDP2 prefetching applied.
+- Prefer copying `tests/test_structure_template.py`,
+  `tests/test_runtime_template.py`, and `tests/test_smoke_template.py` into the
+  recipe-local skill directory first, then only edit the import block and the
+  FSDP2-prefetch-specific assertions or launcher path that this skill needs.
+- Because this skill typically needs distributed smoke execution, the copied
+  `test_smoke.py` should use `multi_rank_distributed_env(...)` from
+  `tests/test_smoke_template.py` and configure the run for FSDP2 sharding,
+  optionally combined with DDP or tensor parallel if the skill path requires it
+  or the user explicitly prefers that layout.
 - `test_smoke.py` must use the full real capability path: real engine, real
   parallelize entry, real FSDP2 wrap / TP / launcher / logger / checkpoint.
   Do not short-circuit the parallel path with monkeypatch-based fake wrappers,

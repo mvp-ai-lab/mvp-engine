@@ -133,6 +133,7 @@ def print_summary(results: list[RunResult]) -> None:
 
 
 def _run_pytest(paths: tuple[Path, ...]) -> int:
+    """Run recipe-local skill validation as direct pytest file execution."""
     command = [sys.executable, "-m", "pytest", "-q", *[str(path) for path in paths]]
     completed = subprocess.run(command, cwd=skill_testing_util.find_repo_root(paths[0]), check=False)
     return completed.returncode

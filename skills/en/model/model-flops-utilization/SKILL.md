@@ -285,6 +285,15 @@ Add recipe-local tests under `recipes/<recipe>/skill_tests/model-flops-utilizati
   backward, optimizer step, logger write, and checkpoint noop or temporary
   save; it must also verify that the same step records `perf/mfu` without
   breaking training.
+- Prefer copying `tests/test_structure_template.py`,
+  `tests/test_runtime_template.py`, and `tests/test_smoke_template.py` into the
+  recipe-local skill directory first, then only edit the import block and the
+  MFU-specific assertions or launcher path that this skill needs.
+- If this skill's smoke path needs distributed execution on the target recipe,
+  the copied `test_smoke.py` should use `multi_rank_distributed_env(...)` from
+  `tests/test_smoke_template.py` and configure the run as DDP, FSDP2 sharding,
+  tensor parallel, or another required mode based on the skill requirement or
+  user preference.
 - `test_smoke.py` must use the full real capability path for this skill: real
   engine, real recipe entrypoints, and the real MFU / logger / checkpoint
   wiring under test. Do not short-circuit it with monkeypatch-based fake MFU

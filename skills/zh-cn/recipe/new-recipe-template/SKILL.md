@@ -100,6 +100,13 @@ uv run --with ruff ruff check recipes/<recipe_name>
   backward、optimizer step、logger write，以及 checkpoint noop 或临时保存；
   使用 scaffold 自己的入口，并把配置或 batch 缩到仍能证明 scaffold 接通正确
   的最小规模。
+- 优先先把 `tests/test_structure_template.py`、
+  `tests/test_runtime_template.py`、`tests/test_smoke_template.py` 复制到
+  recipe-local skill 目录，再只改 import 区块和最少量的 scaffold-specific 断言。
+- 如果这个 skill 的 smoke 路径需要分布式执行，复制出来的 `test_smoke.py`
+  应使用 `tests/test_smoke_template.py` 里的 `multi_rank_distributed_env(...)`，
+  并根据 skill 要求或用户偏好，把运行模式配置成 DDP、FSDP2 shard、Tensor
+  Parallel 或其他需要的分布式模式。
 - `test_smoke.py` 必须走该 skill 的完整真实能力路径：真实 scaffold recipe 入口、
   真实 engine 接线，以及真实 logger / checkpoint 行为；禁止用 monkeypatch、
   fake engine、fake training step 或类似测试桩把要验证的能力短路掉。

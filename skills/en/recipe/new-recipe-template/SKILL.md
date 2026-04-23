@@ -102,6 +102,15 @@ Add recipe-local tests under `recipes/<recipe>/skill_tests/new-recipe-template/`
   backward, optimizer step, logger write, and checkpoint noop or temporary
   save, using the scaffold's own entrypoints with the smallest recipe-owned
   config or batch that still proves the scaffold is connected correctly.
+- Prefer copying `tests/test_structure_template.py`,
+  `tests/test_runtime_template.py`, and `tests/test_smoke_template.py` into the
+  recipe-local skill directory first, then only edit the import block and the
+  minimum scaffold-specific assertions you need.
+- If this skill's smoke path needs distributed execution, the copied
+  `test_smoke.py` should use `multi_rank_distributed_env(...)` from
+  `tests/test_smoke_template.py` and configure the run as DDP, FSDP2 sharding,
+  tensor parallel, or another required mode based on the skill requirement or
+  user preference.
 - `test_smoke.py` must use the full real capability path for this skill: real
   scaffold recipe entrypoints, real engine wiring, and real logger / checkpoint
   behavior. Do not short-circuit it with monkeypatch-based fake engines, fake

@@ -114,6 +114,14 @@ recipes/<recipe>/
   engine successfully, but it does not need to run training.
 - `test_smoke.py` should cover one real step: forward, loss, backward, optimizer
   step, logger write, and checkpoint noop or temporary save.
+- Prefer starting from `tests/test_structure_template.py`,
+  `tests/test_runtime_template.py`, and `tests/test_smoke_template.py`. Copy them
+  into `recipes/<recipe>/skill_tests/<skill-id>/` and keep edits minimal,
+  usually just the import block plus skill-specific assertions.
+- If the skill needs distributed execution, the copied `test_smoke.py` should
+  use `multi_rank_distributed_env(...)` from `tests/test_smoke_template.py` and
+  configure the distributed mode to match the skill requirement or user
+  preference, such as DDP, FSDP2 sharding, or tensor parallel.
 - Run them with `python -m tests.test_skills --recipe <recipe> --skill <skill-id>`.
 - Recipe-local skill validation must run only in fresh subagents with
   `fork_context=false`. Do not run `python -m tests.test_skills ...` from the

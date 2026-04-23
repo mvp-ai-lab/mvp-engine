@@ -114,6 +114,14 @@ recipes/<recipe>/
   但这一层不直接进入训练。
 - `test_smoke.py` 至少应覆盖 1 个真实 step：forward、loss、backward、optimizer step、
   logger write，以及 checkpoint noop 或临时保存。
+- 优先从 `tests/test_structure_template.py`、`tests/test_runtime_template.py`、
+  `tests/test_smoke_template.py` 复制到
+  `recipes/<recipe>/skill_tests/<skill-id>/` 再开始修改。默认应尽量少改，通常只改
+  import 区块和 skill-specific 断言。
+- 如果当前 skill 需要分布式执行，复制出来的 `test_smoke.py` 应使用
+  `tests/test_smoke_template.py` 里的 `multi_rank_distributed_env(...)`，并根据
+  当前 skill 要求或用户偏好，把分布式模式配置成 DDP、FSDP2 shard、Tensor
+  Parallel 等。
 - 统一入口：`python -m tests.test_skills --recipe <recipe> --skill <skill-id>`。
 - recipe-local skill 验证必须且只能交给全新的 subagent，并且使用
   `fork_context=false`。禁止主 agent 在本地终端、后台终端会话或其他任何

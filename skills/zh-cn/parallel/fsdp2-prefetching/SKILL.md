@@ -117,6 +117,14 @@ class <TopModelClass>(...):
   backward、optimizer step、logger write，以及 checkpoint noop 或临时保存；
   还必须验证应用该 hook 后，用户自己的 recipe / model 能在 FSDP2 prefetching
   开启的情况下完成这一步。
+- 优先先把 `tests/test_structure_template.py`、
+  `tests/test_runtime_template.py`、`tests/test_smoke_template.py` 复制到
+  recipe-local skill 目录，再只改 import 区块和 FSDP2 prefetch 相关断言或
+  launcher 路径。
+- 由于这个 skill 往往需要分布式 smoke，复制出来的 `test_smoke.py` 应使用
+  `tests/test_smoke_template.py` 里的 `multi_rank_distributed_env(...)`，并把
+  运行模式配置为 FSDP2 shard；如果该 skill 路径或用户偏好要求，也可以和 DDP
+  / Tensor Parallel 组合。
 - `test_smoke.py` 必须走完整真实能力路径：真实 engine、真实 parallelize 入口、
   真实 FSDP2 wrap / TP / launcher / logger / checkpoint；禁止用 monkeypatch、fake
   wrapper、fake parallelize_model、fake fully_shard、fake process group、fake

@@ -150,6 +150,13 @@ parallel:
 - `test_smoke.py`：覆盖 1 个真实、recipe-owned 的 single step：forward、loss、
   backward、optimizer step、logger write，以及 checkpoint noop 或临时保存；
   还必须验证用户自己的 recipe / model 能在启用 TP 的情况下完成这一步。
+- 优先先把 `tests/test_structure_template.py`、
+  `tests/test_runtime_template.py`、`tests/test_smoke_template.py` 复制到
+  recipe-local skill 目录，再只改 import 区块和 TP 相关断言或 launcher 路径。
+- 由于这个 skill 往往需要分布式 smoke，复制出来的 `test_smoke.py` 应使用
+  `tests/test_smoke_template.py` 里的 `multi_rank_distributed_env(...)`，并把
+  运行模式配置为 Tensor Parallel；如果该 skill 路径或用户偏好要求，也可以和
+  DDP / FSDP2 shard 组合。
 - `test_smoke.py` 必须走该 skill 的完整真实能力路径：真实 engine、真实 recipe
   入口、真实 TP / launcher / logger / checkpoint 接线；禁止用 monkeypatch、fake
   wrapper、fake `parallelize_model`、fake process group、fake device mesh 等

@@ -120,6 +120,15 @@ Add recipe-local tests under `recipes/<recipe>/skill_tests/gradient-checkpointin
 - `test_smoke.py`: cover one real recipe-owned single step: forward, loss,
   backward, optimizer step, logger write, and checkpoint noop or temporary
   save; it must also verify gradients match with and without checkpointing.
+- Prefer copying `tests/test_structure_template.py`,
+  `tests/test_runtime_template.py`, and `tests/test_smoke_template.py` into the
+  recipe-local skill directory first, then only edit the import block and the
+  gradient-checkpointing-specific assertions you need.
+- If this skill's smoke path needs distributed execution on the target recipe,
+  the copied `test_smoke.py` should use `multi_rank_distributed_env(...)` from
+  `tests/test_smoke_template.py` and configure the run as DDP, FSDP2 sharding,
+  tensor parallel, or another required mode based on the skill requirement or
+  user preference.
 - `test_smoke.py` must use the full real capability path for this skill: real
   engine, real recipe entrypoints, and the real checkpointing / logger /
   checkpoint wiring under test. Do not short-circuit it with monkeypatch-based

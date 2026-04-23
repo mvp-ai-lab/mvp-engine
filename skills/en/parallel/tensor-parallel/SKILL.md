@@ -165,6 +165,15 @@ Add recipe-local tests under `recipes/<recipe>/skill_tests/tensor-parallel/`:
   backward, optimizer step, logger write, and checkpoint noop or temporary
   save; it must also verify the user's own recipe/model completes that step with
   tensor parallel enabled.
+- Prefer copying `tests/test_structure_template.py`,
+  `tests/test_runtime_template.py`, and `tests/test_smoke_template.py` into the
+  recipe-local skill directory first, then only edit the import block and the
+  TP-specific assertions or launcher path that this skill needs.
+- Because this skill typically needs distributed smoke execution, the copied
+  `test_smoke.py` should use `multi_rank_distributed_env(...)` from
+  `tests/test_smoke_template.py` and configure the run for tensor parallel,
+  optionally combined with DDP or FSDP2 sharding if the skill path requires it
+  or the user explicitly prefers that layout.
 - `test_smoke.py` must use the full real capability path for this skill: real
   engine, real recipe entrypoints, real TP / launcher / logger / checkpoint
   wiring. Do not short-circuit the path with monkeypatch-based fake wrappers,

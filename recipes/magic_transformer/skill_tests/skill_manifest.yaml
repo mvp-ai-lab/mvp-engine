@@ -1,0 +1,52 @@
+schema_version: 1
+recipe: magic_transformer
+skills:
+  new-recipe-template:
+    status: applied
+    language: zh-cn
+    last_validated:
+      structure: passed
+      runtime: passed
+      smoke: passed
+  fsdp2-prefetching:
+    status: pending
+    language: null
+    last_validated:
+      structure: not_run
+      runtime: not_run
+      smoke: not_run
+  gradient-checkpointing:
+    status: pending
+    language: null
+    last_validated:
+      structure: not_run
+      runtime: not_run
+      smoke: not_run
+  model-compile:
+    status: pending
+    language: null
+    last_validated:
+      structure: not_run
+      runtime: not_run
+      smoke: not_run
+  model-flops-utilization:
+    status: pending
+    language: null
+    last_validated:
+      structure: not_run
+      runtime: not_run
+      smoke: not_run
+  model-migration:
+    status: pending
+    language: null
+    last_validated:
+      structure: not_run
+      runtime: not_run
+      smoke: not_run
+  tensor-parallel:
+    status: pending
+    language: null
+    last_validated:
+      structure: not_run
+      runtime: not_run
+      smoke: not_run
