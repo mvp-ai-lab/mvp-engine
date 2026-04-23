@@ -1,3 +1,4 @@
+import gc
 import os.path
 import random
 from pathlib import Path
@@ -121,16 +122,26 @@ def _get_hf_checkpoint_path(checkpoint_dir: Path, prefix: str) -> Path:
     return _get_hf_checkpoint_dir(checkpoint_dir, prefix) / "model.safetensors"
 
 
-def _get_dcp_checkpoint_path(checkpoint_dir: Path, prefix: str) -> Path:
+def _get_dcp_model_checkpoint_path(checkpoint_dir: Path, prefix: str) -> Path:
     if prefix == "":
-        return checkpoint_dir
+        return checkpoint_dir / "model"
     return checkpoint_dir / f"{prefix}model"
+
+
+def _get_dcp_optimizer_checkpoint_path(checkpoint_dir: Path, prefix: str) -> Path:
+    if prefix == "":
+        return checkpoint_dir / "optimizer"
+    return checkpoint_dir / f"{prefix}optimizer"
+
+
+def _has_dcp_checkpoint(checkpoint_path: Path) -> bool:
+    return (checkpoint_path / ".metadata").exists()
 
 
 def _has_traditional_model_checkpoint(backend: str, checkpoint_dir: Path, prefix: str) -> bool:
     if backend == "ddp":
         return (checkpoint_dir / f"{prefix}model.pt").exists()
-    return (_get_dcp_checkpoint_path(checkpoint_dir, prefix) / ".metadata").exists()
+    return _has_dcp_checkpoint(_get_dcp_model_checkpoint_path(checkpoint_dir, prefix))
 
 
 def _normalize_hf_state_dict(state_dict: dict[str, Any]) -> dict[str, torch.Tensor]:
@@ -190,6 +201,24 @@ def _load_hf_checkpoint(mesh: DeviceMesh, checkpoint_dir: Path, model: nn.Module
         strict=False,
     )
     set_model_state_dict(model, state_dict, options=options)
+
+
+def _save_dcp_state_dict(checkpoint_path: Path, state_dict: dict[str, Any]) -> None:
+    writer = dcp.FileSystemWriter(checkpoint_path)
+    dcp.save(
+        state_dict,
+        checkpoint_id=str(checkpoint_path),
+        process_group=_get_checkpoint_process_group(),
+        storage_writer=writer,
+    )
+
+
+def _load_dcp_state_dict(checkpoint_path: Path, state_dict: dict[str, Any]) -> None:
+    dcp.load(
+        state_dict,
+        checkpoint_id=str(checkpoint_path),
+        process_group=_get_checkpoint_process_group(),
+    )
 
 
 def save_checkpoint(
@@ -252,28 +281,20 @@ def save_checkpoint(
             cpu_offload=True,
         )
         model_sd = get_model_state_dict(model, options=options)
-        state_dict = {
-            "model": model_sd,
-        }
+        model_checkpoint_path = _get_dcp_model_checkpoint_path(cur_checkpoint_dir, prefix)
+        _save_dcp_state_dict(model_checkpoint_path, {"model": model_sd})
+        del model_sd
+        gc.collect()
+
         if optimizer is not None:
             optim_sd = get_optimizer_state_dict(model, optimizer, options=options)
             missing_count = _fill_missing_optimizer_states(model, optim_sd)
             if missing_count > 0 and is_main_process():
                 simple_info(f"Filled {missing_count} missing optimizer state entries before checkpoint save.")
-            state_dict["optimizer"] = optim_sd
-
-        if prefix == "":
-            dcp_save_path = cur_checkpoint_dir
-        else:
-            dcp_save_path = cur_checkpoint_dir / f"{prefix}model"
-
-        writer = dcp.FileSystemWriter(dcp_save_path)
-        dcp.save(
-            state_dict,
-            checkpoint_id=str(dcp_save_path),
-            process_group=_get_checkpoint_process_group(),
-            storage_writer=writer,
-        )
+            optimizer_checkpoint_path = _get_dcp_optimizer_checkpoint_path(cur_checkpoint_dir, prefix)
+            _save_dcp_state_dict(optimizer_checkpoint_path, {"optimizer": optim_sd})
+            del optim_sd
+            gc.collect()
 
     if hf_enable:
         _save_hf_checkpoint(mesh, cur_checkpoint_dir, model, prefix)
@@ -342,27 +363,21 @@ def load_checkpoint(
         else:
             options = StateDictOptions(full_state_dict=False, cpu_offload=True, strict=False)
             model_sd = get_model_state_dict(model, options=options)
-            state_dict = {
-                "model": model_sd,
-            }
+            model_state_dict = {"model": model_sd}
 
+            model_checkpoint_path = _get_dcp_model_checkpoint_path(checkpoint_dir, prefix)
+            _load_dcp_state_dict(model_checkpoint_path, model_state_dict)
+
+            set_model_state_dict(model, model_state_dict["model"])
             if optimizer is not None:
                 optim_sd = get_optimizer_state_dict(model, optimizer, options=options)
-                state_dict["optimizer"] = optim_sd
-
-            dcp_save_path = _get_dcp_checkpoint_path(checkpoint_dir, prefix)
-
-            dcp.load(
-                state_dict,
-                checkpoint_id=str(dcp_save_path),
-                process_group=_get_checkpoint_process_group(),
-            )
-            set_model_state_dict(model, state_dict["model"])
-            if optimizer is not None:
-                missing_count = _fill_missing_optimizer_states(model, state_dict["optimizer"])
+                optimizer_state_dict = {"optimizer": optim_sd}
+                optimizer_checkpoint_path = _get_dcp_optimizer_checkpoint_path(checkpoint_dir, prefix)
+                _load_dcp_state_dict(optimizer_checkpoint_path, optimizer_state_dict)
+                missing_count = _fill_missing_optimizer_states(model, optimizer_state_dict["optimizer"])
                 if missing_count > 0 and is_main_process():
                     simple_info(f"Filled {missing_count} missing optimizer state entries before checkpoint load.")
-                set_optimizer_state_dict(model, optimizer, state_dict["optimizer"])
+                set_optimizer_state_dict(model, optimizer, optimizer_state_dict["optimizer"])
     elif hf_enable and hf_checkpoint_path.exists():
         _load_hf_checkpoint(mesh, checkpoint_dir, model, prefix)
         loaded_from_hf = True
@@ -372,7 +387,9 @@ def load_checkpoint(
         )
     else:
         raise FileNotFoundError(
-            f"Checkpoint metadata not found at {_get_dcp_checkpoint_path(checkpoint_dir, prefix) / '.metadata'} or {hf_checkpoint_path}."
+            "Checkpoint metadata not found at "
+            f"{_get_dcp_model_checkpoint_path(checkpoint_dir, prefix) / '.metadata'} "
+            f"or {hf_checkpoint_path}."
         )
 
     if prefix != "":
