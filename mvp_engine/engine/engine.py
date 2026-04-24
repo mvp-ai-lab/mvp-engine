@@ -408,20 +408,19 @@ class Engine(ABC):
             device=self.device_type,
         )
 
+        if self.config.resume is not None:
+            self.load(
+                self.config.resume,
+                restore_training_state=True,
+                restore_rng_state=True,
+            )
+
         logger.info("Initializing Timer...")
         # FIXME: use progress rather than total_steps.
         self.timer = Timer(
             total_batches=self.total_steps,
             window_size=self.config.log.timer_window_size,
         )
-
-        # FIXME: remove this.
-        if self.config.init_from_checkpoint is not None:
-            self.load(
-                self.config.init_from_checkpoint,
-                restore_training_state=False,
-                restore_rng_state=False,
-            )
 
     def run_train(self) -> None:
         """Execute the main training loop based on loop_policy."""

@@ -122,6 +122,7 @@ class OpenbeeOptimConfig(BaseOptimConfig):
 
     gradient_accumulation_steps: int = 1
     global_batch_size: int | None = Field(None, ge=1)
+    loss_spike_skip_multiplier: float | None = Field(None, gt=0.0)
 
     @field_validator("gradient_accumulation_steps")
     @classmethod
@@ -147,7 +148,21 @@ class OpenbeeLoopConfig(BaseLoopConfig):
 class OpenbeeConfig(BaseEngineConfig):
     model_config = ConfigDict(frozen=False, extra="allow")
 
+    resume: str | None = None
     data: OpenbeeDataConfig = Field(default_factory=OpenbeeDataConfig)
     model: OpenbeeModelConfig = Field(default_factory=OpenbeeModelConfig)
     optim: OpenbeeOptimConfig = Field(default_factory=OpenbeeOptimConfig)
     loop: OpenbeeLoopConfig = Field(default_factory=OpenbeeLoopConfig)
+
+    @field_validator("resume", mode="before")
+    @classmethod
+    def validate_resume(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise TypeError("`resume` must be a string or null.")
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("`resume` must not be empty.")
+        return normalized

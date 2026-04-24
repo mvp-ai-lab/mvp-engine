@@ -53,6 +53,7 @@ class OpenbeeEngine(Engine):
         self.metric_accumulator.register("local_token_count", "last")
         self.metric_accumulator.register("local_loss_sum", "sum")
         self.metric_accumulator.register("local_model_flops", "sum")
+        self._previous_optimization_loss: float | None = None
 
     def _resolve_batching_config(self) -> None:
         """Resolve OpenBee global batch size into micro batch size or accumulation."""
@@ -477,6 +478,20 @@ class OpenbeeEngine(Engine):
         loss = outputs["loss"].sum() / int(global_loss_token_count)
         if self.dp_world_size > 1:
             loss = loss * float(self.dp_world_size)
+
+        if is_sync:
+            loss_spike_skip_multiplier = self.config.optim.loss_spike_skip_multiplier
+            if (
+                self._previous_optimization_loss is not None
+                and loss_spike_skip_multiplier is not None
+                and loss > self._previous_optimization_loss * float(loss_spike_skip_multiplier)
+            ):
+                loss = loss * 0.0
+                logger.warning(
+                    f"Loss spike detected at step {self.step}: "
+                    f"loss={loss.item():.4f}, previous_loss={self._previous_optimization_loss:.4f}"
+                )
+            self._previous_optimization_loss = float(loss.detach().item())
 
         with accumulate_gradients(self.model, sync=is_sync):
             self.scaler.scale(loss).backward()

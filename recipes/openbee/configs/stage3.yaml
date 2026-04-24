@@ -23,14 +23,14 @@ data:
   train_path: "./data/openbee/stage3/**/*.parquet"
   enable_thinking: "non-empty"
   cache: false
-  shuffle_buffer: 4096
+  shuffle_buffer: 1024
   packing: true
   packing_selection_strategy: "best_fit"
   packing_open_pack_limit: 8
   packing_buffer_size: 64
   max_seq_len: 16384
   batch_size: 1
-  num_workers: 4
+  num_workers: 6
 model:
   pretrained_model_name_or_path: "./pretrained/Qwen3-VL-8B-Base-woDS-stage2"
   attn_implementation: "flash_attention_2"
@@ -54,6 +54,7 @@ optim:
   mixed_precision: "bf16"
   warmup_ratio: 0.002
   clip_grad_norm: 1.0
+  loss_spike_skip_multiplier: 2
 
 loop:
   policy: "iter"
