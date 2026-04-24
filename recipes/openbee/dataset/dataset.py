@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import glob
 import io
+import math
 import os
 import re
 from collections.abc import Iterable
@@ -11,13 +12,14 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
-from mvp_dataset import Dataset, set_logger
+from mvp_dataset import Dataset
 from mvp_dataset.core import RuntimeContext
 from mvp_dataset.utils.url import normalize_paths
 from PIL import Image
 
-from mvp_engine.utils.log import logger
+from mvp_engine.utils.log import simple_info
 
 from .gate import build_invalid_sample_gate_assembler, build_skipped_sample
 from .packing import build_packed_sample_assembler
@@ -38,6 +40,10 @@ THOUGHT_SUFFIX = "\n</think>\n\n"
 THOUGHT_PATTERN = re.compile(f"{re.escape(THOUGHT_PREFIX)}(.*?){re.escape(THOUGHT_SUFFIX)}", re.DOTALL)
 THOUGHT_MARKERS = (THOUGHT_PREFIX.strip(), THOUGHT_SUFFIX.strip())
 MULTIMODAL_PLACEHOLDER = "<|openbee_multimodal_placeholder|>"
+RECOVERABLE_SAMPLE_ERRORS = (OSError, SyntaxError, ValueError, RuntimeError, IndexError, KeyError, TypeError)
+IMAGE_RETRY_TEXT_TOKEN_RESERVE = 64
+IMAGE_RETRY_MAX_IMAGE_TOKEN_FRACTION = 0.85
+IMAGE_RETRY_RESIZE_SAFETY_FACTOR = 0.95
 
 
 def resolve_cache_dir(train_path: str, configured_cache_dir: str | None) -> Path:
@@ -151,6 +157,334 @@ def process_image(
     if not resolved.is_file():
         raise FileNotFoundError(f"references missing image: {resolved}")
     return str(resolved)
+
+
+def _parse_precomputed_image_size(size_entry: Any) -> tuple[int, int] | None:
+    """Parse one parquet ``img_size`` entry into ``(height, width)``."""
+    if isinstance(size_entry, dict):
+        width = size_entry.get("width")
+        height = size_entry.get("height")
+        if isinstance(width, (int, np.integer)) and width > 0 and isinstance(height, (int, np.integer)) and height > 0:
+            return int(height), int(width)
+        return None
+
+    if isinstance(size_entry, (list, tuple)) and len(size_entry) >= 2:
+        width = size_entry[0]
+        height = size_entry[1]
+        if isinstance(width, (int, np.integer)) and width > 0 and isinstance(height, (int, np.integer)) and height > 0:
+            return int(height), int(width)
+    return None
+
+
+def _resolve_image_size_for_log(
+    image: str | bytes | dict[str, Any] | Image.Image,
+    *,
+    image_root: Path | None = None,
+) -> tuple[int, int]:
+    """Read one image's size as ``(height, width)`` for invalid-sample diagnostics."""
+    if isinstance(image, Image.Image):
+        width, height = image.size
+        return height, width
+
+    if isinstance(image, dict):
+        image_bytes = image.get("bytes")
+        if isinstance(image_bytes, (bytes, bytearray, memoryview)):
+            return _resolve_image_size_for_log(bytes(image_bytes), image_root=image_root)
+
+        image_path = image.get("path")
+        if isinstance(image_path, str) and image_path:
+            return _resolve_image_size_for_log(image_path, image_root=image_root)
+
+        raise ValueError("contains an invalid image record.")
+
+    if isinstance(image, bytes):
+        with Image.open(io.BytesIO(image)) as decoded:
+            width, height = decoded.size
+        return height, width
+
+    if not isinstance(image, str):
+        raise ValueError(f"contains an invalid image value: {type(image).__name__}.")
+    if not image:
+        raise ValueError(f"contains an invalid image path: {image!r}")
+
+    resolved = Path(image).expanduser()
+    if not resolved.is_absolute() and image_root is not None:
+        resolved = image_root / resolved
+    resolved = resolved.resolve()
+
+    if not resolved.is_file():
+        raise FileNotFoundError(f"references missing image: {resolved}")
+
+    with Image.open(resolved) as decoded:
+        width, height = decoded.size
+    return height, width
+
+
+def _estimate_image_tokens(image_processor: Any, *, height: int, width: int) -> int | None:
+    """Estimate processor-expanded image tokens for invalid-sample diagnostics."""
+    get_number_of_image_patches = getattr(image_processor, "get_number_of_image_patches", None)
+    merge_size = getattr(image_processor, "merge_size", None)
+    if not callable(get_number_of_image_patches) or not isinstance(merge_size, int) or merge_size <= 0:
+        return None
+
+    try:
+        return int(get_number_of_image_patches(height, width, {}) // (merge_size**2))
+    except Exception:
+        return None
+
+
+def _format_image_size_context(
+    *,
+    images: Any,
+    image_root: Path,
+    resolved_images: list[str | Image.Image] | None = None,
+    image_sizes: list[tuple[int, int]] | None = None,
+    image_processor: Any = None,
+    max_items: int = 16,
+) -> str:
+    """Build a compact image-size suffix for invalid-sample warnings."""
+    if not isinstance(images, list):
+        return ""
+
+    image_count = len(images)
+    if image_count == 0:
+        return " | image_count=0"
+
+    entries: list[str] = []
+    has_complete_resolved_images = resolved_images is not None and len(resolved_images) == image_count
+    for index in range(image_count):
+        try:
+            if image_sizes is not None and index < len(image_sizes):
+                height, width = image_sizes[index]
+            else:
+                image = resolved_images[index] if has_complete_resolved_images else images[index]
+                height, width = _resolve_image_size_for_log(image, image_root=image_root)
+            megapixels = height * width / 1_000_000
+            token_count = _estimate_image_tokens(image_processor, height=height, width=width)
+            token_text = f",~{token_count}tok" if token_count is not None else ""
+            entries.append(f"{index}:{width}x{height}({megapixels:.2f}MP{token_text})")
+        except Exception as exc:
+            entries.append(f"{index}:unavailable({type(exc).__name__})")
+
+    if image_count > max_items:
+        entries = entries[:max_items] + [f"...+{image_count - max_items} more"]
+    return f" | image_count={image_count}, image_sizes=[{', '.join(entries)}]"
+
+
+def _tokenize_text_without_image_payload(
+    *,
+    apply_chat_template: Any,
+    processor: Any,
+    rendered_messages: list[dict[str, Any]],
+) -> int | None:
+    """Estimate prompt token count without expanded image payload tokens."""
+    tokenizer = getattr(processor, "tokenizer", None)
+    if tokenizer is None:
+        return None
+
+    image_token = getattr(processor, "image_token", None)
+    try:
+        prompt = apply_chat_template(
+            rendered_messages,
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+        if not isinstance(prompt, str):
+            return None
+        if isinstance(image_token, str) and image_token:
+            prompt = prompt.replace(image_token, "")
+
+        tokenizer_kwargs: dict[str, Any] = {"return_attention_mask": False, "return_tensors": "pt"}
+        bos_token = getattr(tokenizer, "bos_token", None)
+        if isinstance(bos_token, str) and bos_token and prompt.startswith(bos_token):
+            tokenizer_kwargs["add_special_tokens"] = False
+        tokenized = tokenizer(prompt, **tokenizer_kwargs)
+        return int(tokenized["input_ids"][0].numel())
+    except Exception:
+        return None
+
+
+def _compute_dynamic_retry_image_sizes(
+    *,
+    apply_chat_template: Any,
+    processor: Any,
+    rendered_messages: list[dict[str, Any]],
+    image_sizes: list[tuple[int, int]],
+    max_length: int,
+) -> tuple[list[tuple[int, int]], int, int, int] | None:
+    """Allocate image-token budget proportionally and return resized ``(height, width)`` targets."""
+    if not image_sizes:
+        return None
+
+    image_processor = getattr(processor, "image_processor", None)
+    if image_processor is None:
+        return None
+
+    text_token_count = _tokenize_text_without_image_payload(
+        apply_chat_template=apply_chat_template,
+        processor=processor,
+        rendered_messages=rendered_messages,
+    )
+    if text_token_count is None:
+        image_token_budget = int(max_length * IMAGE_RETRY_MAX_IMAGE_TOKEN_FRACTION)
+    else:
+        image_token_budget = max(1, int(max_length) - text_token_count - IMAGE_RETRY_TEXT_TOKEN_RESERVE)
+        image_token_budget = min(image_token_budget, int(max_length * IMAGE_RETRY_MAX_IMAGE_TOKEN_FRACTION))
+
+    safe_image_token_budget = int(image_token_budget * IMAGE_RETRY_RESIZE_SAFETY_FACTOR)
+    if safe_image_token_budget <= 0:
+        return None
+
+    original_image_tokens: list[int] = []
+    for height, width in image_sizes:
+        image_tokens = _estimate_image_tokens(image_processor, height=height, width=width)
+        if image_tokens is None or image_tokens <= 0:
+            return None
+        original_image_tokens.append(image_tokens)
+
+    total_original_image_tokens = sum(original_image_tokens)
+    if total_original_image_tokens <= safe_image_token_budget:
+        return None
+
+    target_sizes: list[tuple[int, int]] = []
+    projected_image_tokens = 0
+    for (height, width), original_tokens in zip(image_sizes, original_image_tokens, strict=True):
+        target_tokens = max(1, int(safe_image_token_budget * original_tokens / total_original_image_tokens))
+        scale = min(1.0, math.sqrt(target_tokens / original_tokens) * IMAGE_RETRY_RESIZE_SAFETY_FACTOR)
+        target_height = max(1, int(height * scale))
+        target_width = max(1, int(width * scale))
+
+        for _ in range(8):
+            estimated_tokens = _estimate_image_tokens(
+                image_processor,
+                height=target_height,
+                width=target_width,
+            )
+            if estimated_tokens is None or estimated_tokens <= target_tokens:
+                break
+            scale = min(0.95, math.sqrt(target_tokens / estimated_tokens) * IMAGE_RETRY_RESIZE_SAFETY_FACTOR)
+            target_height = max(1, int(target_height * scale))
+            target_width = max(1, int(target_width * scale))
+
+        target_sizes.append((target_height, target_width))
+        projected_tokens = _estimate_image_tokens(image_processor, height=target_height, width=target_width)
+        projected_image_tokens += int(projected_tokens or target_tokens)
+
+    return target_sizes, safe_image_token_budget, total_original_image_tokens, projected_image_tokens
+
+
+def _load_image_as_rgb(
+    image: str | bytes | dict[str, Any] | Image.Image,
+    *,
+    image_root: Path | None = None,
+) -> Image.Image:
+    """Load one image value into a detached RGB PIL image for retry resizing."""
+    if isinstance(image, Image.Image):
+        return image.convert("RGB").copy()
+
+    if isinstance(image, dict):
+        image_bytes = image.get("bytes")
+        if isinstance(image_bytes, (bytes, bytearray, memoryview)):
+            return _load_image_as_rgb(bytes(image_bytes), image_root=image_root)
+
+        image_path = image.get("path")
+        if isinstance(image_path, str) and image_path:
+            return _load_image_as_rgb(image_path, image_root=image_root)
+
+        raise ValueError("contains an invalid image record.")
+
+    if isinstance(image, bytes):
+        with Image.open(io.BytesIO(image)) as decoded:
+            return decoded.convert("RGB")
+
+    if not isinstance(image, str):
+        raise ValueError(f"contains an invalid image value: {type(image).__name__}.")
+    if not image:
+        raise ValueError(f"contains an invalid image path: {image!r}")
+
+    resolved = Path(image).expanduser()
+    if not resolved.is_absolute() and image_root is not None:
+        resolved = image_root / resolved
+    resolved = resolved.resolve()
+
+    if not resolved.is_file():
+        raise FileNotFoundError(f"references missing image: {resolved}")
+
+    with Image.open(resolved) as decoded:
+        return decoded.convert("RGB")
+
+
+def _resize_images_for_retry(
+    images: list[str | Image.Image],
+    *,
+    target_sizes: list[tuple[int, int]],
+    image_root: Path,
+) -> list[Image.Image]:
+    """Resize images to target ``(height, width)`` values for an oversized-sample retry."""
+    if len(images) != len(target_sizes):
+        raise ValueError("Image retry target sizes must match the image count.")
+
+    resample_filter = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+    resized_images: list[Image.Image] = []
+    for image, (target_height, target_width) in zip(images, target_sizes, strict=True):
+        loaded_image = _load_image_as_rgb(image, image_root=image_root)
+        target_size = (max(1, int(target_width)), max(1, int(target_height)))
+        if loaded_image.size != target_size:
+            loaded_image = loaded_image.resize(target_size, resample=resample_filter)
+        resized_images.append(loaded_image)
+    return resized_images
+
+
+def _replace_rendered_images(
+    rendered_messages: list[dict[str, Any]],
+    replacement_images: list[Image.Image],
+) -> list[dict[str, Any]]:
+    """Return a rendered-message copy whose image blocks point to replacement images."""
+    image_iter = iter(replacement_images)
+    replaced_messages: list[dict[str, Any]] = []
+    replaced_count = 0
+    for message in rendered_messages:
+        new_message = dict(message)
+        new_content = []
+        for block in message.get("content", []):
+            if not isinstance(block, dict):
+                new_content.append(block)
+                continue
+            new_block = dict(block)
+            if new_block.get("type") == "image":
+                try:
+                    new_block["image"] = next(image_iter)
+                except StopIteration as exc:
+                    raise ValueError("Not enough replacement images for rendered messages.") from exc
+                replaced_count += 1
+            new_content.append(new_block)
+        new_message["content"] = new_content
+        replaced_messages.append(new_message)
+
+    if replaced_count != len(replacement_images):
+        raise ValueError("Replacement image count does not match rendered message image blocks.")
+    return replaced_messages
+
+
+def _tokenize_rendered_messages(
+    apply_chat_template: Any,
+    rendered_messages: list[dict[str, Any]],
+    *,
+    max_length: int,
+    processor_kwargs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Tokenize one rendered multimodal conversation with optional image kwargs."""
+    kwargs: dict[str, Any] = {
+        "tokenize": True,
+        "add_generation_prompt": False,
+        "return_dict": True,
+        "return_tensors": "pt",
+        "truncation": True,
+        "max_length": max_length,
+    }
+    if processor_kwargs:
+        kwargs.update(processor_kwargs)
+    return apply_chat_template([rendered_messages], **kwargs)
 
 
 def normalize_message(message: dict[str, Any]) -> dict[str, str]:
@@ -340,6 +674,7 @@ def build_labels(
     max_length: int,
     ignore_index: int,
     assistant_skip_think_prefix: set[int] | None = None,
+    processor_kwargs: dict[str, Any] | None = None,
 ) -> torch.Tensor:
     """Build supervised labels for one tokenized conversation.
 
@@ -371,6 +706,7 @@ def build_labels(
             return_tensors="pt",
             truncation=True,
             max_length=max_length,
+            **(processor_kwargs or {}),
         )
         return tokenized["input_ids"][0]
 
@@ -451,12 +787,14 @@ def process_sample(
     index_in_file = sample.get("__index_in_file__")
     if not isinstance(source_file, str) or not source_file:
         raise ValueError("mvp_dataset samples must include a string `__file__` field.")
-    if not isinstance(index_in_file, int) or index_in_file < 0:
+    if not isinstance(index_in_file, (int, np.integer)) or index_in_file < 0:
         raise ValueError("mvp_dataset samples must include a non-negative integer `__index_in_file__` field.")
 
     source_file = Path(source_file).expanduser().resolve()
     row_number = index_in_file + 1
     loc = f"{source_file}:{row_number}"
+    images: Any = []
+    resolved_images: list[str | Image.Image] = []
 
     try:
         # Validate the sample payload before we touch any file or tokenizer work.
@@ -486,22 +824,64 @@ def process_sample(
             raise ValueError(f"has {len(unused)} unused image(s).")
 
         # Tokenize the full conversation once to get model inputs and vision features.
-        model_inputs = apply_chat_template(
-            [rendered_messages],
-            tokenize=True,
-            add_generation_prompt=False,
-            return_dict=True,
-            return_tensors="pt",
-            truncation=True,
-            max_length=max_length,
-        )
+        label_messages = rendered_messages
+        try:
+            model_inputs = _tokenize_rendered_messages(
+                apply_chat_template,
+                rendered_messages,
+                max_length=max_length,
+            )
+        except RECOVERABLE_SAMPLE_ERRORS as exc:
+            err_message = str(exc)
+            if not ("Mismatch in `image` token count" in err_message and "truncation" in err_message):
+                raise
+
+            image_sizes = [
+                _resolve_image_size_for_log(image, image_root=source_file.parent) for image in resolved_images
+            ]
+            retry_plan = _compute_dynamic_retry_image_sizes(
+                apply_chat_template=apply_chat_template,
+                processor=processor,
+                rendered_messages=rendered_messages,
+                image_sizes=image_sizes,
+                max_length=max_length,
+            )
+            if retry_plan is None:
+                raise
+
+            target_sizes, image_budget, original_image_tokens, projected_image_tokens = retry_plan
+            retry_images = _resize_images_for_retry(
+                resolved_images,
+                target_sizes=target_sizes,
+                image_root=source_file.parent,
+            )
+            label_messages = _replace_rendered_images(rendered_messages, retry_images)
+            try:
+                model_inputs = _tokenize_rendered_messages(
+                    apply_chat_template,
+                    label_messages,
+                    max_length=max_length,
+                )
+            except RECOVERABLE_SAMPLE_ERRORS as retry_exc:
+                raise type(retry_exc)(
+                    f"{retry_exc} (dynamic image resize retry "
+                    f"image_tokens={original_image_tokens}->{projected_image_tokens}, "
+                    f"budget={image_budget} failed after original error: {exc})"
+                ) from retry_exc
+            image_context = _format_image_size_context(
+                images=images,
+                image_root=source_file.parent,
+                resolved_images=resolved_images,
+                image_processor=getattr(processor, "image_processor", None),
+            )
+
         input_ids = model_inputs["input_ids"][0]
         attention_mask = model_inputs["attention_mask"][0]
 
         # Re-tokenize assistant boundaries so only assistant responses contribute to loss.
         labels = build_labels(
             apply_chat_template,
-            rendered_messages,
+            label_messages,
             input_ids,
             attention_mask,
             max_length=max_length,
@@ -510,8 +890,14 @@ def process_sample(
         )
         if not torch.any(labels != ignore_index):
             raise ValueError("has no supervised assistant tokens after tokenization/truncation.")
-    except (OSError, SyntaxError, ValueError) as exc:
-        logger.warning(f"Skipping invalid sample {loc}: {exc}")
+    except RECOVERABLE_SAMPLE_ERRORS as exc:
+        image_context = _format_image_size_context(
+            images=images,
+            image_root=source_file.parent,
+            resolved_images=resolved_images,
+            image_processor=getattr(processor, "image_processor", None),
+        )
+        simple_info(f"Skipping invalid sample {loc}: {exc}{image_context}", level="warning")
         return build_skipped_sample()
     except Exception as exc:
         raise type(exc)(f"{loc} {exc}") from exc
@@ -557,63 +943,14 @@ def lightweight_process_sample(
     index_in_file = sample.get("__index_in_file__")
     if not isinstance(source_file, str) or not source_file:
         raise ValueError("mvp_dataset samples must include a string `__file__` field.")
-    if not isinstance(index_in_file, int) or index_in_file < 0:
+    if not isinstance(index_in_file, (int, np.integer)) or index_in_file < 0:
         raise ValueError("mvp_dataset samples must include a non-negative integer `__index_in_file__` field.")
 
     source_file = Path(source_file).expanduser().resolve()
     row_number = index_in_file + 1
     loc = f"{source_file}:{row_number}"
-
-    def parse_precomputed_image_size(size_entry: Any) -> tuple[int, int] | None:
-        """Parse one parquet ``img_size`` entry into ``(height, width)``."""
-        if isinstance(size_entry, dict):
-            width = size_entry.get("width")
-            height = size_entry.get("height")
-            if isinstance(width, int) and width > 0 and isinstance(height, int) and height > 0:
-                return height, width
-            return None
-
-        if isinstance(size_entry, (list, tuple)) and len(size_entry) >= 2:
-            width = size_entry[0]
-            height = size_entry[1]
-            if isinstance(width, int) and width > 0 and isinstance(height, int) and height > 0:
-                return height, width
-        return None
-
-    def resolve_image_size(image: str | bytes | dict[str, Any]) -> tuple[int, int]:
-        """Read only image metadata needed to recover multimodal token length."""
-        if isinstance(image, dict):
-            image_bytes = image.get("bytes")
-            if isinstance(image_bytes, (bytes, bytearray, memoryview)):
-                return resolve_image_size(bytes(image_bytes))
-
-            image_path = image.get("path")
-            if isinstance(image_path, str) and image_path:
-                return resolve_image_size(image_path)
-
-            raise ValueError("contains an invalid image record.")
-
-        if isinstance(image, bytes):
-            with Image.open(io.BytesIO(image)) as decoded:
-                width, height = decoded.size
-            return height, width
-
-        if not isinstance(image, str):
-            raise ValueError(f"contains an invalid image value: {type(image).__name__}.")
-        if not image:
-            raise ValueError(f"contains an invalid image path: {image!r}")
-
-        resolved = Path(image).expanduser()
-        if not resolved.is_absolute():
-            resolved = source_file.parent / resolved
-        resolved = resolved.resolve()
-
-        if not resolved.is_file():
-            raise FileNotFoundError(f"references missing image: {resolved}")
-
-        with Image.open(resolved) as decoded:
-            width, height = decoded.size
-        return height, width
+    images: Any = []
+    image_sizes: list[tuple[int, int]] = []
 
     try:
         messages = sample.get("messages")
@@ -631,11 +968,11 @@ def lightweight_process_sample(
         image_sizes = []
         for image_index, image in enumerate(images):
             if isinstance(precomputed_image_sizes, list) and image_index < len(precomputed_image_sizes):
-                image_size = parse_precomputed_image_size(precomputed_image_sizes[image_index])
+                image_size = _parse_precomputed_image_size(precomputed_image_sizes[image_index])
                 if image_size is not None:
                     image_sizes.append(image_size)
                     continue
-            image_sizes.append(resolve_image_size(image))
+            image_sizes.append(_resolve_image_size_for_log(image, image_root=source_file.parent))
         image_iter = iter([f"__openbee_fake_image_{index}__" for index in range(len(image_sizes))])
         rendered_messages = [process_message(msg, image_iter, image_placeholder=image_placeholder) for msg in messages]
         rendered_messages, _ = align_messages_for_thinking(
@@ -670,9 +1007,22 @@ def lightweight_process_sample(
             if not isinstance(merge_size, int) or merge_size <= 0:
                 raise ValueError("Processor image_processor must expose a positive integer merge_size.")
 
+            retry_plan = _compute_dynamic_retry_image_sizes(
+                apply_chat_template=apply_chat_template,
+                processor=processor,
+                rendered_messages=rendered_messages,
+                image_sizes=image_sizes,
+                max_length=max_length,
+            )
+            token_image_sizes = retry_plan[0] if retry_plan is not None else image_sizes
+
             placeholder_token = "<|openbee_image_token_placeholder|>"
-            for height, width in image_sizes:
-                num_image_patches = image_processor.get_number_of_image_patches(height, width, {})
+            for height, width in token_image_sizes:
+                num_image_patches = image_processor.get_number_of_image_patches(
+                    height,
+                    width,
+                    {},
+                )
                 num_image_tokens = num_image_patches // (merge_size**2)
                 expanded_prompt = expanded_prompt.replace(image_token, placeholder_token * num_image_tokens, 1)
             expanded_prompt = expanded_prompt.replace(placeholder_token, image_token)
@@ -690,8 +1040,14 @@ def lightweight_process_sample(
         tokenized = tokenizer(expanded_prompt, **tokenizer_kwargs)
         input_ids = tokenized["input_ids"][0]
         attention_mask = tokenized["attention_mask"][0]
-    except (OSError, SyntaxError, ValueError) as exc:
-        logger.warning(f"Skipping invalid sample {loc}: {exc}")
+    except RECOVERABLE_SAMPLE_ERRORS as exc:
+        image_context = _format_image_size_context(
+            images=images,
+            image_root=source_file.parent,
+            image_sizes=image_sizes,
+            image_processor=getattr(processor, "image_processor", None),
+        )
+        simple_info(f"Skipping invalid sample {loc}: {exc}{image_context}", level="warning")
         return build_skipped_sample()
     except Exception as exc:
         raise type(exc)(f"{loc} {exc}") from exc
@@ -721,7 +1077,6 @@ def build_dataset(
         An ``mvp_dataset.Dataset`` pipeline with parquet loading, processing, and
         sample-level shuffling.
     """
-    set_logger(logger)
     dataset_path_value = config.data.train_path
     if dataset_path_value is None:
         raise ValueError("Missing `data.train_path` for the OpenBee recipe.")
@@ -737,23 +1092,22 @@ def build_dataset(
         process_kwargs["thinking_mode"] = getattr(config.data, "enable_thinking", True)
 
     dataset = Dataset.from_source(
-        "parquet",
+        "lance",
         dataset_paths,
         context=context,
         resample=resample,
+        global_shuffle=True,
     ).map(partial(process_fn, **process_kwargs))
     dataset = dataset.assemble(build_invalid_sample_gate_assembler)
 
     if config.data.cache:
         cache_write_batch_size = int(getattr(config.data, "cache_write_batch_size", 32))
         configure_cache_write_batch_size(cache_write_batch_size)
-        logger.info("OpenBee cache: using write batch size %d", cache_write_batch_size)
+        simple_info("OpenBee cache: using write batch size %d", cache_write_batch_size)
         dataset = dataset.cache(
             cache_dir=str(resolve_cache_dir(dataset_path_value, getattr(config.data, "cache_dir", None))),
             cache_num_workers=int(getattr(config.data, "cache_num_workers", 1)),
         )
-
-    dataset = dataset.shuffle(buffer_size=config.data.shuffle_buffer)
 
     if config.data.packing:
         max_length = config.data.max_seq_len

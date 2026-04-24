@@ -123,6 +123,8 @@ class OpenbeeOptimConfig(BaseOptimConfig):
     gradient_accumulation_steps: int = 1
     global_batch_size: int | None = Field(None, ge=1)
     loss_spike_skip_multiplier: float | None = Field(None, gt=0.0)
+    loss_spike_skip_window_size: int = Field(8, ge=1)
+    loss_spike_skip_min_history: int = Field(3, ge=1)
 
     @field_validator("gradient_accumulation_steps")
     @classmethod

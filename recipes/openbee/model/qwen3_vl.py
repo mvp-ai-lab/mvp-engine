@@ -145,6 +145,7 @@ def inject_model_flops_calculation(model):
         *,
         batch_size: int,
         seq_len: int,
+        attention_mask: torch.Tensor | None = None,
         image_grid_thw: torch.Tensor | None = None,
         is_training: bool = True,
         freeze_vit: bool = False,
@@ -163,10 +164,28 @@ def inject_model_flops_calculation(model):
         text_hidden = int(text_cfg.hidden_size)
         text_intermediate = int(text_cfg.intermediate_size)
         vocab = int(text_cfg.vocab_size)
+        attention_token_pairs = batch * tokens * tokens
+        if attention_mask is not None and attention_mask.ndim == 2:
+            mask = attention_mask.detach().to(device="cpu", dtype=torch.long)
+            max_mask_value = int(mask.max().item()) if mask.numel() > 0 else 0
+            if max_mask_value > 1:
+                attention_token_pairs = 0
+                for row in mask:
+                    segment_ids = row[row > 0]
+                    if segment_ids.numel() == 0:
+                        continue
+                    segment_lengths = torch.bincount(segment_ids, minlength=max_mask_value + 1)[1:]
+                    attention_token_pairs += int(torch.square(segment_lengths).sum().item())
+            elif getattr(self.config, "_attn_implementation", None) == "flash_attention_2":
+                valid_lengths = mask.ne(0).sum(dim=-1)
+                attention_token_pairs = int(torch.square(valid_lengths).sum().item())
+
+            if attention_token_pairs <= 0:
+                raise ValueError("attention_mask must contain at least one valid token")
 
         language_per_layer = (
             8 * batch * tokens * text_hidden * text_hidden
-            + 4 * batch * tokens * tokens * text_hidden
+            + 4 * attention_token_pairs * text_hidden
             # SwiGLU has three matrices: gate_proj, up_proj (H→I each) and down_proj (I→H),
             # so MLP FLOPs are 6×B×T×H×I, not 4× as in a standard two-layer FFN.
             + 6 * batch * tokens * text_hidden * text_intermediate

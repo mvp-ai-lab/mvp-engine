@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import time
+from collections import deque
 from typing import Any
 
 import torch
@@ -53,7 +54,7 @@ class OpenbeeEngine(Engine):
         self.metric_accumulator.register("local_token_count", "last")
         self.metric_accumulator.register("local_loss_sum", "sum")
         self.metric_accumulator.register("local_model_flops", "sum")
-        self._previous_optimization_loss: float | None = None
+        self._loss_spike_history: deque[float] = deque(maxlen=int(self.config.optim.loss_spike_skip_window_size))
 
     def _resolve_batching_config(self) -> None:
         """Resolve OpenBee global batch size into micro batch size or accumulation."""
@@ -152,6 +153,7 @@ class OpenbeeEngine(Engine):
                 pin_memory=self.device.type in ["cuda", "npu"],
                 persistent_workers=False,
                 drop_last=False,
+                multiprocessing_context="spawn",
             ).batch(
                 batch_size=int(temp_config.data.batch_size),
                 drop_last=True,
@@ -229,6 +231,7 @@ class OpenbeeEngine(Engine):
             num_workers=int(self.config.data.num_workers),
             pin_memory=self.device.type in ["cuda", "npu"],
             persistent_workers=False,
+            multiprocessing_context="spawn",
         )
         return loader.batch(
             batch_size=int(self.config.data.batch_size),
@@ -442,6 +445,7 @@ class OpenbeeEngine(Engine):
                 self.unwrapped_model.calculate_model_flops(
                     batch_size=int(data["input_ids"].shape[0]),
                     seq_len=int(data["input_ids"].shape[1]),
+                    attention_mask=data.get("attention_mask"),
                     image_grid_thw=data.get("image_grid_thw"),
                     is_training=True,
                     freeze_vit=bool(self.config.model.freeze_vit),
@@ -467,31 +471,57 @@ class OpenbeeEngine(Engine):
         if local_token_count is None or int(local_token_count) <= 0:
             raise ValueError("OpenBee accumulation window is missing a valid local token count.")
 
+        local_micro_loss_sum = outputs["loss"].sum()
+        micro_loss_token_count = int(outputs["effective_tokens"])
+        if micro_loss_token_count < 0:
+            raise ValueError("OpenBee micro-batch has an invalid effective token count.")
+
         self.metric_accumulator.update(
-            local_loss_sum=outputs["loss"].detach().to(device=self.device, dtype=torch.float64).sum(),
+            local_loss_sum=local_micro_loss_sum.detach().to(device=self.device, dtype=torch.float64),
             local_model_flops=float(outputs["model_flops"]),
         )
 
         # DDP/FSDP averages gradients across the DP/FSDP ranks, so each
         # micro-step uses the local summed loss with the globally reduced token
         # denominator and compensates by the real DP world size.
-        loss = outputs["loss"].sum() / int(global_loss_token_count)
+        loss = local_micro_loss_sum / int(global_loss_token_count)
         if self.dp_world_size > 1:
             loss = loss * float(self.dp_world_size)
 
-        if is_sync:
-            loss_spike_skip_multiplier = self.config.optim.loss_spike_skip_multiplier
-            if (
-                self._previous_optimization_loss is not None
-                and loss_spike_skip_multiplier is not None
-                and loss > self._previous_optimization_loss * float(loss_spike_skip_multiplier)
-            ):
-                loss = loss * 0.0
-                logger.warning(
-                    f"Loss spike detected at step {self.step}: "
-                    f"loss={loss.item():.4f}, previous_loss={self._previous_optimization_loss:.4f}"
+        loss_spike_skip_multiplier = self.config.optim.loss_spike_skip_multiplier
+        if loss_spike_skip_multiplier is not None:
+            micro_loss_stats = torch.stack(
+                (
+                    local_micro_loss_sum.detach().to(device=self.device, dtype=torch.float64),
+                    torch.tensor(float(micro_loss_token_count), device=self.device, dtype=torch.float64),
                 )
-            self._previous_optimization_loss = float(loss.detach().item())
+            )
+            if dist.is_available() and dist.is_initialized():
+                dist.all_reduce(micro_loss_stats, op=dist.ReduceOp.SUM)
+
+            global_micro_token_count = int(micro_loss_stats[1].item())
+            if global_micro_token_count > 0:
+                current_loss = float((micro_loss_stats[0] / micro_loss_stats[1]).item())
+                min_history = int(self.config.optim.loss_spike_skip_min_history)
+                has_enough_history = len(self._loss_spike_history) >= min_history
+                loss_spike_baseline = (
+                    sum(self._loss_spike_history) / len(self._loss_spike_history) if has_enough_history else None
+                )
+                is_loss_spike = loss_spike_baseline is not None and current_loss > loss_spike_baseline * float(
+                    loss_spike_skip_multiplier
+                )
+                if is_loss_spike:
+                    baseline_text = "n/a" if loss_spike_baseline is None else f"{loss_spike_baseline:.4f}"
+                    logger.warning(
+                        f"Loss spike skip at step {self.step}: "
+                        f"micro_loss={current_loss:.4f}, "
+                        f"baseline_loss={baseline_text}, "
+                        f"history_size={len(self._loss_spike_history)}, "
+                        f"micro_tokens={global_micro_token_count}"
+                    )
+                    loss = loss * 0.0
+                else:
+                    self._loss_spike_history.append(current_loss)
 
         with accumulate_gradients(self.model, sync=is_sync):
             self.scaler.scale(loss).backward()
