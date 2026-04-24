@@ -561,6 +561,7 @@ class Engine(ABC):
             logger.log_metrics(
                 {**outputs["logs"], **other_logs},
                 step=self.step,
+                total_steps=self.total_steps,
             )
 
             # Save checkpoint if needed

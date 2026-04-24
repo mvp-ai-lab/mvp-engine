@@ -73,6 +73,7 @@ class Logger:
             default_accumulation_size=accumulation_size,
         )
         self.step: int = 0
+        self.total_steps: Optional[int] = None
         self.backends: List[Backend] = backends
         self.level: LogLevel = level
 
@@ -89,7 +90,7 @@ class Logger:
         """Collect all metrics and forward them using the last known step."""
         collected = self.metrics.collect_all()
         for backend in self.backends:
-            backend.log_metrics(collected, self.step)
+            backend.log_metrics(collected, self.step, total_steps=self.total_steps)
 
     def add_metric(
         self,
@@ -139,6 +140,7 @@ class Logger:
         metrics: Mapping[str, Union[int, float, str, torch.Tensor]],
         step: int,
         epoch: Optional[int] = None,
+        total_steps: Optional[int] = None,
     ) -> None:
         """Update aggregator with new values and forward aggregated metrics.
 
@@ -146,15 +148,18 @@ class Logger:
             metrics: Mapping of metric names to latest observed values.
             step: Current training step.
             epoch: Optional epoch index.
+            total_steps: Optional total number of training steps for progress display.
         """
         self.metrics.update(metrics)
         self.step = step
+        effective_total_steps = total_steps if total_steps is not None else self.total_steps
+        self.total_steps = effective_total_steps
 
         collected = self.metrics.collect(metric_names=list(metrics.keys()))
 
         if collected:
             for backend in self.backends:
-                backend.log_metrics(collected, step, epoch)
+                backend.log_metrics(collected, step, epoch, effective_total_steps)
 
     def destroy(self) -> None:
         """Call `destroy()` on all registered backends and clear the global instance."""

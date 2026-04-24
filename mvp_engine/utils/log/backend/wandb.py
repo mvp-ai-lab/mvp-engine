@@ -70,6 +70,7 @@ class WandbBackend(Backend):
         metrics: Mapping[str, Union[float, str]],
         step: int,
         epoch: Optional[int] = None,
+        total_steps: Optional[int] = None,
     ) -> None:
         """Log metrics to wandb.
 
@@ -77,6 +78,7 @@ class WandbBackend(Backend):
             metrics: Mapping of metric names to values.
             step: Current training step (used as the x-axis).
             epoch: Optional epoch index (added as a metric).
+            total_steps: Optional total number of training steps. Ignored by wandb backend.
         """
         if not self.enable or len(metrics) == 0:
             return

@@ -75,6 +75,7 @@ class TerminalBackend(Backend):
         metrics: Mapping[str, float],
         step: int,
         epoch: Optional[int] = None,
+        total_steps: Optional[int] = None,
     ) -> None:
         """Print metric values with optional epoch and ETA.
 
@@ -82,6 +83,7 @@ class TerminalBackend(Backend):
             metrics: Mapping of metric names to values; ``eta`` is stripped if present.
             step: Current global step.
             epoch: Optional epoch number.
+            total_steps: Optional total number of training steps for progress display.
         """
         if not self.enable or not metrics:
             return
@@ -92,8 +94,9 @@ class TerminalBackend(Backend):
         eta_str = f" | [bold]ETA[/bold] {eta}" if eta is not None else ""
         epoch_str = f"[bold]Epoch[/bold] {epoch} - " if epoch is not None else ""
 
+        step_str = f"{step:>8}/{total_steps}" if total_steps is not None else f"{step:>8}"
         parts = [
-            f"[bold]{date_str}[/bold] | [bright_yellow]{self.id}[/bright_yellow]{eta_str} | {epoch_str}[bold]Step[/bold] {step:>8} ||",
+            f"[bold]{date_str}[/bold] | [bright_yellow]{self.id}[/bright_yellow]{eta_str} | {epoch_str}[bold]Step[/bold] {step_str} ||",
         ]
 
         for key, value in metrics_dict.items():
