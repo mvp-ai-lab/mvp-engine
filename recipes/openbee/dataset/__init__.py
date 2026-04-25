@@ -6,6 +6,7 @@ from .dataset import (
     build_dataset,
     lightweight_process_sample,
     process_sample,
+    resolve_step_inference_dataset_source,
 )
 from .gate import (
     InvalidSampleGateAssembler,
@@ -14,13 +15,14 @@ from .gate import (
 )
 from .packing import PackedSampleAssembler, build_packed_sample_assembler
 from .processor import build_qwen3_vl_processor
-from .types import ModelInputs
+from .types import SOURCE_SAMPLE_COUNT_KEY, ModelInputs
 
 __all__ = [
     "IMAGE_PLACEHOLDER",
     "InvalidSampleGateAssembler",
     "OpenbeeCollator",
     "PackedSampleAssembler",
+    "SOURCE_SAMPLE_COUNT_KEY",
     "build_dataset",
     "build_invalid_sample_gate_assembler",
     "build_packed_sample_assembler",
@@ -28,5 +30,6 @@ __all__ = [
     "build_qwen3_vl_processor",
     "lightweight_process_sample",
     "process_sample",
+    "resolve_step_inference_dataset_source",
     "ModelInputs",
 ]

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import glob
 import io
+import json
 import math
 import os
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -23,7 +24,7 @@ from mvp_engine.utils.log import simple_info
 
 from .gate import build_invalid_sample_gate_assembler, build_skipped_sample
 from .packing import build_packed_sample_assembler
-from .types import ModelInputs
+from .types import SOURCE_SAMPLE_COUNT_KEY, ModelInputs
 
 IMAGE_PLACEHOLDER = "<image>"
 ROLE_MAP = {
@@ -82,6 +83,81 @@ def resolve_dataset_shards(train_path: str) -> list[str]:
         shard_paths.append(str(Path(shard_spec).expanduser().resolve()))
 
     return shard_paths
+
+
+def _resolve_lance_config_uri(uri: Any, *, base_dir: Path) -> str:
+    """Resolve one URI from a Lance JSON source config."""
+    if not isinstance(uri, str) or not uri:
+        raise ValueError(f"Lance source config URI must be a non-empty string, got {uri!r}.")
+    if "://" in uri or Path(uri).is_absolute():
+        return uri
+    return str((base_dir / uri).resolve())
+
+
+def _normalize_lance_config_uris(raw_uris: Any, *, base_dir: Path, config_path: Path) -> list[str]:
+    """Normalize the ``main_uri``/``shards``/``uri`` value from a Lance config."""
+    if isinstance(raw_uris, str):
+        return [_resolve_lance_config_uri(raw_uris, base_dir=base_dir)]
+    if isinstance(raw_uris, list):
+        return [_resolve_lance_config_uri(uri, base_dir=base_dir) for uri in raw_uris]
+    raise ValueError(f"Lance source config {config_path} must contain a string or list main table URI.")
+
+
+def _load_lance_main_table_config(config_path: Path) -> tuple[list[str], int | None]:
+    """Read a Lance JSON source config and return only its main table URIs."""
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Failed to parse Lance source config {config_path}: {exc}") from exc
+    if not isinstance(config, dict):
+        raise ValueError(f"Lance source config {config_path} must contain a JSON object.")
+
+    raw_main_uris = config.get("main_uri", config.get("shards", config.get("uri")))
+    if raw_main_uris is None:
+        raise ValueError(f"Lance source config {config_path} must contain `main_uri`, `shards`, or `uri`.")
+
+    row_count = config.get("row_count")
+    total_sample_count = int(row_count) if isinstance(row_count, int) and row_count >= 0 else None
+    main_table_uris = _normalize_lance_config_uris(
+        raw_main_uris,
+        base_dir=config_path.resolve().parent,
+        config_path=config_path,
+    )
+    return main_table_uris, total_sample_count
+
+
+def resolve_step_inference_dataset_source(train_path: str) -> tuple[list[str], int | None, bool]:
+    """Resolve the data source used by OpenBee step inference.
+
+    If ``train_path`` is a Lance ``meta.json``/JSON source config, return only
+    the main table URI(s). This avoids opening any configured reference tables
+    while the lightweight step-counting pass runs.
+    """
+    dataset_paths = resolve_dataset_shards(train_path)
+    is_lance_json_config = len(dataset_paths) == 1 and Path(dataset_paths[0]).suffix.lower() == ".json"
+    if is_lance_json_config:
+        main_table_paths, total_sample_count = _load_lance_main_table_config(Path(dataset_paths[0]))
+        if total_sample_count is None:
+            total_sample_count = count_lance_rows(main_table_paths)
+        return main_table_paths, total_sample_count, True
+
+    return dataset_paths, count_lance_rows(dataset_paths), False
+
+
+def count_lance_rows(dataset_paths: Sequence[str]) -> int | None:
+    """Count rows in Lance table paths without resolving reference tables."""
+    try:
+        import lance
+    except Exception:
+        return None
+
+    total_rows = 0
+    try:
+        for dataset_path in dataset_paths:
+            total_rows += int(lance.dataset(str(dataset_path)).count_rows())
+    except Exception:
+        return None
+    return total_rows
 
 
 def configure_cache_write_batch_size(batch_size: int) -> None:
@@ -1048,7 +1124,9 @@ def lightweight_process_sample(
             image_processor=getattr(processor, "image_processor", None),
         )
         simple_info(f"Skipping invalid sample {loc}: {exc}{image_context}", level="warning")
-        return build_skipped_sample()
+        skipped_sample = build_skipped_sample()
+        skipped_sample[SOURCE_SAMPLE_COUNT_KEY] = 1
+        return skipped_sample
     except Exception as exc:
         raise type(exc)(f"{loc} {exc}") from exc
 
@@ -1056,6 +1134,7 @@ def lightweight_process_sample(
         "input_ids": input_ids,
         "attention_mask": attention_mask,
         "labels": torch.full_like(input_ids, ignore_index),
+        SOURCE_SAMPLE_COUNT_KEY: 1,
     }
 
 
@@ -1065,6 +1144,7 @@ def build_dataset(
     processor: Any,
     process_fn: Any = process_sample,
     resample: bool = True,
+    dataset_paths: Sequence[str] | None = None,
 ) -> Dataset:
     """Build the training dataset pipeline for the recipe.
 
@@ -1080,7 +1160,8 @@ def build_dataset(
     dataset_path_value = config.data.train_path
     if dataset_path_value is None:
         raise ValueError("Missing `data.train_path` for the OpenBee recipe.")
-    dataset_paths = resolve_dataset_shards(dataset_path_value)
+    if dataset_paths is None:
+        dataset_paths = resolve_dataset_shards(dataset_path_value)
 
     context = RuntimeContext.from_runtime(seed=int(config.seed))
 

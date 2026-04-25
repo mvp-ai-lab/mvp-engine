@@ -24,6 +24,7 @@ class OpenbeeDataConfig(BaseModel):
     max_seq_len: int = Field(2048, ge=1)
     batch_size: int = 1
     num_workers: int = Field(0, ge=0)
+    step_inference_log_interval: int = Field(100, ge=1)
 
     @field_validator("train_path", mode="before")
     @classmethod

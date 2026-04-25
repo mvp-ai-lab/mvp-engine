@@ -23,11 +23,13 @@ from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
 from ..configs.schema import OpenbeeConfig
 from ..dataset import (
+    SOURCE_SAMPLE_COUNT_KEY,
     ModelInputs,
     OpenbeeCollator,
     build_dataset,
     build_qwen3_vl_processor,
     lightweight_process_sample,
+    resolve_step_inference_dataset_source,
 )
 from ..model import build_qwen3_vl_model
 from ..model.packing import apply_packed_fa2_patch, prepare_packed_model_inputs
@@ -107,6 +109,103 @@ class OpenbeeEngine(Engine):
                 "`data_parallel_world_size * data.batch_size * optim.gradient_accumulation_steps`."
             )
 
+    @staticmethod
+    def _format_step_inference_duration(seconds: float | None) -> str:
+        """Format a compact duration for step-inference progress logs."""
+        if seconds is None or not math.isfinite(seconds) or seconds < 0:
+            return "unknown"
+
+        remaining_seconds = int(seconds)
+        hours, remainder = divmod(remaining_seconds, 3600)
+        minutes, secs = divmod(remainder, 60)
+        if hours > 0:
+            return f"{hours}h{minutes:02d}m{secs:02d}s"
+        if minutes > 0:
+            return f"{minutes}m{secs:02d}s"
+        return f"{secs}s"
+
+    @staticmethod
+    def _format_step_inference_finish_time(seconds_from_now: float | None) -> str:
+        """Format the estimated wall-clock finish time for progress logs."""
+        if seconds_from_now is None or not math.isfinite(seconds_from_now) or seconds_from_now < 0:
+            return "unknown"
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() + seconds_from_now))
+
+    @staticmethod
+    def _count_step_inference_source_samples(batch: dict[str, Any]) -> int:
+        """Count raw source samples represented by one lightweight batch."""
+        source_sample_count = batch.get(SOURCE_SAMPLE_COUNT_KEY)
+        if isinstance(source_sample_count, torch.Tensor):
+            return int(source_sample_count.sum().item())
+        if isinstance(source_sample_count, (list, tuple)):
+            return sum(int(value) for value in source_sample_count)
+        if source_sample_count is not None:
+            return int(source_sample_count)
+        return int(batch["input_ids"].shape[0])
+
+    @staticmethod
+    def _infer_dataset_source_total_rows(dataset: Any) -> int | None:
+        """Best-effort row-count fallback from the underlying mvp_dataset source."""
+        sources = getattr(dataset, "_source", None)
+        if not isinstance(sources, (list, tuple)) or not sources:
+            return None
+
+        total_rows = 0
+        for source in sources:
+            source_total = getattr(source, "total_rows", None)
+            if isinstance(source_total, int):
+                total_rows += source_total
+                continue
+
+            num_rows = getattr(source, "num_rows", None)
+            if isinstance(num_rows, int):
+                total_rows += num_rows
+                continue
+
+            datasets = getattr(source, "datasets", None)
+            if isinstance(datasets, (list, tuple)):
+                for dataset_spec in datasets:
+                    dataset_rows = getattr(dataset_spec, "num_rows", None)
+                    if isinstance(dataset_rows, int):
+                        total_rows += dataset_rows
+
+        return total_rows if total_rows > 0 else None
+
+    def _log_step_inference_progress(
+        self,
+        *,
+        source_sample_count: int,
+        total_source_sample_count: int | None,
+        packed_sample_count: int,
+        interval_source_sample_count: int,
+        interval_seconds: float,
+    ) -> None:
+        """Print one rank-0 step-inference progress line."""
+        if not is_main_process():
+            return
+
+        throughput = interval_source_sample_count / max(interval_seconds, 1e-6)
+        if total_source_sample_count is not None and total_source_sample_count > 0:
+            percent = min(source_sample_count / total_source_sample_count * 100.0, 100.0)
+            total_text = str(total_source_sample_count)
+            percent_text = f"{percent:.2f}%"
+            remaining_samples = max(total_source_sample_count - source_sample_count, 0)
+            eta_seconds = remaining_samples / throughput if throughput > 0 else None
+        else:
+            total_text = "unknown"
+            percent_text = "unknown"
+            eta_seconds = None
+
+        logger.info(
+            "Step inference progress: "
+            f"samples={source_sample_count}/{total_text}, "
+            f"percent={percent_text}, "
+            f"throughput={throughput:.2f} samples/s, "
+            f"eta={self._format_step_inference_duration(eta_seconds)}, "
+            f"estimated_finish={self._format_step_inference_finish_time(eta_seconds)}, "
+            f"packed_samples={packed_sample_count}"
+        )
+
     def prepare_dataloader(self, workflow: str = "train"):
         """Build the train-only dataloader over preprocessed multimodal samples.
 
@@ -135,6 +234,15 @@ class OpenbeeEngine(Engine):
                 logger.info("OpenBee step inference: disabling cache for the temporary lightweight dataloader.")
                 temp_config.data.cache = False
 
+            step_dataset_paths, total_source_sample_count, used_main_table_only = resolve_step_inference_dataset_source(
+                str(temp_config.data.train_path)
+            )
+            if used_main_table_only:
+                logger.info(
+                    "OpenBee step inference: using only the Lance main table from meta.json; "
+                    "reference tables will not be opened."
+                )
+
             # Step 2.2: build a temporary dataset/loader that uses the
             # lightweight preprocess but keeps the same packing behaviour.
             temp_collate_fn = OpenbeeCollator(
@@ -146,7 +254,10 @@ class OpenbeeEngine(Engine):
                 processor=self.processor,
                 process_fn=lightweight_process_sample,
                 resample=False,
+                dataset_paths=step_dataset_paths,
             )
+            if total_source_sample_count is None:
+                total_source_sample_count = self._infer_dataset_source_total_rows(temp_dataset)
             temp_loader = TorchLoader(
                 temp_dataset,
                 num_workers=int(temp_config.data.num_workers),
@@ -161,27 +272,112 @@ class OpenbeeEngine(Engine):
             )
 
             # Step 2.3: count how many packed samples this rank receives from
-            # the temporary loader.
+            # the temporary loader. Every N loader rounds, all ranks synchronize
+            # for progress logging; ranks that finish early keep participating
+            # in these interval reductions until every rank is done.
+            log_interval = int(temp_config.data.step_inference_log_interval)
             count_start_time = time.perf_counter()
             last_log_time = count_start_time
-            last_log_sample_count = 0
-            local_sample_count = 0
-            for batch_index, batch in enumerate(temp_loader, start=1):
-                local_sample_count += int(batch["input_ids"].shape[0])
+            local_packed_sample_count = 0
+            local_source_sample_count = 0
+            interval_packed_sample_count = 0
+            interval_source_sample_count = 0
+            temp_iterator = iter(temp_loader)
+            local_done = False
+            loader_round = 0
+            distributed = dist.is_available() and dist.is_initialized()
+
+            while True:
+                had_batch = 0
+                if not local_done:
+                    try:
+                        batch = next(temp_iterator)
+                    except StopIteration:
+                        local_done = True
+                    else:
+                        packed_batch_count = int(batch["input_ids"].shape[0])
+                        source_batch_count = self._count_step_inference_source_samples(batch)
+                        local_packed_sample_count += packed_batch_count
+                        local_source_sample_count += source_batch_count
+                        interval_packed_sample_count += packed_batch_count
+                        interval_source_sample_count += source_batch_count
+                        had_batch = 1
+
+                loader_round += 1
+                should_sync = loader_round % log_interval == 0
+
+                if not distributed:
+                    if should_sync and interval_source_sample_count > 0:
+                        now = time.perf_counter()
+                        self._log_step_inference_progress(
+                            source_sample_count=local_source_sample_count,
+                            total_source_sample_count=total_source_sample_count,
+                            packed_sample_count=local_packed_sample_count,
+                            interval_source_sample_count=interval_source_sample_count,
+                            interval_seconds=now - last_log_time,
+                        )
+                        interval_source_sample_count = 0
+                        interval_packed_sample_count = 0
+                        last_log_time = now
+
+                    if local_done:
+                        if interval_source_sample_count > 0:
+                            now = time.perf_counter()
+                            self._log_step_inference_progress(
+                                source_sample_count=local_source_sample_count,
+                                total_source_sample_count=total_source_sample_count,
+                                packed_sample_count=local_packed_sample_count,
+                                interval_source_sample_count=interval_source_sample_count,
+                                interval_seconds=now - last_log_time,
+                            )
+                        break
+                    continue
+
+                if not should_sync:
+                    continue
+
                 now = time.perf_counter()
-                if now - last_log_time >= 10.0:
-                    interval_elapsed = now - last_log_time
-                    interval_sample_count = local_sample_count - last_log_sample_count
-                    logger.info(
-                        f"Inferring training steps: {interval_sample_count / max(interval_elapsed, 1e-6):.2f} samples/s"
+                interval_seconds = now - last_log_time
+                count_stats = torch.tensor(
+                    [
+                        interval_source_sample_count,
+                        local_source_sample_count,
+                        interval_packed_sample_count,
+                        local_packed_sample_count,
+                        had_batch,
+                    ],
+                    device=self.device,
+                    dtype=torch.long,
+                )
+                elapsed_stats = torch.tensor(interval_seconds, device=self.device, dtype=torch.float64)
+                dist.all_reduce(count_stats, op=dist.ReduceOp.SUM)
+                dist.all_reduce(elapsed_stats, op=dist.ReduceOp.MAX)
+
+                global_interval_source_sample_count = int(count_stats[0].item())
+                global_source_sample_count = int(count_stats[1].item())
+                global_packed_sample_count = int(count_stats[3].item())
+                active_rank_count = int(count_stats[4].item())
+
+                if global_interval_source_sample_count > 0:
+                    self._log_step_inference_progress(
+                        source_sample_count=global_source_sample_count,
+                        total_source_sample_count=total_source_sample_count,
+                        packed_sample_count=global_packed_sample_count,
+                        interval_source_sample_count=global_interval_source_sample_count,
+                        interval_seconds=float(elapsed_stats.item()),
                     )
-                    last_log_time = now
-                    last_log_sample_count = local_sample_count
+
+                interval_source_sample_count = 0
+                interval_packed_sample_count = 0
+                last_log_time = now
+
+                if active_rank_count <= 0:
+                    break
 
             # Step 2.4: reduce all local counts to get the real global packed
             # sample count across all ranks.
-            total_sample_count = torch.tensor(local_sample_count, device=self.device, dtype=torch.long)
-            if dist.is_available() and dist.is_initialized():
+            total_sample_count = torch.tensor(local_packed_sample_count, device=self.device, dtype=torch.long)
+            if distributed:
                 dist.all_reduce(total_sample_count, op=dist.ReduceOp.SUM)
 
             total_sample_count_value = int(total_sample_count.item())

@@ -6,7 +6,7 @@ import torch
 from PIL import Image
 from torch.nn.utils.rnn import pad_sequence
 
-from .types import ModelInputs
+from .types import SOURCE_SAMPLE_COUNT_KEY, ModelInputs
 
 
 class OpenbeeCollator:
@@ -131,6 +131,12 @@ class OpenbeeCollator:
                 [sample["pack_segment_ids"] for sample in batch],
                 batch_first=True,
                 padding_value=0,
+            )
+
+        if any(SOURCE_SAMPLE_COUNT_KEY in sample for sample in batch):
+            model_inputs[SOURCE_SAMPLE_COUNT_KEY] = torch.tensor(
+                [int(sample.get(SOURCE_SAMPLE_COUNT_KEY, 1)) for sample in batch],
+                dtype=torch.long,
             )
 
         pixel_values = [sample["pixel_values"] for sample in batch if sample.get("pixel_values") is not None]

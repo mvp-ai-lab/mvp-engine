@@ -11,6 +11,8 @@ from typing import Any, Literal
 import torch
 from mvp_dataset.core import Assembler, RuntimeContext
 
+from .types import SOURCE_SAMPLE_COUNT_KEY
+
 
 @dataclass(slots=True)
 class _OpenPack:
@@ -274,6 +276,12 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any]]):
         image_grid_thw = [sample["image_grid_thw"] for sample in samples if sample.get("image_grid_thw") is not None]
         if image_grid_thw:
             packed_sample["image_grid_thw"] = torch.cat(image_grid_thw, dim=0)
+
+        source_sample_counts = [
+            int(sample[SOURCE_SAMPLE_COUNT_KEY]) for sample in samples if SOURCE_SAMPLE_COUNT_KEY in sample
+        ]
+        if source_sample_counts:
+            packed_sample[SOURCE_SAMPLE_COUNT_KEY] = sum(source_sample_counts)
 
         return packed_sample
 
