@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import math
+import random
 import time
 from collections import deque
 from typing import Any
 
+import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -529,8 +531,64 @@ class OpenbeeEngine(Engine):
             shifted_labels = F.pad(labels, (0, 1), value=ignore_index)[..., 1:]
             return int((shifted_labels != ignore_index).sum().item())
 
-        train_iterator = iter(self.train_loader)
         gradient_accumulation_steps = int(self.config.optim.gradient_accumulation_steps)
+        train_iterator = iter(self.train_loader)
+
+        if hasattr(self, "timer"):
+            self.timer.set_progress(self.step, self.total_steps)
+
+        resume_skip_micro_batches = 0
+        if self.config.resume is not None and self.step < self.total_steps:
+            resume_skip_micro_batches = self.step * gradient_accumulation_steps + int(self._accumulate_step)
+
+        if resume_skip_micro_batches > 0:
+            torch_rng_state = torch.get_rng_state()
+            python_rng_state = random.getstate()
+            numpy_rng_state = np.random.get_state()
+            skip_start_time = time.perf_counter()
+            log_interval = 50
+            if is_main_process():
+                logger.info(
+                    "Resume data skip: "
+                    f"step={self.step}, "
+                    f"accumulate_step={self._accumulate_step}, "
+                    f"micro_batches={resume_skip_micro_batches}"
+                )
+
+            try:
+                for skipped_micro_batches in range(resume_skip_micro_batches):
+                    try:
+                        data = next(train_iterator)
+                    except StopIteration:
+                        train_iterator = iter(self.train_loader)
+                        try:
+                            data = next(train_iterator)
+                        except StopIteration as exc:
+                            raise RuntimeError(
+                                "OpenBee train loader did not yield any batches during resume skip."
+                            ) from exc
+                    del data
+                    torch.distributed.barrier()
+                    current_skip_count = skipped_micro_batches + 1
+                    if is_main_process() and current_skip_count % log_interval == 0:
+                        logger.info(
+                            f"Resume data skip progress: {current_skip_count}/{resume_skip_micro_batches} micro-batches"
+                        )
+            finally:
+                torch.set_rng_state(torch_rng_state)
+                random.setstate(python_rng_state)
+                np.random.set_state(numpy_rng_state)
+
+            if dist.is_available() and dist.is_initialized():
+                dist.barrier()
+
+            if is_main_process():
+                elapsed = time.perf_counter() - skip_start_time
+                logger.info(
+                    "Resume data skip finished: "
+                    f"micro_batches={resume_skip_micro_batches}, "
+                    f"elapsed={self._format_step_inference_duration(elapsed)}"
+                )
 
         while self.step < self.total_steps:
             remaining_micro_steps = gradient_accumulation_steps - int(self._accumulate_step)

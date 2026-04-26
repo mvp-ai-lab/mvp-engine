@@ -40,11 +40,29 @@ THOUGHT_PREFIX = "<think>\n"
 THOUGHT_SUFFIX = "\n</think>\n\n"
 THOUGHT_PATTERN = re.compile(f"{re.escape(THOUGHT_PREFIX)}(.*?){re.escape(THOUGHT_SUFFIX)}", re.DOTALL)
 THOUGHT_MARKERS = (THOUGHT_PREFIX.strip(), THOUGHT_SUFFIX.strip())
+# These match Qwen3-VL's tokenizer: <think> = 151667, \n\n = 271, </think> = 151668.
+THINK_PREFIX_IDS = {151667, 271, 151668}
 MULTIMODAL_PLACEHOLDER = "<|openbee_multimodal_placeholder|>"
-RECOVERABLE_SAMPLE_ERRORS = (OSError, SyntaxError, ValueError, RuntimeError, IndexError, KeyError, TypeError)
 IMAGE_RETRY_TEXT_TOKEN_RESERVE = 64
 IMAGE_RETRY_MAX_IMAGE_TOKEN_FRACTION = 0.85
 IMAGE_RETRY_RESIZE_SAFETY_FACTOR = 0.95
+_FAST_LABEL_TEMPLATE_CACHE: dict[str, str] = {}
+
+
+class FastLabelRouteError(Exception):
+    """Raised when the fast label route cannot prove exact equivalence."""
+
+
+RECOVERABLE_SAMPLE_ERRORS = (
+    OSError,
+    SyntaxError,
+    ValueError,
+    RuntimeError,
+    IndexError,
+    KeyError,
+    TypeError,
+    FastLabelRouteError,
+)
 
 
 def resolve_cache_dir(train_path: str, configured_cache_dir: str | None) -> Path:
@@ -191,15 +209,15 @@ def configure_cache_write_batch_size(batch_size: int) -> None:
 
 
 def process_image(
-    image: str | bytes | dict[str, Any],
+    image: str | bytes | dict[str, Any] | Image.Image,
     *,
     image_root: Path | None = None,
 ) -> str | Image.Image:
     """Normalize one image input from one dataset row.
 
     Args:
-        image: Image path, raw image bytes, or a parquet image struct with
-            ``{"bytes", "path"}`` fields.
+        image: Image path, raw image bytes, PIL image, or a parquet image
+            struct with ``{"bytes", "path"}`` fields.
         image_root: Optional base directory used for relative image paths.
 
     Returns:
@@ -215,6 +233,9 @@ def process_image(
             return process_image(image_path, image_root=image_root)
 
         raise ValueError("contains an invalid image record.")
+
+    if isinstance(image, Image.Image):
+        return image.convert("RGB").copy()
 
     if isinstance(image, bytes):
         with Image.open(io.BytesIO(image)) as decoded:
@@ -568,7 +589,10 @@ def normalize_message(message: dict[str, Any]) -> dict[str, str]:
     role = message.get("role")
     content = message.get("content")
     if isinstance(role, str) and isinstance(content, str) and role:
-        return {"role": role, "content": content}
+        normalized_role = ROLE_MAP.get(role)
+        if normalized_role is None:
+            raise ValueError(f"contains an invalid role: {role!r}")
+        return {"role": normalized_role, "content": content}
 
     source_role = message.get("from")
     source_content = message.get("value")
@@ -612,7 +636,10 @@ def process_message(
             except StopIteration as exc:
                 raise ValueError("has more image placeholders than image paths.") from exc
 
-    return {"role": role, "content": blocks}
+    rendered_message: dict[str, Any] = {"role": role, "content": blocks}
+    if role == "assistant" and "tool_calls" in message:
+        rendered_message["tool_calls"] = message["tool_calls"]
+    return rendered_message
 
 
 def add_thought(content: str = "") -> str:
@@ -786,10 +813,6 @@ def build_labels(
         )
         return tokenized["input_ids"][0]
 
-    # Token IDs for the empty thinking block the model emits when not reasoning.
-    # These match Qwen3-VL's tokenizer: <think> = 151667, \n\n = 271, </think> = 151668.
-    _THINK_PREFIX_IDS = {151667, 271, 151668}
-
     labels = torch.full_like(input_ids, ignore_index)
     valid_length = int(attention_mask.sum().item())
     if valid_length <= 0:
@@ -821,7 +844,7 @@ def build_labels(
         # the actual answer content contributes to the loss.
         if assistant_skip_think_prefix is not None and message_index in assistant_skip_think_prefix and start < end:
             pos = start
-            while pos < end and input_ids[pos].item() in _THINK_PREFIX_IDS:
+            while pos < end and input_ids[pos].item() in THINK_PREFIX_IDS:
                 pos += 1
             start = pos
 
@@ -829,6 +852,262 @@ def build_labels(
             labels[start:end] = input_ids[start:end]
 
     return labels
+
+
+def _build_fast_label_chat_template(template: str) -> str:
+    """Patch Qwen3-VL's assistant branch for `return_assistant_tokens_mask`."""
+    cached = _FAST_LABEL_TEMPLATE_CACHE.get(template)
+    if cached is not None:
+        return cached
+
+    assistant_marker = '    {%- elif message.role == "assistant" %}\n'
+    tool_marker = '    {%- elif message.role == "tool" %}\n'
+    assistant_start = template.find(assistant_marker)
+    if assistant_start < 0:
+        raise FastLabelRouteError("chat_template does not contain the Qwen assistant branch.")
+
+    assistant_end = template.find(tool_marker, assistant_start + len(assistant_marker))
+    if assistant_end < 0:
+        assistant_end = template.find("{%- endfor %}", assistant_start + len(assistant_marker))
+    if assistant_end < 0:
+        raise FastLabelRouteError("chat_template assistant branch end could not be located.")
+
+    assistant_block = template[assistant_start:assistant_end]
+    if "{% generation %}" in assistant_block or "{%- generation %}" in assistant_block:
+        _FAST_LABEL_TEMPLATE_CACHE[template] = template
+        return template
+
+    assistant_header = "        {{- '<|im_start|>' + message.role + '\\n' }}\n"
+    assistant_end_token = "        {{- '<|im_end|>\\n' }}\n"
+    if assistant_header not in assistant_block or assistant_end_token not in assistant_block:
+        raise FastLabelRouteError("chat_template assistant branch does not match expected Qwen3-VL shape.")
+
+    patched_block = assistant_block.replace(
+        assistant_header,
+        assistant_header + "        {%- generation %}\n",
+        1,
+    )
+    patched_block = patched_block.replace(
+        assistant_end_token,
+        assistant_end_token + "        {%- endgeneration %}\n",
+        1,
+    )
+    patched_template = template[:assistant_start] + patched_block + template[assistant_end:]
+    _FAST_LABEL_TEMPLATE_CACHE[template] = patched_template
+    return patched_template
+
+
+def _build_expanded_label_messages(
+    messages: list[dict[str, Any]],
+    image_grid_thw: Any,
+    processor: Any,
+) -> list[dict[str, Any]]:
+    """Replace image blocks with the exact expanded vision token text."""
+    if image_grid_thw is None:
+        image_grid_rows: list[tuple[int, int, int]] = []
+    else:
+        grid_tensor = torch.as_tensor(image_grid_thw)
+        if grid_tensor.numel() % 3 != 0:
+            raise FastLabelRouteError(f"image_grid_thw has invalid shape {tuple(grid_tensor.shape)}.")
+        image_grid_rows = [
+            (int(row[0]), int(row[1]), int(row[2])) for row in grid_tensor.detach().cpu().reshape(-1, 3).tolist()
+        ]
+    image_count = len(image_grid_rows)
+    grid_index = 0
+
+    image_processor = getattr(processor, "image_processor", None)
+    merge_size = getattr(image_processor, "merge_size", None)
+    if image_count and (not isinstance(merge_size, int) or merge_size <= 0):
+        raise FastLabelRouteError("processor.image_processor must expose a positive integer merge_size.")
+
+    image_token = getattr(processor, "image_token", None)
+    vision_start_token = getattr(processor, "vision_start_token", None)
+    vision_end_token = getattr(processor, "vision_end_token", None)
+    if image_count and not all(
+        isinstance(token, str) and token for token in (image_token, vision_start_token, vision_end_token)
+    ):
+        raise FastLabelRouteError("processor must expose image_token, vision_start_token, and vision_end_token.")
+
+    expanded_messages: list[dict[str, Any]] = []
+    for message in messages:
+        expanded_message = dict(message)
+        content = message.get("content")
+        if not isinstance(content, list):
+            expanded_messages.append(expanded_message)
+            continue
+
+        expanded_content: list[Any] = []
+        for block in content:
+            is_image_block = isinstance(block, dict) and (
+                block.get("type") == "image" or "image" in block or "image_url" in block
+            )
+            if not is_image_block:
+                expanded_content.append(dict(block) if isinstance(block, dict) else block)
+                continue
+
+            if grid_index >= image_count:
+                raise FastLabelRouteError("rendered messages contain more image blocks than image_grid_thw rows.")
+
+            t, h, w = image_grid_rows[grid_index]
+            grid_index += 1
+            merged_patch_area = int(merge_size) ** 2
+            patch_count = t * h * w
+            if patch_count % merged_patch_area != 0:
+                raise FastLabelRouteError(f"image grid {(t, h, w)} is not divisible by merge_size={merge_size}.")
+            image_token_count = patch_count // merged_patch_area
+            expanded_content.append(
+                {
+                    "type": "text",
+                    "text": f"{vision_start_token}{image_token * image_token_count}{vision_end_token}",
+                }
+            )
+
+        expanded_message["content"] = expanded_content
+        expanded_messages.append(expanded_message)
+
+    if grid_index != image_count:
+        raise FastLabelRouteError(
+            f"image_grid_thw has {image_count - grid_index} unused row(s) after rendering label messages."
+        )
+    return expanded_messages
+
+
+def _assistant_mask_to_labels(
+    input_ids: torch.Tensor,
+    assistant_mask: Any,
+    messages: list[dict[str, Any]],
+    *,
+    ignore_index: int,
+    assistant_skip_think_prefix: set[int] | None,
+) -> torch.Tensor:
+    """Convert tokenizer assistant masks into the recipe's label tensor."""
+    mask = torch.as_tensor(assistant_mask)
+    if mask.ndim == 2:
+        if mask.size(0) != 1:
+            raise FastLabelRouteError(f"assistant mask batch size must be 1, got {mask.size(0)}.")
+        mask = mask[0]
+    if mask.ndim != 1:
+        raise FastLabelRouteError(f"assistant mask must be 1D after batching, got shape {tuple(mask.shape)}.")
+    mask = mask.to(device=input_ids.device, dtype=torch.bool)
+    if int(mask.numel()) != int(input_ids.numel()):
+        raise FastLabelRouteError(
+            f"assistant mask length {int(mask.numel())} does not match input length {int(input_ids.numel())}."
+        )
+
+    labels = torch.full_like(input_ids, ignore_index)
+    labels[mask] = input_ids[mask]
+
+    if assistant_skip_think_prefix:
+        assistant_indices = [index for index, message in enumerate(messages) if message.get("role") == "assistant"]
+        spans: list[tuple[int, int]] = []
+        span_start: int | None = None
+        for index, value in enumerate(mask.detach().cpu().tolist()):
+            if value and span_start is None:
+                span_start = index
+            elif not value and span_start is not None:
+                spans.append((span_start, index))
+                span_start = None
+        if span_start is not None:
+            spans.append((span_start, int(mask.numel())))
+
+        for message_index, (start, end) in zip(assistant_indices, spans, strict=False):
+            if message_index not in assistant_skip_think_prefix:
+                continue
+            pos = start
+            while pos < end and input_ids[pos].item() in THINK_PREFIX_IDS:
+                labels[pos] = ignore_index
+                pos += 1
+
+    return labels
+
+
+def _first_tensor_difference(expected: torch.Tensor, actual: torch.Tensor) -> str:
+    if tuple(expected.shape) != tuple(actual.shape):
+        return f"shape expected={tuple(expected.shape)} actual={tuple(actual.shape)}"
+
+    difference = expected.detach().cpu().ne(actual.detach().cpu())
+    if not bool(difference.any().item()):
+        return "no differing value"
+
+    flat_index = int(torch.nonzero(difference.flatten(), as_tuple=False)[0].item())
+    expected_flat = expected.detach().cpu().flatten()
+    actual_flat = actual.detach().cpu().flatten()
+    return (
+        f"flat_index={flat_index} expected={int(expected_flat[flat_index].item())} "
+        f"actual={int(actual_flat[flat_index].item())}"
+    )
+
+
+def build_fast_labels(
+    processor: Any,
+    messages: list[dict[str, Any]],
+    model_inputs: dict[str, Any],
+    *,
+    max_length: int,
+    ignore_index: int,
+    assistant_skip_think_prefix: set[int] | None = None,
+    loc: str = "unknown",
+    image_count: int = 0,
+) -> torch.Tensor:
+    """Build labels without invoking the image processor a second time."""
+    tokenizer = getattr(processor, "tokenizer", None)
+    if tokenizer is None or not callable(getattr(tokenizer, "apply_chat_template", None)):
+        raise FastLabelRouteError("processor.tokenizer must expose apply_chat_template for fast labels.")
+
+    template = getattr(processor, "chat_template", None)
+    if template is None:
+        template = getattr(tokenizer, "chat_template", None)
+    if isinstance(template, dict):
+        template = template.get("default")
+    if not isinstance(template, str) or not template:
+        raise FastLabelRouteError("processor does not expose a string chat_template.")
+
+    label_messages = _build_expanded_label_messages(
+        messages,
+        model_inputs.get("image_grid_thw"),
+        processor,
+    )
+    tokenized = tokenizer.apply_chat_template(
+        [label_messages],
+        chat_template=_build_fast_label_chat_template(template),
+        tokenize=True,
+        add_generation_prompt=False,
+        return_dict=True,
+        return_tensors="pt",
+        truncation=True,
+        max_length=max_length,
+        return_assistant_tokens_mask=True,
+    )
+
+    for key in ("input_ids", "attention_mask"):
+        if key not in model_inputs or key not in tokenized:
+            raise FastLabelRouteError(f"fast label route missing `{key}` for {loc}.")
+
+        expected = torch.as_tensor(model_inputs[key])
+        actual = torch.as_tensor(tokenized[key])
+        if torch.equal(expected, actual):
+            continue
+
+        raise FastLabelRouteError(
+            f"fast label token mismatch at {loc}: key={key}, image_count={image_count}, "
+            f"expected_shape={tuple(expected.shape)}, actual_shape={tuple(actual.shape)}, "
+            f"expected_numel={int(expected.numel())}, actual_numel={int(actual.numel())}, "
+            f"first_diff=({_first_tensor_difference(expected, actual)})"
+        )
+
+    assistant_mask = tokenized.get("assistant_masks")
+    if assistant_mask is None:
+        assistant_mask = tokenized.get("assistant_tokens_mask")
+    if assistant_mask is None:
+        raise FastLabelRouteError("tokenizer did not return assistant masks.")
+
+    return _assistant_mask_to_labels(
+        torch.as_tensor(model_inputs["input_ids"])[0],
+        assistant_mask,
+        messages,
+        ignore_index=ignore_index,
+        assistant_skip_think_prefix=assistant_skip_think_prefix,
+    )
 
 
 def process_sample(
@@ -954,15 +1233,16 @@ def process_sample(
         input_ids = model_inputs["input_ids"][0]
         attention_mask = model_inputs["attention_mask"][0]
 
-        # Re-tokenize assistant boundaries so only assistant responses contribute to loss.
-        labels = build_labels(
-            apply_chat_template,
+        # Build assistant labels from tokenizer masks without invoking the image processor again.
+        labels = build_fast_labels(
+            processor,
             label_messages,
-            input_ids,
-            attention_mask,
+            model_inputs,
             max_length=max_length,
             ignore_index=ignore_index,
             assistant_skip_think_prefix=assistant_skip_think_prefix,
+            loc=loc,
+            image_count=len(resolved_images),
         )
         if not torch.any(labels != ignore_index):
             raise ValueError("has no supervised assistant tokens after tokenization/truncation.")
