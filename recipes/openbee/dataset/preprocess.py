@@ -10,10 +10,8 @@ import torchvision.transforms.v2.functional as tvF
 from PIL import Image
 from torchvision.transforms import InterpolationMode
 
-from mvp_engine.utils.log import simple_info
-
 from ..guards.data import build_empty_sample
-from .utils import summarize_sample_for_log
+from .utils import record_skip
 
 IMAGE_PLACEHOLDER = "<image>"
 ROLE_MAP = {
@@ -648,8 +646,5 @@ def process_sample(
         return sample
 
     except Exception as exc:
-        simple_info(
-            f"Skipping sample with error: {summarize_sample_for_log(sample)}\n{exc}",
-            level="warning",
-        )
+        record_skip("process_sample", sample, detail=str(exc))
         return build_empty_sample()

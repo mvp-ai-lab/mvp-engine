@@ -4,9 +4,7 @@ from typing import Any
 import torch
 from mvp_dataset.core import Assembler, RuntimeContext
 
-from mvp_engine.utils.log import simple_info
-
-from ..dataset.utils import summarize_sample_for_log
+from ..dataset.utils import record_skip
 
 
 def build_empty_sample():
@@ -76,30 +74,20 @@ class DataGuard(Assembler[dict[str, Any], dict[str, Any]]):
         # Check basic formats
         if self.check_basic_formats:
             if not isinstance(sample, dict):
-                simple_info(f"DataGuard: sample is not a dict, skipping sample: {sample}", level="warning")
+                record_skip("guard.not_dict", sample)
                 return []
             messages = sample.get("messages") or sample.get("conversations")
             if not isinstance(messages, list):
-                simple_info(
-                    "DataGuard: missing or invalid messages/conversations field, skipping sample: "
-                    f"{summarize_sample_for_log(sample)}",
-                    level="warning",
-                )
+                record_skip("guard.invalid_messages", sample)
                 return []
             if not isinstance(sample.get("images"), list):
-                simple_info(
-                    f"DataGuard: missing or invalid images field, skipping sample: {summarize_sample_for_log(sample)}",
-                    level="warning",
-                )
+                record_skip("guard.invalid_images", sample)
                 return []
 
         # =============================
         # Check if the sample has empty input_ids, which indicates an invalid sample.
         if self.check_input_ids and sample["input_ids"].size(0) <= 0:
-            simple_info(
-                f"DataGuard: empty input_ids, skipping sample: {summarize_sample_for_log(sample)}",
-                level="warning",
-            )
+            record_skip("guard.empty_input_ids", sample)
             return []
 
         # =============================
@@ -113,47 +101,30 @@ class DataGuard(Assembler[dict[str, Any], dict[str, Any]]):
                     sample["image_size"] = []
                     return [sample]
 
-                simple_info(
-                    f"DataGuard: missing image_size field, skipping sample: {summarize_sample_for_log(sample)}",
-                    level="warning",
-                )
+                record_skip("guard.missing_image_size", sample)
                 return []
             if not isinstance(image_size, (list, tuple)):
-                simple_info(
-                    f"DataGuard: invalid image_size type, skipping sample: {summarize_sample_for_log(sample)}",
-                    level="warning",
-                )
+                record_skip("guard.invalid_image_size", sample)
                 return []
             if len(image_size) == 0:
                 if len(images) == 0:
                     sample["image_size"] = []
                     return [sample]
-                simple_info(
-                    "DataGuard: empty image_size for non-text-only sample, skipping sample: "
-                    f"{summarize_sample_for_log(sample)}",
-                    level="warning",
-                )
+                record_skip("guard.missing_image_size", sample)
                 return []
             if not all(isinstance(size, (list, tuple)) for size in image_size):
-                simple_info(
-                    "DataGuard: image_size must be a list of width/height entries, "
-                    f"skipping sample: {summarize_sample_for_log(sample)}",
-                    level="warning",
-                )
+                record_skip("guard.invalid_image_size", sample)
                 return []
 
             for size in image_size:
                 if len(size) != 2 or not all(isinstance(dim, int) and dim > 0 for dim in size):
-                    simple_info(
-                        f"DataGuard: invalid image_size {size}, skipping sample: {summarize_sample_for_log(sample)}",
-                        level="warning",
-                    )
+                    record_skip("guard.invalid_image_size", sample, detail=f"image_size={size!r}")
                     return []
             if len(image_size) != len(images):
-                simple_info(
-                    "DataGuard: image_size list length does not match images list length, "
-                    f"skipping sample: {summarize_sample_for_log(sample)}",
-                    level="warning",
+                record_skip(
+                    "guard.image_size_count_mismatch",
+                    sample,
+                    detail=f"{len(image_size)} sizes vs {len(images)} images",
                 )
                 return []
 

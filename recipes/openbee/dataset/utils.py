@@ -1,6 +1,12 @@
+import os
+import sys
+from collections import Counter
 from typing import Any
 
 import torch
+
+_SKIP_COUNTS: Counter[str] = Counter()
+_SKIP_TOTAL = 0
 
 
 def summarize_sample_for_log(sample: Any) -> str:
@@ -36,3 +42,33 @@ def summarize_sample_for_log(sample: Any) -> str:
         summary["input_ids_shape"] = tuple(input_ids.shape)
 
     return repr(summary)
+
+
+def record_skip(reason: str, sample: Any = None, detail: str | None = None, log_every: int = 10) -> None:
+    """Record one skipped sample and periodically print per-process counts."""
+    global _SKIP_TOTAL
+
+    _SKIP_TOTAL += 1
+    _SKIP_COUNTS[reason] += 1
+    if _SKIP_TOTAL != 1 and (log_every <= 0 or _SKIP_TOTAL % log_every != 0):
+        return
+
+    counts = " ".join(f"{key}={_SKIP_COUNTS[key]}" for key in sorted(_SKIP_COUNTS))
+    message = (
+        "OpenBee skip stats "
+        f"rank={os.getenv('RANK', '0')} "
+        f"local_rank={os.getenv('LOCAL_RANK', '0')} "
+        f"pid={os.getpid()} "
+        f"total_skip={_SKIP_TOTAL} "
+        f"counts={counts} "
+        f"last_reason={reason}"
+    )
+    if sample is not None:
+        message += f" sample={summarize_sample_for_log(sample)}"
+    if detail:
+        detail = detail.replace("\n", "\\n")
+        if len(detail) > 500:
+            detail = detail[:500] + "..."
+        message += f" detail={detail}"
+
+    print(message, file=sys.stderr, flush=True)
