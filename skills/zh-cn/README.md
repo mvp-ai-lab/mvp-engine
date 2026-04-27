@@ -114,6 +114,11 @@ recipes/<recipe>/
   但这一层不直接进入训练。
 - `test_smoke.py` 至少应覆盖 1 个真实 step：forward、loss、backward、optimizer step、
   logger write，以及 checkpoint noop 或临时保存。
+- recipe-local skill 测试导入 recipe 模块时，应使用显式的仓库包路径，例如
+  `from recipes.<recipe>.configs.schema import ...`。不要为了支持
+  `from <recipe>...` 这种短导入而创建 `recipes/<recipe>/skill_tests/conftest.py`
+  去修改 `sys.path`；skill test runner 会从仓库根目录执行，这已经足够支持
+  `mvp_engine` 和 `recipes.<recipe>` 导入。
 - 优先从 `tests/test_structure_template.py`、`tests/test_runtime_template.py`、
   `tests/test_smoke_template.py` 复制到
   `recipes/<recipe>/skill_tests/<skill-id>/` 再开始修改。默认应尽量少改，通常只改

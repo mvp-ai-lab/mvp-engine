@@ -114,6 +114,12 @@ recipes/<recipe>/
   engine successfully, but it does not need to run training.
 - `test_smoke.py` should cover one real step: forward, loss, backward, optimizer
   step, logger write, and checkpoint noop or temporary save.
+- Recipe-local skill tests should import recipe modules through the explicit
+  repository package path, such as `from recipes.<recipe>.configs.schema import ...`.
+  Do not create `recipes/<recipe>/skill_tests/conftest.py` just to mutate `sys.path`
+  for short imports like `from <recipe>...`; the skill test runner executes from
+  the repository root, which is sufficient for `mvp_engine` and `recipes.<recipe>`
+  imports.
 - Prefer starting from `tests/test_structure_template.py`,
   `tests/test_runtime_template.py`, and `tests/test_smoke_template.py`. Copy them
   into `recipes/<recipe>/skill_tests/<skill-id>/` and keep edits minimal,

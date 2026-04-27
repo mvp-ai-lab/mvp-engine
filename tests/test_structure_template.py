@@ -10,13 +10,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
-# Update this import block when copying the template to a new recipe.
-from magic_transformer.configs.schema import MagicTransformerConfig
-from magic_transformer.model import MagicTransformer, TransformerConfig
 from omegaconf import OmegaConf
 
 from mvp_engine.engine import ENGINE_REGISTRY
+
+# Update this import block when copying the template to a new recipe.
+from recipes.magic_transformer.configs.schema import MagicTransformerConfig
+from recipes.magic_transformer.model import MagicTransformer, TransformerConfig
 
 repo_root = Path(__file__).resolve().parents[1]
 
@@ -31,10 +31,10 @@ def recipe_dir() -> Path:
 
 def import_recipe_modules() -> None:
     """Import recipe modules so the engine registry is populated."""
-    import magic_transformer.configs.schema  # noqa: F401
-    import magic_transformer.dataset  # noqa: F401
-    import magic_transformer.engine  # noqa: F401
-    import magic_transformer.model  # noqa: F401
+    import recipes.magic_transformer.configs.schema  # noqa: F401
+    import recipes.magic_transformer.dataset  # noqa: F401
+    import recipes.magic_transformer.engine  # noqa: F401
+    import recipes.magic_transformer.model  # noqa: F401
 
 
 def test_recipe_structure_template_matches_skill_test_scaffold() -> None:

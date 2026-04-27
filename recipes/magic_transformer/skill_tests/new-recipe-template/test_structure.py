@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from magic_transformer.configs.schema import MagicTransformerConfig
-from magic_transformer.model import MagicTransformer, TransformerConfig
 from omegaconf import OmegaConf
 
 from mvp_engine.engine import ENGINE_REGISTRY
+from recipes.magic_transformer.configs.schema import MagicTransformerConfig
+from recipes.magic_transformer.model import MagicTransformer, TransformerConfig
 
 repo_root = Path(__file__).resolve().parents[4]
 
@@ -20,10 +20,10 @@ def recipe_dir() -> Path:
 
 def import_recipe_modules() -> None:
     """Import recipe modules so the engine registry is populated."""
-    import magic_transformer.configs.schema  # noqa: F401
-    import magic_transformer.dataset  # noqa: F401
-    import magic_transformer.engine  # noqa: F401
-    import magic_transformer.model  # noqa: F401
+    import recipes.magic_transformer.configs.schema  # noqa: F401
+    import recipes.magic_transformer.dataset  # noqa: F401
+    import recipes.magic_transformer.engine  # noqa: F401
+    import recipes.magic_transformer.model  # noqa: F401
 
 
 def test_new_recipe_structure_matches_magic_transformer_scaffold() -> None:

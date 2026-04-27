@@ -9,12 +9,12 @@ from pathlib import Path
 from typing import Iterator
 
 import torch.distributed as dist
-from magic_transformer.configs.schema import MagicTransformerConfig
 from omegaconf import OmegaConf
 
 from mvp_engine.engine import ENGINE_REGISTRY
 from mvp_engine.utils import skill_testing_util
 from mvp_engine.utils.log import get_logger
+from recipes.magic_transformer.configs.schema import MagicTransformerConfig
 
 repo_root = Path(__file__).resolve().parents[4]
 
@@ -26,10 +26,10 @@ def recipe_dir() -> Path:
 
 def import_recipe_modules() -> None:
     """Import recipe modules so the engine registry is populated."""
-    import magic_transformer.configs.schema  # noqa: F401
-    import magic_transformer.dataset  # noqa: F401
-    import magic_transformer.engine  # noqa: F401
-    import magic_transformer.model  # noqa: F401
+    import recipes.magic_transformer.configs.schema  # noqa: F401
+    import recipes.magic_transformer.dataset  # noqa: F401
+    import recipes.magic_transformer.engine  # noqa: F401
+    import recipes.magic_transformer.model  # noqa: F401
 
 
 def load_recipe_config(
