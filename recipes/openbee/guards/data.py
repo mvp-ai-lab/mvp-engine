@@ -4,7 +4,7 @@ from typing import Any
 import torch
 from mvp_dataset.core import Assembler, RuntimeContext
 
-from ..dataset.utils import record_skip
+from ..utils.data_logging import record_skip
 
 
 def build_empty_sample():
@@ -41,22 +41,30 @@ class DataGuard(Assembler[dict[str, Any], dict[str, Any]]):
         check_input_ids: Drop samples whose ``input_ids`` tensor is empty.
         check_image_sizes: Drop samples with missing, malformed, or mismatched
                            ``image_size`` metadata.
+        record: Whether guard drops should be counted as skips.
     """
 
     check_basic_formats: bool = True
     check_input_ids: bool = False
     check_image_sizes: bool = False
+    record: bool = True
 
     def __init__(
         self,
         check_basic_formats: bool = True,
         check_input_ids: bool = False,
         check_image_sizes: bool = False,
+        record: bool = True,
     ):
         super().__init__()
         self.check_basic_formats = check_basic_formats
         self.check_input_ids = check_input_ids
         self.check_image_sizes = check_image_sizes
+        self.record = record
+
+    def _record_skip(self, reason: str, sample: Any, detail: str | None = None) -> None:
+        if self.record:
+            record_skip(reason, sample, detail=detail)
 
     def push(self, sample: dict[str, Any]) -> Iterable[dict[str, Any]]:
         """Validate a single sample and emit zero or one samples.
@@ -74,20 +82,20 @@ class DataGuard(Assembler[dict[str, Any], dict[str, Any]]):
         # Check basic formats
         if self.check_basic_formats:
             if not isinstance(sample, dict):
-                record_skip("guard.not_dict", sample)
+                self._record_skip("guard.not_dict", sample)
                 return []
             messages = sample.get("messages") or sample.get("conversations")
             if not isinstance(messages, list):
-                record_skip("guard.invalid_messages", sample)
+                self._record_skip("guard.invalid_messages", sample)
                 return []
             if not isinstance(sample.get("images"), list):
-                record_skip("guard.invalid_images", sample)
+                self._record_skip("guard.invalid_images", sample)
                 return []
 
         # =============================
         # Check if the sample has empty input_ids, which indicates an invalid sample.
         if self.check_input_ids and sample["input_ids"].size(0) <= 0:
-            record_skip("guard.empty_input_ids", sample)
+            self._record_skip("guard.empty_input_ids", sample)
             return []
 
         # =============================
@@ -101,27 +109,27 @@ class DataGuard(Assembler[dict[str, Any], dict[str, Any]]):
                     sample["image_size"] = []
                     return [sample]
 
-                record_skip("guard.missing_image_size", sample)
+                self._record_skip("guard.missing_image_size", sample)
                 return []
             if not isinstance(image_size, (list, tuple)):
-                record_skip("guard.invalid_image_size", sample)
+                self._record_skip("guard.invalid_image_size", sample)
                 return []
             if len(image_size) == 0:
                 if len(images) == 0:
                     sample["image_size"] = []
                     return [sample]
-                record_skip("guard.missing_image_size", sample)
+                self._record_skip("guard.missing_image_size", sample)
                 return []
             if not all(isinstance(size, (list, tuple)) for size in image_size):
-                record_skip("guard.invalid_image_size", sample)
+                self._record_skip("guard.invalid_image_size", sample)
                 return []
 
             for size in image_size:
                 if len(size) != 2 or not all(isinstance(dim, int) and dim > 0 for dim in size):
-                    record_skip("guard.invalid_image_size", sample, detail=f"image_size={size!r}")
+                    self._record_skip("guard.invalid_image_size", sample, detail=f"image_size={size!r}")
                     return []
             if len(image_size) != len(images):
-                record_skip(
+                self._record_skip(
                     "guard.image_size_count_mismatch",
                     sample,
                     detail=f"{len(image_size)} sizes vs {len(images)} images",
@@ -152,6 +160,7 @@ def build_dataguard(
     check_basic_formats: bool = True,
     check_input_ids: bool = False,
     check_image_sizes: bool = False,
+    record: bool = True,
 ):
     """Create a ``DataGuard`` assembler for the dataset assembly pipeline.
 
@@ -161,6 +170,7 @@ def build_dataguard(
         check_input_ids: Whether to drop samples with empty ``input_ids``.
         check_image_sizes: Whether to validate ``image_size`` metadata against
             the sample's image list.
+        record: Whether guard drops should be counted as skips.
 
     Returns:
         A configured ``DataGuard`` instance.
@@ -170,4 +180,5 @@ def build_dataguard(
         check_basic_formats=check_basic_formats,
         check_input_ids=check_input_ids,
         check_image_sizes=check_image_sizes,
+        record=record,
     )

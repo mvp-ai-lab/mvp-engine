@@ -23,12 +23,10 @@ from mvp_engine.utils.misc import calculate_model_size
 from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
 from ..configs.schema import OpenbeeConfig
-from ..dataset import (
-    ModelInputs,
-    OpenbeeCollator,
-    build_dataset,
-    build_qwen3_vl_processor,
-)
+from ..dataset.collator import OpenbeeCollator
+from ..dataset.dataset import build_dataset
+from ..dataset.processor import build_qwen3_vl_processor
+from ..dataset.types import ModelInputs
 from ..guards.loss import LossGuard
 from ..model import build_qwen3_vl_model
 from ..model.packing import apply_packed_fa2_patch, prepare_packed_model_inputs

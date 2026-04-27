@@ -13,7 +13,7 @@ from torchvision.transforms import InterpolationMode
 from mvp_engine.utils.log import simple_info
 
 from ..guards.data import build_empty_sample
-from .utils import summarize_sample_for_log
+from ..utils.data_logging import summarize_sample_for_log
 
 IMAGE_PLACEHOLDER = "<image>"
 ROLE_MAP = {

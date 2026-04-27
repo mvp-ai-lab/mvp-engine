@@ -11,7 +11,7 @@ from PIL import Image
 from torchvision.transforms import InterpolationMode
 
 from ..guards.data import build_empty_sample
-from .utils import record_skip
+from ..utils.data_logging import record_skip
 
 IMAGE_PLACEHOLDER = "<image>"
 ROLE_MAP = {
@@ -561,6 +561,7 @@ def process_sample(
 
         turns: list[tuple[str, str]] = []
         leading_system_messages: list[dict[str, Any]] = []
+        used_image_count = 0
         message_index = 0
         while message_index < len(rendered_messages) and rendered_messages[message_index].get("role") == "system":
             leading_system_messages.append(rendered_messages[message_index])
@@ -569,12 +570,23 @@ def process_sample(
         empty_thought = f"{THOUGHT_PREFIX}{THOUGHT_SUFFIX}"
         while message_index < len(rendered_messages):
             user_message = rendered_messages[message_index]
+            if user_message.get("role") != "user":
+                raise ValueError("conversation must contain user/assistant turn pairs after optional system messages.")
+            if message_index + 1 >= len(rendered_messages):
+                break
+
             assistant_message = rendered_messages[message_index + 1]
-            if user_message.get("role") != "user" or assistant_message.get("role") != "assistant":
+            if assistant_message.get("role") != "assistant":
                 raise ValueError("conversation must contain user/assistant turn pairs after optional system messages.")
 
             source_messages = leading_system_messages + [user_message]
             full_messages = source_messages + [assistant_message]
+            used_image_count += sum(
+                1
+                for message in full_messages
+                for block in message.get("content", [])
+                if isinstance(block, dict) and block.get("type") == "image"
+            )
             raw_source_text = processor.apply_chat_template(
                 source_messages,
                 tokenize=False,
@@ -598,8 +610,10 @@ def process_sample(
             leading_system_messages = []
             message_index += 2
 
-        if image_cursor != len(image_token_counts):
+        if image_cursor != used_image_count:
             raise ValueError("image size metadata does not match rendered image placeholders.")
+        sample["images"] = images[:used_image_count]
+        sample["adjusted_image_size"] = adjusted_image_sizes[:used_image_count]
 
         # 5. Tokenize and truncate each turn independently under a shared max-length budget.
         vision_token_ids, vision_token_id_tensor = _get_vision_token_ids(tokenizer, image_token)

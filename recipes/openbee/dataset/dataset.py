@@ -74,6 +74,7 @@ def build_dataset(
             check_basic_formats=False,
             check_input_ids=True,
             check_image_sizes=False,
+            record=False,
         )
     )
 
