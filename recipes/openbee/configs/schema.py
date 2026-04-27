@@ -11,9 +11,8 @@ class OpenbeeDataConfig(BaseModel):
     model_config = ConfigDict(frozen=False, extra="forbid")
 
     train_path: Optional[str] = "./data/openbee/alignment_demo.jsonl"
-    cache_dir: str | None = None
-    enable_thinking: bool | None | Literal["non-empty"] = "non-empty"
-    cache: bool = False
+    ref_columns: list[str] = Field(default_factory=lambda: ["images"])
+    thinking_mode: bool | None | Literal["non-empty"] = "non-empty"
     shuffle_buffer: int = Field(1000, ge=1)
     packing: bool = False
     shuffle_on_packs: bool = False
@@ -39,19 +38,6 @@ class OpenbeeDataConfig(BaseModel):
             raise ValueError("`data.train_path` must not be empty.")
         return normalized
 
-    @field_validator("cache_dir", mode="before")
-    @classmethod
-    def validate_cache_dir(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        if not isinstance(value, str):
-            raise TypeError("`data.cache_dir` must be a string or null.")
-
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("`data.cache_dir` must not be empty when provided.")
-        return normalized
-
     @field_validator("batch_size")
     @classmethod
     def validate_batch_size(cls, value: int) -> int:
@@ -59,13 +45,13 @@ class OpenbeeDataConfig(BaseModel):
             raise ValueError("`data.batch_size` must be positive or exactly -1.")
         return value
 
-    @field_validator("enable_thinking", mode="before")
+    @field_validator("thinking_mode", mode="before")
     @classmethod
-    def validate_enable_thinking(cls, value: bool | str | None) -> bool | None | Literal["non-empty"]:
+    def validate_thinking_mode(cls, value: bool | str | None) -> bool | None | Literal["non-empty"]:
         if value is None or isinstance(value, bool):
             return value
         if not isinstance(value, str):
-            raise TypeError("`data.enable_thinking` must be a bool, null, or 'non-empty'.")
+            raise TypeError("`data.thinking_mode` must be a bool, null, or 'non-empty'.")
 
         normalized = value.strip().lower()
         if normalized == "true":
@@ -76,7 +62,7 @@ class OpenbeeDataConfig(BaseModel):
             return None
         if normalized == "non-empty":
             return "non-empty"
-        raise ValueError("`data.enable_thinking` only accepts true, false, null, or 'non-empty'.")
+        raise ValueError("`data.thinking_mode` only accepts true, false, null, or 'non-empty'.")
 
 
 class OpenbeeGradientCheckpointingConfig(BaseModel):

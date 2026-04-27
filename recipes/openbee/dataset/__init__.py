@@ -1,13 +1,7 @@
 """Dataset helpers for the openbee recipe."""
 
 from .collator import OpenbeeCollator
-from .dataset import (
-    IMAGE_PLACEHOLDER,
-    build_dataset,
-    lightweight_process_sample,
-    process_sample,
-    resolve_step_inference_dataset_source,
-)
+from .dataset import build_dataset, process_sample
 from .gate import (
     InvalidSampleGateAssembler,
     build_invalid_sample_gate_assembler,
@@ -18,7 +12,6 @@ from .processor import build_qwen3_vl_processor
 from .types import SOURCE_SAMPLE_COUNT_KEY, ModelInputs
 
 __all__ = [
-    "IMAGE_PLACEHOLDER",
     "InvalidSampleGateAssembler",
     "OpenbeeCollator",
     "PackedSampleAssembler",
@@ -28,8 +21,6 @@ __all__ = [
     "build_packed_sample_assembler",
     "build_skipped_sample",
     "build_qwen3_vl_processor",
-    "lightweight_process_sample",
     "process_sample",
-    "resolve_step_inference_dataset_source",
     "ModelInputs",
 ]

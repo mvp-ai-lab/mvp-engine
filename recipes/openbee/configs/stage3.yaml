@@ -21,8 +21,8 @@ parallel:
     tensor: 1
 data:
   train_path: "/mnt/data-alpha-sg-01/team-camera/shared/mvp-engine/data/Open-Bee-Lance/stage3/meta.json"
-  enable_thinking: "non-empty"
-  cache: false
+  ref_columns: ["images"]
+  thinking_mode: "non-empty"
   shuffle_buffer: 1024
   packing: true
   packing_selection_strategy: "best_fit"
@@ -60,7 +60,7 @@ optim:
 
 loop:
   policy: "iter"
-  total_steps: 5679
+  total_steps: -1
 
 checkpoint:
   interval: 200

@@ -153,6 +153,7 @@ Implementation constraints:
 - Put experiment-specific logic in `recipes/<experiment>/`
 - Keep comments and documentation clear enough to explain intent and behavior
 - Avoid deprecated APIs
+- Avoid unnecessary helper functions
 
 ## Testing Rules
 

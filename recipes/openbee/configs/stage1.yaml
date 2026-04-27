@@ -21,8 +21,7 @@ parallel:
     tensor: 1
 data:
   train_path: "./data/openbee/stage1/train/**/*.parquet"
-  enable_thinking: "non-empty"
-  cache: false
+  thinking_mode: "non-empty"
   shuffle_buffer: 1000
   packing: true
   packing_selection_strategy: "best_fit"

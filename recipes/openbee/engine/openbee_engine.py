@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 import random
 import time
-from collections import deque
 from typing import Any
 
 import numpy as np
@@ -25,14 +24,12 @@ from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
 from ..configs.schema import OpenbeeConfig
 from ..dataset import (
-    SOURCE_SAMPLE_COUNT_KEY,
     ModelInputs,
     OpenbeeCollator,
     build_dataset,
     build_qwen3_vl_processor,
-    lightweight_process_sample,
-    resolve_step_inference_dataset_source,
 )
+from ..guards.loss import LossGuard
 from ..model import build_qwen3_vl_model
 from ..model.packing import apply_packed_fa2_patch, prepare_packed_model_inputs
 from ..utils.log.mfu import build_mfu_log
@@ -58,7 +55,11 @@ class OpenbeeEngine(Engine):
         self.metric_accumulator.register("local_token_count", "last")
         self.metric_accumulator.register("local_loss_sum", "sum")
         self.metric_accumulator.register("local_model_flops", "sum")
-        self._loss_spike_history: deque[float] = deque(maxlen=int(self.config.optim.loss_spike_skip_window_size))
+        self.loss_guard = LossGuard(
+            spike_multiplier=self.config.optim.loss_spike_skip_multiplier,
+            window_size=int(self.config.optim.loss_spike_skip_window_size),
+            min_history=int(self.config.optim.loss_spike_skip_min_history),
+        )
 
     def _resolve_batching_config(self) -> None:
         """Resolve OpenBee global batch size into micro batch size or accumulation."""
@@ -111,103 +112,6 @@ class OpenbeeEngine(Engine):
                 "`data_parallel_world_size * data.batch_size * optim.gradient_accumulation_steps`."
             )
 
-    @staticmethod
-    def _format_step_inference_duration(seconds: float | None) -> str:
-        """Format a compact duration for step-inference progress logs."""
-        if seconds is None or not math.isfinite(seconds) or seconds < 0:
-            return "unknown"
-
-        remaining_seconds = int(seconds)
-        hours, remainder = divmod(remaining_seconds, 3600)
-        minutes, secs = divmod(remainder, 60)
-        if hours > 0:
-            return f"{hours}h{minutes:02d}m{secs:02d}s"
-        if minutes > 0:
-            return f"{minutes}m{secs:02d}s"
-        return f"{secs}s"
-
-    @staticmethod
-    def _format_step_inference_finish_time(seconds_from_now: float | None) -> str:
-        """Format the estimated wall-clock finish time for progress logs."""
-        if seconds_from_now is None or not math.isfinite(seconds_from_now) or seconds_from_now < 0:
-            return "unknown"
-        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() + seconds_from_now))
-
-    @staticmethod
-    def _count_step_inference_source_samples(batch: dict[str, Any]) -> int:
-        """Count raw source samples represented by one lightweight batch."""
-        source_sample_count = batch.get(SOURCE_SAMPLE_COUNT_KEY)
-        if isinstance(source_sample_count, torch.Tensor):
-            return int(source_sample_count.sum().item())
-        if isinstance(source_sample_count, (list, tuple)):
-            return sum(int(value) for value in source_sample_count)
-        if source_sample_count is not None:
-            return int(source_sample_count)
-        return int(batch["input_ids"].shape[0])
-
-    @staticmethod
-    def _infer_dataset_source_total_rows(dataset: Any) -> int | None:
-        """Best-effort row-count fallback from the underlying mvp_dataset source."""
-        sources = getattr(dataset, "_source", None)
-        if not isinstance(sources, (list, tuple)) or not sources:
-            return None
-
-        total_rows = 0
-        for source in sources:
-            source_total = getattr(source, "total_rows", None)
-            if isinstance(source_total, int):
-                total_rows += source_total
-                continue
-
-            num_rows = getattr(source, "num_rows", None)
-            if isinstance(num_rows, int):
-                total_rows += num_rows
-                continue
-
-            datasets = getattr(source, "datasets", None)
-            if isinstance(datasets, (list, tuple)):
-                for dataset_spec in datasets:
-                    dataset_rows = getattr(dataset_spec, "num_rows", None)
-                    if isinstance(dataset_rows, int):
-                        total_rows += dataset_rows
-
-        return total_rows if total_rows > 0 else None
-
-    def _log_step_inference_progress(
-        self,
-        *,
-        source_sample_count: int,
-        total_source_sample_count: int | None,
-        packed_sample_count: int,
-        interval_source_sample_count: int,
-        interval_seconds: float,
-    ) -> None:
-        """Print one rank-0 step-inference progress line."""
-        if not is_main_process():
-            return
-
-        throughput = interval_source_sample_count / max(interval_seconds, 1e-6)
-        if total_source_sample_count is not None and total_source_sample_count > 0:
-            percent = min(source_sample_count / total_source_sample_count * 100.0, 100.0)
-            total_text = str(total_source_sample_count)
-            percent_text = f"{percent:.2f}%"
-            remaining_samples = max(total_source_sample_count - source_sample_count, 0)
-            eta_seconds = remaining_samples / throughput if throughput > 0 else None
-        else:
-            total_text = "unknown"
-            percent_text = "unknown"
-            eta_seconds = None
-
-        logger.info(
-            "Step inference progress: "
-            f"samples={source_sample_count}/{total_text}, "
-            f"percent={percent_text}, "
-            f"throughput={throughput:.2f} samples/s, "
-            f"eta={self._format_step_inference_duration(eta_seconds)}, "
-            f"estimated_finish={self._format_step_inference_finish_time(eta_seconds)}, "
-            f"packed_samples={packed_sample_count}"
-        )
-
     def prepare_dataloader(self, workflow: str = "train"):
         """Build the train-only dataloader over preprocessed multimodal samples.
 
@@ -218,6 +122,10 @@ class OpenbeeEngine(Engine):
         Returns:
             A ``TorchLoader`` pipeline that yields padded multimodal batches.
         """
+        if workflow != "train":
+            logger.warning(f"OpenBee engine does not support workflow '{workflow}'.")
+            return
+
         self._resolve_batching_config()
 
         # Step 1: build the shared processor once so both the temporary counting
@@ -227,26 +135,10 @@ class OpenbeeEngine(Engine):
 
         # Step 2: when total_steps=-1, run one finite lightweight data pass to
         # count packed samples and infer one-epoch optimization steps.
-        if workflow == "train" and int(self.config.loop.total_steps) == -1:
+        if int(self.config.loop.total_steps) == -1:
             temp_config = self.config.model_copy(deep=True)
 
-            # Step 2.1: disable cache for the temporary counting pass so step
-            # inference does not spend time or disk on cache construction.
-            if temp_config.data.cache:
-                logger.info("OpenBee step inference: disabling cache for the temporary lightweight dataloader.")
-                temp_config.data.cache = False
-
-            step_dataset_paths, total_source_sample_count, used_main_table_only = resolve_step_inference_dataset_source(
-                str(temp_config.data.train_path)
-            )
-            if used_main_table_only:
-                logger.info(
-                    "OpenBee step inference: using only the Lance main table from meta.json; "
-                    "reference tables will not be opened."
-                )
-
-            # Step 2.2: build a temporary dataset/loader that uses the
-            # lightweight preprocess but keeps the same packing behaviour.
+            # Step 2.1: build a temporary dataset/loader
             temp_collate_fn = OpenbeeCollator(
                 pad_token_id=int(self.processor.tokenizer.pad_token_id),
                 processor=self.processor,
@@ -254,12 +146,9 @@ class OpenbeeEngine(Engine):
             temp_dataset = build_dataset(
                 temp_config,
                 processor=self.processor,
-                process_fn=lightweight_process_sample,
                 resample=False,
-                dataset_paths=step_dataset_paths,
+                resolve_refs=False,
             )
-            if total_source_sample_count is None:
-                total_source_sample_count = self._infer_dataset_source_total_rows(temp_dataset)
             temp_loader = TorchLoader(
                 temp_dataset,
                 num_workers=int(temp_config.data.num_workers),
@@ -274,146 +163,53 @@ class OpenbeeEngine(Engine):
             )
 
             # Step 2.3: count how many packed samples this rank receives from
-            # the temporary loader. Every N loader rounds, all ranks synchronize
-            # for progress logging; ranks that finish early keep participating
-            # in these interval reductions until every rank is done.
-            log_interval = int(temp_config.data.step_inference_log_interval)
-            count_start_time = time.perf_counter()
-            last_log_time = count_start_time
-            local_packed_sample_count = 0
-            local_source_sample_count = 0
-            interval_packed_sample_count = 0
-            interval_source_sample_count = 0
+            # the temporary loader. This pass mirrors the real train loader's
+            # batch/drop-last behavior, but avoids resolving image refs.
             temp_iterator = iter(temp_loader)
-            local_done = False
-            loader_round = 0
-            distributed = dist.is_available() and dist.is_initialized()
+            local_packed_sample_count = 0
+            local_batch_count = 0
+            log_interval = int(temp_config.data.step_inference_log_interval)
 
-            while True:
-                had_batch = 0
-                if not local_done:
-                    try:
-                        batch = next(temp_iterator)
-                    except StopIteration:
-                        local_done = True
-                    else:
-                        packed_batch_count = int(batch["input_ids"].shape[0])
-                        source_batch_count = self._count_step_inference_source_samples(batch)
-                        local_packed_sample_count += packed_batch_count
-                        local_source_sample_count += source_batch_count
-                        interval_packed_sample_count += packed_batch_count
-                        interval_source_sample_count += source_batch_count
-                        had_batch = 1
-
-                loader_round += 1
-                should_sync = loader_round % log_interval == 0
-
-                if not distributed:
-                    if should_sync and interval_source_sample_count > 0:
-                        now = time.perf_counter()
-                        self._log_step_inference_progress(
-                            source_sample_count=local_source_sample_count,
-                            total_source_sample_count=total_source_sample_count,
-                            packed_sample_count=local_packed_sample_count,
-                            interval_source_sample_count=interval_source_sample_count,
-                            interval_seconds=now - last_log_time,
-                        )
-                        interval_source_sample_count = 0
-                        interval_packed_sample_count = 0
-                        last_log_time = now
-
-                    if local_done:
-                        if interval_source_sample_count > 0:
-                            now = time.perf_counter()
-                            self._log_step_inference_progress(
-                                source_sample_count=local_source_sample_count,
-                                total_source_sample_count=total_source_sample_count,
-                                packed_sample_count=local_packed_sample_count,
-                                interval_source_sample_count=interval_source_sample_count,
-                                interval_seconds=now - last_log_time,
-                            )
-                        break
-                    continue
-
-                if not should_sync:
-                    continue
-
-                now = time.perf_counter()
-                interval_seconds = now - last_log_time
-                count_stats = torch.tensor(
-                    [
-                        interval_source_sample_count,
-                        local_source_sample_count,
-                        interval_packed_sample_count,
-                        local_packed_sample_count,
-                        had_batch,
-                    ],
-                    device=self.device,
-                    dtype=torch.long,
-                )
-                elapsed_stats = torch.tensor(interval_seconds, device=self.device, dtype=torch.float64)
-                dist.all_reduce(count_stats, op=dist.ReduceOp.SUM)
-                dist.all_reduce(elapsed_stats, op=dist.ReduceOp.MAX)
-
-                global_interval_source_sample_count = int(count_stats[0].item())
-                global_source_sample_count = int(count_stats[1].item())
-                global_packed_sample_count = int(count_stats[3].item())
-                active_rank_count = int(count_stats[4].item())
-
-                if global_interval_source_sample_count > 0:
-                    self._log_step_inference_progress(
-                        source_sample_count=global_source_sample_count,
-                        total_source_sample_count=total_source_sample_count,
-                        packed_sample_count=global_packed_sample_count,
-                        interval_source_sample_count=global_interval_source_sample_count,
-                        interval_seconds=float(elapsed_stats.item()),
-                    )
-
-                interval_source_sample_count = 0
-                interval_packed_sample_count = 0
-                last_log_time = now
-
-                if active_rank_count <= 0:
-                    break
+            for batch in temp_iterator:
+                local_packed_sample_count += int(batch["input_ids"].shape[0])
+                local_batch_count += 1
+                if local_batch_count % log_interval == 0:
+                    logger.info(f"Step inference progress: {local_batch_count} local batches...")
+                    dist.barrier()
 
             # Step 2.4: reduce all local counts to get the real global packed
             # sample count across all ranks.
             total_sample_count = torch.tensor(local_packed_sample_count, device=self.device, dtype=torch.long)
-            if distributed:
+            if dist.is_available() and dist.is_initialized():
                 dist.all_reduce(total_sample_count, op=dist.ReduceOp.SUM)
 
             total_sample_count_value = int(total_sample_count.item())
             if total_sample_count_value <= 0:
                 raise RuntimeError("OpenBee step inference found no packed training samples.")
 
-            # Step 2.5: compute the real DP/FSDP size from the device mesh.
-            # Tensor-parallel ranks do not consume extra samples per optimizer
-            # step, so only the non-tensor mesh dimensions belong here.
-            dp_world_size = self.dp_world_size
-
-            # Step 2.6: infer one-epoch optimizer steps from the packed sample
-            # count, per-rank batch size, and gradient accumulation. Round up
-            # so tail samples extend training by a few extra steps instead of
-            # being dropped by the step-count math.
             samples_per_optimization_step = (
-                dp_world_size * int(self.config.data.batch_size) * int(self.config.optim.gradient_accumulation_steps)
+                self.dp_world_size
+                * int(self.config.data.batch_size)
+                * int(self.config.optim.gradient_accumulation_steps)
             )
+            if samples_per_optimization_step <= 0:
+                raise RuntimeError(
+                    "OpenBee step inference cannot infer steps with non-positive samples per optimization step."
+                )
             inferred_total_steps = (
                 total_sample_count_value + samples_per_optimization_step - 1
             ) // samples_per_optimization_step
             if inferred_total_steps <= 0:
                 raise RuntimeError("Step inference found fewer packed samples than one optimization step requires.")
 
-            extra_capacity = inferred_total_steps * samples_per_optimization_step - total_sample_count_value
             self.config.loop.total_steps = inferred_total_steps
 
-            if is_main_process():
-                logger.info(
-                    f"Step inference: packed_samples={total_sample_count_value}, "
-                    f"dp_world_size={dp_world_size}, "
-                    f"inferred_total_steps={inferred_total_steps}, "
-                    f"extra_capacity={extra_capacity}"
-                )
+            logger.info(
+                f"Step inference: packed_samples={total_sample_count_value}, "
+                f"dp_world_size={self.dp_world_size}, "
+                f"samples_per_optimization_step={samples_per_optimization_step}, "
+                f"inferred_total_steps={inferred_total_steps}"
+            )
 
         # Step 3: build the real training/eval dataset with the full preprocess.
         dataset = build_dataset(self.config, processor=self.processor)
@@ -519,6 +315,54 @@ class OpenbeeEngine(Engine):
             num_training_steps=self.total_steps,
         )
 
+    def _skip_resume_micro_batches(self, train_iterator: Any, resume_skip_micro_batches: int) -> Any:
+        """Advance the training iterator to the checkpoint's saved micro-batch position."""
+        torch_rng_state = torch.get_rng_state()
+        python_rng_state = random.getstate()
+        numpy_rng_state = np.random.get_state()
+        skip_start_time = time.perf_counter()
+        log_interval = 50
+        if is_main_process():
+            logger.info(
+                "Resume data skip: "
+                f"step={self.step}, "
+                f"accumulate_step={self._accumulate_step}, "
+                f"micro_batches={resume_skip_micro_batches}"
+            )
+
+        try:
+            for skipped_micro_batches in range(resume_skip_micro_batches):
+                try:
+                    data = next(train_iterator)
+                except StopIteration:
+                    train_iterator = iter(self.train_loader)
+                    try:
+                        data = next(train_iterator)
+                    except StopIteration as exc:
+                        raise RuntimeError(
+                            "OpenBee train loader did not yield any batches during resume skip."
+                        ) from exc
+                del data
+                torch.distributed.barrier()
+                current_skip_count = skipped_micro_batches + 1
+                if is_main_process() and current_skip_count % log_interval == 0:
+                    logger.info(
+                        f"Resume data skip progress: {current_skip_count}/{resume_skip_micro_batches} micro-batches"
+                    )
+        finally:
+            torch.set_rng_state(torch_rng_state)
+            random.setstate(python_rng_state)
+            np.random.set_state(numpy_rng_state)
+
+        if dist.is_available() and dist.is_initialized():
+            dist.barrier()
+
+        if is_main_process():
+            elapsed = time.perf_counter() - skip_start_time
+            logger.info(f"Resume data skip finished: micro_batches={resume_skip_micro_batches}, elapsed={elapsed:.1f}s")
+
+        return train_iterator
+
     def run_iter_train(self) -> None:
         """Run iteration-based training with window-prefetched token normalization."""
 
@@ -542,53 +386,7 @@ class OpenbeeEngine(Engine):
             resume_skip_micro_batches = self.step * gradient_accumulation_steps + int(self._accumulate_step)
 
         if resume_skip_micro_batches > 0:
-            torch_rng_state = torch.get_rng_state()
-            python_rng_state = random.getstate()
-            numpy_rng_state = np.random.get_state()
-            skip_start_time = time.perf_counter()
-            log_interval = 50
-            if is_main_process():
-                logger.info(
-                    "Resume data skip: "
-                    f"step={self.step}, "
-                    f"accumulate_step={self._accumulate_step}, "
-                    f"micro_batches={resume_skip_micro_batches}"
-                )
-
-            try:
-                for skipped_micro_batches in range(resume_skip_micro_batches):
-                    try:
-                        data = next(train_iterator)
-                    except StopIteration:
-                        train_iterator = iter(self.train_loader)
-                        try:
-                            data = next(train_iterator)
-                        except StopIteration as exc:
-                            raise RuntimeError(
-                                "OpenBee train loader did not yield any batches during resume skip."
-                            ) from exc
-                    del data
-                    torch.distributed.barrier()
-                    current_skip_count = skipped_micro_batches + 1
-                    if is_main_process() and current_skip_count % log_interval == 0:
-                        logger.info(
-                            f"Resume data skip progress: {current_skip_count}/{resume_skip_micro_batches} micro-batches"
-                        )
-            finally:
-                torch.set_rng_state(torch_rng_state)
-                random.setstate(python_rng_state)
-                np.random.set_state(numpy_rng_state)
-
-            if dist.is_available() and dist.is_initialized():
-                dist.barrier()
-
-            if is_main_process():
-                elapsed = time.perf_counter() - skip_start_time
-                logger.info(
-                    "Resume data skip finished: "
-                    f"micro_batches={resume_skip_micro_batches}, "
-                    f"elapsed={self._format_step_inference_duration(elapsed)}"
-                )
+            train_iterator = self._skip_resume_micro_batches(train_iterator, resume_skip_micro_batches)
 
         while self.step < self.total_steps:
             remaining_micro_steps = gradient_accumulation_steps - int(self._accumulate_step)
@@ -715,6 +513,8 @@ class OpenbeeEngine(Engine):
         assert "logs" in outputs, "The model output must contain 'logs' key."
 
         is_sync = self.accumulate_step()
+
+        # 1. Read the accumulation-window token counts prepared in run_iter_train.
         global_total_token_count = self.metric_accumulator.get("global_total_token_count")
         if global_total_token_count is None or int(global_total_token_count) <= 0:
             raise ValueError("OpenBee accumulation window is missing a valid global total token count.")
@@ -725,25 +525,23 @@ class OpenbeeEngine(Engine):
         if local_token_count is None or int(local_token_count) <= 0:
             raise ValueError("OpenBee accumulation window is missing a valid local token count.")
 
+        # 2. Record this micro-step's local loss/flops into the accumulation window.
         local_micro_loss_sum = outputs["loss"].sum()
         micro_loss_token_count = int(outputs["effective_tokens"])
         if micro_loss_token_count < 0:
             raise ValueError("OpenBee micro-batch has an invalid effective token count.")
-
         self.metric_accumulator.update(
             local_loss_sum=local_micro_loss_sum.detach().to(device=self.device, dtype=torch.float64),
             local_model_flops=float(outputs["model_flops"]),
         )
 
-        # DDP/FSDP averages gradients across the DP/FSDP ranks, so each
-        # micro-step uses the local summed loss with the globally reduced token
-        # denominator and compensates by the real DP world size.
+        # 3. Build the backward loss. DDP/FSDP averages gradients across DP ranks,
+        # so compensate by DP world size after using the global token denominator.
         loss = local_micro_loss_sum / int(global_loss_token_count)
         if self.dp_world_size > 1:
             loss = loss * float(self.dp_world_size)
 
-        loss_spike_skip_multiplier = self.config.optim.loss_spike_skip_multiplier
-        if loss_spike_skip_multiplier is not None:
+        if self.loss_guard.spike_multiplier is not None:
             micro_loss_stats = torch.stack(
                 (
                     local_micro_loss_sum.detach().to(device=self.device, dtype=torch.float64),
@@ -754,28 +552,12 @@ class OpenbeeEngine(Engine):
                 dist.all_reduce(micro_loss_stats, op=dist.ReduceOp.SUM)
 
             global_micro_token_count = int(micro_loss_stats[1].item())
-            if global_micro_token_count > 0:
-                current_loss = float((micro_loss_stats[0] / micro_loss_stats[1]).item())
-                min_history = int(self.config.optim.loss_spike_skip_min_history)
-                has_enough_history = len(self._loss_spike_history) >= min_history
-                loss_spike_baseline = (
-                    sum(self._loss_spike_history) / len(self._loss_spike_history) if has_enough_history else None
-                )
-                is_loss_spike = loss_spike_baseline is not None and current_loss > loss_spike_baseline * float(
-                    loss_spike_skip_multiplier
-                )
-                if is_loss_spike:
-                    baseline_text = "n/a" if loss_spike_baseline is None else f"{loss_spike_baseline:.4f}"
-                    logger.warning(
-                        f"Loss spike skip at step {self.step}: "
-                        f"micro_loss={current_loss:.4f}, "
-                        f"baseline_loss={baseline_text}, "
-                        f"history_size={len(self._loss_spike_history)}, "
-                        f"micro_tokens={global_micro_token_count}"
-                    )
-                    loss = loss * 0.0
-                else:
-                    self._loss_spike_history.append(current_loss)
+            if global_micro_token_count > 0 and self.loss_guard.check(
+                micro_loss_stats[0] / micro_loss_stats[1],
+                step=int(self.step),
+                token_count=global_micro_token_count,
+            ):
+                loss = loss * 0.0
 
         with accumulate_gradients(self.model, sync=is_sync):
             self.scaler.scale(loss).backward()
@@ -783,6 +565,7 @@ class OpenbeeEngine(Engine):
         if not is_sync:
             return outputs
 
+        # 4. Apply the optimizer update at the end of the accumulation window.
         self.scaler.unscale_(self.optimizer)
 
         max_grad_norm = self.config.optim.clip_grad_norm
@@ -799,6 +582,7 @@ class OpenbeeEngine(Engine):
         self.step += 1
         self.timer.tick()
 
+        # 5. Reduce accumulated loss and write one optimizer-step log record.
         global_loss_sum = self.metric_accumulator.get("local_loss_sum")
         if global_loss_sum is None:
             raise ValueError("OpenBee accumulation window is missing a valid local loss sum.")

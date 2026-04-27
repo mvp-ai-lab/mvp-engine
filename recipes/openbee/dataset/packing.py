@@ -31,7 +31,7 @@ class _PendingSample:
     length: int
 
 
-class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any]]):
+class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any] | list[dict[str, Any]]]):
     """Assemble processed samples into longer packed sequences."""
 
     def __init__(
@@ -42,6 +42,7 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any]]):
         open_pack_limit: int = 8,
         pack_buffer_size: int = 64,
         seed: int = 0,
+        defer_finalize: bool = False,
     ) -> None:
         if max_length <= 0:
             raise ValueError(f"max_length must be positive, got {max_length}.")
@@ -62,8 +63,9 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any]]):
         self.open_pack_remaining: list[int] = []
         self.pending_samples: list[_PendingSample] = []
         self.next_open_pack_order = 0
+        self.defer_finalize = defer_finalize
 
-    def push(self, sample: dict[str, Any]) -> Iterable[dict[str, Any]]:
+    def push(self, sample: dict[str, Any]) -> Iterable[dict[str, Any] | list[dict[str, Any]]]:
         sample_length = int(sample["input_ids"].size(0))
         if sample_length <= 0:
             return []
@@ -84,8 +86,8 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any]]):
             return self._drain_pool_to_buffer_limit()
         return []
 
-    def finish(self, *, drop_last: bool = False) -> Iterable[dict[str, Any]]:
-        emitted: list[dict[str, Any]] = []
+    def finish(self, *, drop_last: bool = False) -> Iterable[dict[str, Any] | list[dict[str, Any]]]:
+        emitted: list[dict[str, Any] | list[dict[str, Any]]] = []
         emitted.extend(self._drain_pool_to_buffer_limit(buffer_limit=0))
 
         while self.pending_samples:
@@ -110,7 +112,7 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any]]):
         self.open_pack_remaining.clear()
         return emitted
 
-    def _assign_pending_to_packs(self) -> list[dict[str, Any]]:
+    def _assign_pending_to_packs(self) -> list[dict[str, Any] | list[dict[str, Any]]]:
         if not self.pending_samples:
             return []
 
@@ -119,7 +121,7 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any]]):
         is_random = self.selection_strategy == "random"
         rng = self.rng
         open_packs = self.open_packs
-        emitted: list[dict[str, Any]] = []
+        emitted: list[dict[str, Any] | list[dict[str, Any]]] = []
         made_progress = True
 
         while self.pending_samples and made_progress:
@@ -167,8 +169,8 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any]]):
 
         return emitted
 
-    def _flush_ready_packs(self) -> list[dict[str, Any]]:
-        emitted: list[dict[str, Any]] = []
+    def _flush_ready_packs(self) -> list[dict[str, Any] | list[dict[str, Any]]]:
+        emitted: list[dict[str, Any] | list[dict[str, Any]]] = []
         if self.selection_strategy == "best_fit":
             while self.open_pack_remaining and self.open_pack_remaining[0] == 0:
                 emitted.append(self._pack_samples(self._pop_open_pack(0).samples))
@@ -183,7 +185,7 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any]]):
         self.open_packs = remaining
         return emitted
 
-    def _close_most_filled_pack(self) -> dict[str, Any]:
+    def _close_most_filled_pack(self) -> dict[str, Any] | list[dict[str, Any]]:
         if not self.open_packs:
             raise RuntimeError("Cannot close a pack when no open packs exist.")
 
@@ -205,11 +207,15 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any]]):
         pending = self.pending_samples.pop(sample_index)
         self._add_open_pack(_OpenPack(samples=[pending.sample], total_length=pending.length))
 
-    def _drain_pool_to_buffer_limit(self, *, buffer_limit: int | None = None) -> list[dict[str, Any]]:
+    def _drain_pool_to_buffer_limit(
+        self,
+        *,
+        buffer_limit: int | None = None,
+    ) -> list[dict[str, Any] | list[dict[str, Any]]]:
         if buffer_limit is None:
             buffer_limit = self.pack_buffer_size
 
-        emitted: list[dict[str, Any]] = []
+        emitted: list[dict[str, Any] | list[dict[str, Any]]] = []
         emitted.extend(self._assign_pending_to_packs())
         emitted.extend(self._flush_ready_packs())
 
@@ -250,40 +256,75 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any]]):
         self.open_packs[index] = pack
         self.open_pack_remaining[index] = remaining
 
-    def _pack_samples(self, samples: list[dict[str, Any]]) -> dict[str, Any]:
-        if len(samples) == 1:
-            sample = dict(samples[0])
-            sample["pack_segment_ids"] = torch.ones_like(sample["input_ids"], dtype=torch.long)
-            return sample
+    def _pack_samples(self, samples: list[dict[str, Any]]) -> dict[str, Any] | list[dict[str, Any]]:
+        if self.defer_finalize:
+            return [dict(sample) for sample in samples]
+        return finalize_packed_sample_group(samples)
 
-        packed_sample: dict[str, Any] = {
-            "input_ids": torch.cat([sample["input_ids"] for sample in samples], dim=0),
-            "attention_mask": torch.cat([sample["attention_mask"] for sample in samples], dim=0),
-            "labels": torch.cat([sample["labels"] for sample in samples], dim=0),
-            "pack_segment_ids": torch.cat(
-                [
-                    torch.full_like(sample["input_ids"], fill_value=index + 1, dtype=torch.long)
-                    for index, sample in enumerate(samples)
-                ],
-                dim=0,
-            ),
-        }
 
-        pixel_values = [sample["pixel_values"] for sample in samples if sample.get("pixel_values") is not None]
-        if pixel_values:
-            packed_sample["pixel_values"] = torch.cat(pixel_values, dim=0)
+def finalize_packed_sample_group(sample_or_group: dict[str, Any] | list[dict[str, Any]]) -> dict[str, Any]:
+    """Convert a packed sample group into the model-facing packed sample dict."""
+    samples = [sample_or_group] if isinstance(sample_or_group, dict) else sample_or_group
+    if not samples:
+        raise ValueError("Cannot finalize an empty packed sample group.")
 
-        image_grid_thw = [sample["image_grid_thw"] for sample in samples if sample.get("image_grid_thw") is not None]
-        if image_grid_thw:
-            packed_sample["image_grid_thw"] = torch.cat(image_grid_thw, dim=0)
+    packed_sample: dict[str, Any] = {
+        "input_ids": torch.cat([sample["input_ids"] for sample in samples], dim=0),
+        "attention_mask": torch.cat([sample["attention_mask"] for sample in samples], dim=0),
+        "labels": torch.cat([sample["labels"] for sample in samples], dim=0),
+        "pack_segment_ids": torch.cat(
+            [
+                torch.full_like(sample["input_ids"], fill_value=index + 1, dtype=torch.long)
+                for index, sample in enumerate(samples)
+            ],
+            dim=0,
+        ),
+    }
 
-        source_sample_counts = [
-            int(sample[SOURCE_SAMPLE_COUNT_KEY]) for sample in samples if SOURCE_SAMPLE_COUNT_KEY in sample
-        ]
-        if source_sample_counts:
-            packed_sample[SOURCE_SAMPLE_COUNT_KEY] = sum(source_sample_counts)
+    images: list[Any] = []
+    adjusted_image_sizes: list[Any] = []
+    for sample in samples:
+        sample_images = sample.get("images", [])
+        sample_adjusted_sizes = sample.get("adjusted_image_size", [])
+        if sample_images is None:
+            sample_images = []
+        elif isinstance(sample_images, tuple):
+            sample_images = list(sample_images)
+        elif not isinstance(sample_images, list):
+            sample_images = [sample_images]
 
-        return packed_sample
+        if sample_adjusted_sizes is None:
+            sample_adjusted_sizes = []
+        elif isinstance(sample_adjusted_sizes, tuple):
+            sample_adjusted_sizes = list(sample_adjusted_sizes)
+        elif not isinstance(sample_adjusted_sizes, list):
+            sample_adjusted_sizes = [sample_adjusted_sizes]
+
+        images.extend(sample_images)
+        if len(sample_adjusted_sizes) == 2 and all(isinstance(dimension, int) for dimension in sample_adjusted_sizes):
+            adjusted_image_sizes.append(sample_adjusted_sizes)
+        else:
+            adjusted_image_sizes.extend(sample_adjusted_sizes)
+
+    if images:
+        packed_sample["images"] = images
+        packed_sample["adjusted_image_size"] = adjusted_image_sizes
+
+    pixel_values = [sample["pixel_values"] for sample in samples if sample.get("pixel_values") is not None]
+    if pixel_values:
+        packed_sample["pixel_values"] = torch.cat(pixel_values, dim=0)
+
+    image_grid_thw = [sample["image_grid_thw"] for sample in samples if sample.get("image_grid_thw") is not None]
+    if image_grid_thw:
+        packed_sample["image_grid_thw"] = torch.cat(image_grid_thw, dim=0)
+
+    source_sample_counts = [
+        int(sample[SOURCE_SAMPLE_COUNT_KEY]) for sample in samples if SOURCE_SAMPLE_COUNT_KEY in sample
+    ]
+    if source_sample_counts:
+        packed_sample[SOURCE_SAMPLE_COUNT_KEY] = sum(source_sample_counts)
+
+    return packed_sample
 
 
 def build_packed_sample_assembler(
@@ -293,6 +334,7 @@ def build_packed_sample_assembler(
     selection_strategy: str,
     open_pack_limit: int,
     pack_buffer_size: int,
+    defer_finalize: bool = False,
 ) -> PackedSampleAssembler:
     """Build one packing assembler instance for a dataset iterator."""
     return PackedSampleAssembler(
@@ -301,4 +343,5 @@ def build_packed_sample_assembler(
         open_pack_limit=open_pack_limit,
         pack_buffer_size=pack_buffer_size,
         seed=assemble_context.sample_shuffle_seed,
+        defer_finalize=defer_finalize,
     )
