@@ -11,8 +11,6 @@ from typing import Any, Literal
 import torch
 from mvp_dataset.core import Assembler, RuntimeContext
 
-from .types import SOURCE_SAMPLE_COUNT_KEY
-
 
 @dataclass(slots=True)
 class _OpenPack:
@@ -262,9 +260,8 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any] | list[dict
         return finalize_packed_sample_group(samples)
 
 
-def finalize_packed_sample_group(sample_or_group: dict[str, Any] | list[dict[str, Any]]) -> dict[str, Any]:
+def finalize_packed_sample_group(samples: list[dict[str, Any]]) -> dict[str, Any]:
     """Convert a packed sample group into the model-facing packed sample dict."""
-    samples = [sample_or_group] if isinstance(sample_or_group, dict) else sample_or_group
     if not samples:
         raise ValueError("Cannot finalize an empty packed sample group.")
 
@@ -281,48 +278,19 @@ def finalize_packed_sample_group(sample_or_group: dict[str, Any] | list[dict[str
         ),
     }
 
-    images: list[Any] = []
-    adjusted_image_sizes: list[Any] = []
-    for sample in samples:
-        sample_images = sample.get("images", [])
-        sample_adjusted_sizes = sample.get("adjusted_image_size", [])
-        if sample_images is None:
-            sample_images = []
-        elif isinstance(sample_images, tuple):
-            sample_images = list(sample_images)
-        elif not isinstance(sample_images, list):
-            sample_images = [sample_images]
-
-        if sample_adjusted_sizes is None:
-            sample_adjusted_sizes = []
-        elif isinstance(sample_adjusted_sizes, tuple):
-            sample_adjusted_sizes = list(sample_adjusted_sizes)
-        elif not isinstance(sample_adjusted_sizes, list):
-            sample_adjusted_sizes = [sample_adjusted_sizes]
-
-        images.extend(sample_images)
-        if len(sample_adjusted_sizes) == 2 and all(isinstance(dimension, int) for dimension in sample_adjusted_sizes):
-            adjusted_image_sizes.append(sample_adjusted_sizes)
-        else:
-            adjusted_image_sizes.extend(sample_adjusted_sizes)
-
-    if images:
-        packed_sample["images"] = images
-        packed_sample["adjusted_image_size"] = adjusted_image_sizes
-
     pixel_values = [sample["pixel_values"] for sample in samples if sample.get("pixel_values") is not None]
     if pixel_values:
         packed_sample["pixel_values"] = torch.cat(pixel_values, dim=0)
+    else:
+        packed_sample["pixel_values"] = None
 
     image_grid_thw = [sample["image_grid_thw"] for sample in samples if sample.get("image_grid_thw") is not None]
     if image_grid_thw:
         packed_sample["image_grid_thw"] = torch.cat(image_grid_thw, dim=0)
+    else:
+        packed_sample["image_grid_thw"] = None
 
-    source_sample_counts = [
-        int(sample[SOURCE_SAMPLE_COUNT_KEY]) for sample in samples if SOURCE_SAMPLE_COUNT_KEY in sample
-    ]
-    if source_sample_counts:
-        packed_sample[SOURCE_SAMPLE_COUNT_KEY] = sum(source_sample_counts)
+    packed_sample["source_sample_num"] = len(samples)
 
     return packed_sample
 

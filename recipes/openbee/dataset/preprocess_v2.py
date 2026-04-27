@@ -29,12 +29,7 @@ THOUGHT_PREFIX = "<think>\n"
 THOUGHT_SUFFIX = "\n</think>\n\n"
 THOUGHT_PATTERN = re.compile(f"{re.escape(THOUGHT_PREFIX)}(.*?){re.escape(THOUGHT_SUFFIX)}", re.DOTALL)
 THOUGHT_MARKERS = (THOUGHT_PREFIX.strip(), THOUGHT_SUFFIX.strip())
-MULTIMODAL_PLACEHOLDER = "<|mvp_multimodal_placeholder|>"
-IMAGE_TOKEN_PLACEHOLDER = "<|mvp_image_placeholder|>"
-VISION_START_TOKEN = "<|vision_start|>"
-VISION_END_TOKEN = "<|vision_end|>"
-DEFAULT_IMAGE_TOKEN = "<|image_pad|>"
-_VISION_TOKEN_ID_CACHE: dict[tuple[int, str], tuple[set[int], torch.Tensor]] = {}
+MULTIMODAL_PLACEHOLDER = "<|openbee_multimodal_placeholder|>"
 
 
 def process_image(
@@ -86,15 +81,8 @@ def process_image(
         return opened.convert("RGB").copy()
 
 
-def convert_images_to_pixel_values(
-    sample: dict[str, Any] | list[dict[str, Any]],
-    *,
-    processor: Any,
-) -> dict[str, Any] | list[dict[str, Any]]:
+def convert_images_to_pixel_values(sample: dict[str, Any], *, processor: Any) -> dict[str, Any]:
     """Convert resolved OpenBee images into Qwen image-processor tensors."""
-    if isinstance(sample, list):
-        return [convert_images_to_pixel_values(s, processor=processor) for s in sample]
-
     images = sample.pop("images", [])
     adjusted_sizes = sample.pop("adjusted_image_size", [])
     if not images:
@@ -425,32 +413,6 @@ def _normalize_image_size(size_entry: Any) -> list[int]:
     return [int(height), int(width)]
 
 
-def _infer_seqlen(source_len: int, target_len: int, cutoff_len: int) -> tuple[int, int]:
-    if target_len * 2 < cutoff_len:
-        max_target_len = cutoff_len
-    elif source_len * 2 < cutoff_len:
-        max_target_len = cutoff_len - source_len
-    else:
-        max_target_len = int(cutoff_len * (target_len / (source_len + target_len)))
-
-    new_target_len = min(max_target_len, target_len)
-    max_source_len = max(cutoff_len - new_target_len, 0)
-    return min(max_source_len, source_len), new_target_len
-
-
-def _get_vision_token_ids(tokenizer: Any, image_token: str) -> tuple[set[int], torch.Tensor]:
-    cache_key = (id(tokenizer), image_token)
-    if cache_key not in _VISION_TOKEN_ID_CACHE:
-        token_ids: set[int] = set()
-        for token in (VISION_START_TOKEN, VISION_END_TOKEN, image_token):
-            token_ids.update(tokenizer(token, add_special_tokens=False)["input_ids"])
-        _VISION_TOKEN_ID_CACHE[cache_key] = (
-            token_ids,
-            torch.tensor(sorted(token_ids), dtype=torch.long),
-        )
-    return _VISION_TOKEN_ID_CACHE[cache_key]
-
-
 def process_sample(
     sample: dict[str, Any],
     *,
@@ -498,18 +460,83 @@ def process_sample(
             rendered_messages,
             thinking_mode=thinking_mode,
         )
+        _ = assistant_skip_think_prefix
 
-        # 3. Smart-resize image metadata once. If text truncation would cut vision tokens later,
-        # skip the sample rather than silently corrupting image/text alignment.
-        tokenizer = getattr(processor, "tokenizer", None)
-        if tokenizer is None:
+        # 3. Convert messages into prompt and tokens.
+        prompt = processor.apply_chat_template(
+            rendered_messages,
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+        if tokenizer := getattr(processor, "tokenizer", None):
+            tokenized = tokenizer(
+                prompt,
+                truncation=True,
+                max_length=max_length,
+            )
+            text_input_ids = tokenized["input_ids"]
+        else:
             raise ValueError("Processor does not have a tokenizer attribute for tokenization.")
 
         image_processor, patch_size, merge_size, min_pixels, max_pixels = _resolve_image_processor_config(processor)
-        factor = patch_size * merge_size
+
+        # 4. Calculate the original estimated image tokens.
+        estimated_image_tokens = [
+            _estimate_image_tokens(
+                image_processor,
+                height=size[0],
+                width=size[1],
+                patch_size=patch_size,
+                merge_size=merge_size,
+                min_pixels=min_pixels,
+                max_pixels=max_pixels,
+            )
+            for size in image_sizes
+        ]
+        invalid_token_indices = [
+            index for index, token_count in enumerate(estimated_image_tokens) if token_count is None or token_count <= 0
+        ]
+        if invalid_token_indices:
+            raise ValueError(
+                f"cannot estimate a positive image token count for image index(es): {invalid_token_indices}."
+            )
+        total_estimated_image_tokens = sum(int(token_count) for token_count in estimated_image_tokens)
+
+        # 5. Recalculate the image size budget based on the text token number and the max_length.
+        # ignore the existing image tokens in the input_ids for simplicity.
+        # we * 0.95 to reserve some budget for special tokens and potential underestimation of token counts.
+        image_token_budget = (max_length - len(text_input_ids)) * 0.95
+        single_image_minimal_token_budget = _estimate_image_tokens(
+            image_processor,
+            height=min_pixels**0.5,
+            width=min_pixels**0.5,
+            patch_size=patch_size,
+            merge_size=merge_size,
+            min_pixels=min_pixels,
+            max_pixels=max_pixels,
+        )
+        if single_image_minimal_token_budget is None or single_image_minimal_token_budget <= 0:
+            raise ValueError("cannot estimate the minimal image token budget.")
+        if image_token_budget <= single_image_minimal_token_budget * len(image_sizes):
+            raise ValueError("The text tokens have already exceeded the max_length, no budget left for images.")
+
+        # 6. Calculate the new target image size for each image based on the estimated tokens and the budget.
         adjusted_image_sizes: list[list[int]] = []
-        image_token_counts: list[int] = []
-        for size in image_sizes:
+        scale_factor = (
+            math.sqrt(image_token_budget / total_estimated_image_tokens) if total_estimated_image_tokens > 0 else 1.0
+        )
+        if scale_factor < 1.0:
+            for size in image_sizes:
+                new_height = max(1, int(size[0] * scale_factor))
+                new_width = max(1, int(size[1] * scale_factor))
+                adjusted_image_sizes.append([new_height, new_width])
+        else:
+            adjusted_image_sizes = image_sizes
+
+        # 7. Smart resize the new image sizes to be compatible with the model's patch and merge sizes.
+        factor = patch_size * merge_size
+        smart_adjusted_image_sizes: list[list[int]] = []
+        for size in adjusted_image_sizes:
             height, width = int(size[0]), int(size[1])
             resized_size = _smart_resize_image_size(
                 height,
@@ -522,121 +549,107 @@ def process_sample(
                 raise ValueError(f"cannot smart-resize image size {height}x{width}.")
 
             resized_height, resized_width = resized_size
-            adjusted_image_sizes.append([int(resized_height), int(resized_width)])
-            token_count = _estimate_image_tokens(
+            smart_adjusted_image_sizes.append([int(resized_height), int(resized_width)])
+        adjusted_image_sizes = smart_adjusted_image_sizes
+        sample["adjusted_image_size"] = adjusted_image_sizes
+
+        # 8. Expand the image token placeholders in the prompt.
+        image_token = getattr(processor, "image_token", None)
+        if not isinstance(image_token, str) or not image_token:
+            raise ValueError("Processor must expose a valid image token.")
+
+        expanded_prompt = prompt
+        image_token_placeholder = f"<image_{MULTIMODAL_PLACEHOLDER}_tokens>"
+        prompt_image_placeholder = (
+            image_token_placeholder if image_token_placeholder in expanded_prompt else image_token
+        )
+        image_token_placeholder_pattern = re.escape(prompt_image_placeholder)
+        temporary_image_token = "<|openbee_image_token_placeholder|>"
+        for _, adj_size in zip(estimated_image_tokens, adjusted_image_sizes, strict=True):
+            new_est_tokens = _estimate_image_tokens(
                 image_processor,
-                height=int(resized_height),
-                width=int(resized_width),
+                height=adj_size[0],
+                width=adj_size[1],
                 patch_size=patch_size,
                 merge_size=merge_size,
                 min_pixels=min_pixels,
                 max_pixels=max_pixels,
             )
-            if token_count is None or token_count <= 0:
-                raise ValueError(f"cannot estimate image token count after resize: {resized_height}x{resized_width}.")
-            image_token_counts.append(int(token_count))
+            if new_est_tokens is None or new_est_tokens <= 0:
+                raise ValueError(f"cannot estimate image token count after resize: {adj_size!r}.")
+            token_placeholder = temporary_image_token * int(new_est_tokens)
 
-        sample["adjusted_image_size"] = adjusted_image_sizes
-
-        # 4. Build LF-style multiturn source/target pairs through the processor chat template.
-        image_token = getattr(processor, "image_token", DEFAULT_IMAGE_TOKEN)
-        if not isinstance(image_token, str) or not image_token:
-            raise ValueError("Processor must expose a valid image token.")
-
-        image_cursor = 0
-
-        def _expand_image_placeholders(text: str) -> str:
-            nonlocal image_cursor
-
-            placeholder = IMAGE_TOKEN_PLACEHOLDER if IMAGE_TOKEN_PLACEHOLDER in text else image_token
-            parts = text.split(placeholder)
-            if len(parts) == 1:
-                return text
-
-            expanded_parts = [parts[0]]
-            for part in parts[1:]:
-                token_count = image_token_counts[image_cursor]
-                image_cursor += 1
-                expanded_parts.append(image_token * token_count)
-                expanded_parts.append(part)
-            return "".join(expanded_parts)
-
-        turns: list[tuple[str, str]] = []
-        leading_system_messages: list[dict[str, Any]] = []
-        message_index = 0
-        while message_index < len(rendered_messages) and rendered_messages[message_index].get("role") == "system":
-            leading_system_messages.append(rendered_messages[message_index])
-            message_index += 1
-
-        empty_thought = f"{THOUGHT_PREFIX}{THOUGHT_SUFFIX}"
-        while message_index < len(rendered_messages):
-            user_message = rendered_messages[message_index]
-            assistant_message = rendered_messages[message_index + 1]
-            if user_message.get("role") != "user" or assistant_message.get("role") != "assistant":
-                raise ValueError("conversation must contain user/assistant turn pairs after optional system messages.")
-
-            source_messages = leading_system_messages + [user_message]
-            full_messages = source_messages + [assistant_message]
-            raw_source_text = processor.apply_chat_template(
-                source_messages,
-                tokenize=False,
-                add_generation_prompt=True,
+            expanded_prompt, replacement_count = re.subn(
+                image_token_placeholder_pattern,
+                lambda _match: token_placeholder,
+                expanded_prompt,
+                count=1,
             )
-            raw_full_text = processor.apply_chat_template(
-                full_messages,
-                tokenize=False,
-                add_generation_prompt=False,
+            if replacement_count != 1:
+                raise ValueError("prompt has fewer image token placeholders than image sizes.")
+        prompt = expanded_prompt.replace(temporary_image_token, image_token)
+
+        # 9. Tokenize the final prompt and build assistant-only labels from Qwen chat spans.
+        tokenized = tokenizer(
+            prompt,
+            return_tensors="pt",
+            return_attention_mask=True,
+            truncation=True,
+            max_length=max_length,
+            add_special_tokens=False,
+        )
+        input_ids = tokenized["input_ids"][0]
+        attention_mask = tokenized["attention_mask"][0]
+
+        def _token_count(text: str) -> int:
+            counted = tokenizer(
+                text,
+                return_tensors="pt",
+                return_attention_mask=False,
+                truncation=True,
+                max_length=max_length,
+                add_special_tokens=False,
             )
-            if not raw_full_text.startswith(raw_source_text):
-                raise ValueError("processor chat template does not preserve source prefix for assistant target split.")
+            return int(counted["input_ids"].shape[-1])
 
-            source_text = _expand_image_placeholders(raw_source_text)
-            target_text = _expand_image_placeholders(raw_full_text[len(raw_source_text) :])
-            if message_index + 1 in assistant_skip_think_prefix and target_text.startswith(empty_thought):
-                source_text += empty_thought
-                target_text = target_text[len(empty_thought) :]
+        labels = torch.full_like(input_ids, ignore_index)
+        valid_length = int(attention_mask.sum().item())
+        assistant_header = "<|im_start|>assistant\n"
+        assistant_end = "<|im_end|>\n"
+        assistant_message_indices = [
+            index for index, message in enumerate(rendered_messages) if message.get("role") == "assistant"
+        ]
 
-            turns.append((source_text, target_text))
-            leading_system_messages = []
-            message_index += 2
-
-        if image_cursor != len(image_token_counts):
-            raise ValueError("image size metadata does not match rendered image placeholders.")
-
-        # 5. Tokenize and truncate each turn independently under a shared max-length budget.
-        vision_token_ids, vision_token_id_tensor = _get_vision_token_ids(tokenizer, image_token)
-
-        def _will_cut_vision_tokens(token_ids: list[int], keep_len: int) -> bool:
-            return any(token_id in vision_token_ids for token_id in token_ids[keep_len:])
-
-        input_ids_list: list[int] = []
-        labels_list: list[int] = []
-        total_length = 0
-        for source_text, target_text in turns:
-            if total_length >= max_length:
+        search_pos = 0
+        assistant_span_index = 0
+        while True:
+            header_start = prompt.find(assistant_header, search_pos)
+            if header_start < 0:
                 break
 
-            source_ids = tokenizer(source_text, add_special_tokens=False)["input_ids"]
-            target_ids = tokenizer(target_text, add_special_tokens=False)["input_ids"]
-            source_len, target_len = _infer_seqlen(len(source_ids), len(target_ids), max_length - total_length)
-            if _will_cut_vision_tokens(source_ids, source_len) or _will_cut_vision_tokens(target_ids, target_len):
-                raise ValueError("wrong cutoff.")
+            start_char = header_start + len(assistant_header)
+            end_start = prompt.find(assistant_end, start_char)
+            if end_start < 0:
+                raise ValueError("assistant span is missing the Qwen end marker.")
+            end_char = end_start + len(assistant_end)
 
-            source_ids = source_ids[:source_len]
-            target_ids = target_ids[:target_len]
-            input_ids_list.extend(source_ids)
-            input_ids_list.extend(target_ids)
-            labels_list.extend([ignore_index] * len(source_ids))
-            labels_list.extend(target_ids)
-            total_length += len(source_ids) + len(target_ids)
+            if assistant_span_index < len(assistant_message_indices):
+                message_index = assistant_message_indices[assistant_span_index]
+                empty_thought = f"{THOUGHT_PREFIX}{THOUGHT_SUFFIX}"
+                if message_index in assistant_skip_think_prefix and prompt.startswith(empty_thought, start_char):
+                    start_char += len(empty_thought)
 
-        input_ids = torch.tensor(input_ids_list, dtype=torch.long)
-        labels = torch.tensor(labels_list, dtype=torch.long)
-        labels[torch.isin(input_ids, vision_token_id_tensor)] = ignore_index
+            start = min(_token_count(prompt[:start_char]), valid_length)
+            end = min(_token_count(prompt[:end_char]), valid_length)
+            if start < end:
+                labels[start:end] = input_ids[start:end]
+
+            search_pos = end_char
+            assistant_span_index += 1
+
         if not torch.any(labels != ignore_index):
             raise ValueError("has no supervised assistant tokens after tokenization/truncation.")
 
-        attention_mask = torch.ones_like(input_ids)
         sample.update(
             {
                 "input_ids": input_ids,

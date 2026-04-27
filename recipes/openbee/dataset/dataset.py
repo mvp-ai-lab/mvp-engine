@@ -51,7 +51,12 @@ def build_dataset(
 
     # 2. Data guard for handling invalid/bad samples.
     dataset = dataset.assemble(
-        partial(build_dataguard, check_basic_formats=True, check_input_ids=False, check_image_sizes=True)
+        partial(
+            build_dataguard,
+            check_basic_formats=True,
+            check_input_ids=False,
+            check_image_sizes=True,
+        )
     )
 
     # 3. Pre-process the data samples.
@@ -64,7 +69,12 @@ def build_dataset(
 
     # 4. Guard to filter out any bad samples
     dataset = dataset.assemble(
-        partial(build_dataguard, check_basic_formats=False, check_input_ids=True, check_image_sizes=False)
+        partial(
+            build_dataguard,
+            check_basic_formats=False,
+            check_input_ids=True,
+            check_image_sizes=False,
+        )
     )
 
     # 5. Optionally pack samples into longer sequences before resolving image refs.
@@ -84,15 +94,15 @@ def build_dataset(
 
     # 6. Resolve references after packing so invalid/short samples avoid image IO.
     if resolve_refs:
-        dataset = dataset.resolve_ref(ref_names=config.data.ref_columns)
+        # TODO: add error handeling inside the mvp-dataset
+        # TODO: what about pure text data?
+        dataset = dataset.resolve_ref(ref_names=config.data.ref_columns).map(
+            partial(convert_images_to_pixel_values, processor=processor)
+        )
 
     # 7. Materialize deferred packs after references have been resolved.
     if config.data.packing:
         dataset = dataset.map(finalize_packed_sample_group)
-
-    # 8. Convert resolved image values into model image tensors as the last data step.
-    if resolve_refs:
-        dataset = dataset.map(partial(convert_images_to_pixel_values, processor=processor))
 
     return dataset
 
@@ -128,6 +138,7 @@ if __name__ == "__main__":
 
     for data in tqdm(ds):
         print(data)
+        break
 
     # sample = {
     #     "images": [

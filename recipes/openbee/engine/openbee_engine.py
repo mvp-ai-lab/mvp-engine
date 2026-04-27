@@ -175,7 +175,6 @@ class OpenbeeEngine(Engine):
                 local_batch_count += 1
                 if local_batch_count % log_interval == 0:
                     logger.info(f"Step inference progress: {local_batch_count} local batches...")
-                    dist.barrier()
 
             # Step 2.4: reduce all local counts to get the real global packed
             # sample count across all ranks.

@@ -6,6 +6,8 @@ from mvp_dataset.core import Assembler, RuntimeContext
 
 from mvp_engine.utils.log import simple_info
 
+from ..dataset.utils import summarize_sample_for_log
+
 
 def build_empty_sample():
     """Build an empty model-input sentinel for invalid samples.
@@ -79,72 +81,81 @@ class DataGuard(Assembler[dict[str, Any], dict[str, Any]]):
             messages = sample.get("messages") or sample.get("conversations")
             if not isinstance(messages, list):
                 simple_info(
-                    f"DataGuard: missing or invalid messages/conversations field, skipping sample: {sample}",
+                    "DataGuard: missing or invalid messages/conversations field, skipping sample: "
+                    f"{summarize_sample_for_log(sample)}",
                     level="warning",
                 )
                 return []
             if not isinstance(sample.get("images"), list):
-                simple_info(f"DataGuard: missing or invalid images field, skipping sample: {sample}", level="warning")
+                simple_info(
+                    f"DataGuard: missing or invalid images field, skipping sample: {summarize_sample_for_log(sample)}",
+                    level="warning",
+                )
                 return []
 
         # =============================
         # Check if the sample has empty input_ids, which indicates an invalid sample.
         if self.check_input_ids and sample["input_ids"].size(0) <= 0:
-            simple_info(f"DataGuard: empty input_ids, skipping sample: {sample}", level="warning")
+            simple_info(
+                f"DataGuard: empty input_ids, skipping sample: {summarize_sample_for_log(sample)}",
+                level="warning",
+            )
             return []
 
         # =============================
         # Check if the sample contains a "image_size" field and if it's valid.
         if self.check_image_sizes:
             images = sample.get("images", [])
-            image_size = sample.get("image_size")
-            if image_size is None and "img_size" in sample:
-                image_size = sample.get("img_size")  # Support both "image_size" and "img_size" keys.
+            image_size = sample.get("img_size", []) or sample.get("image_size", [])
             if image_size is None:
                 if len(images) == 0:
                     # If there are no images, it's fine to have no image_size.
                     sample["image_size"] = []
                     return [sample]
 
-                simple_info(f"DataGuard: missing image_size field, skipping sample: {sample}", level="warning")
+                simple_info(
+                    f"DataGuard: missing image_size field, skipping sample: {summarize_sample_for_log(sample)}",
+                    level="warning",
+                )
                 return []
             if not isinstance(image_size, (list, tuple)):
-                simple_info(f"DataGuard: invalid image_size type, skipping sample: {sample}", level="warning")
+                simple_info(
+                    f"DataGuard: invalid image_size type, skipping sample: {summarize_sample_for_log(sample)}",
+                    level="warning",
+                )
                 return []
             if len(image_size) == 0:
                 if len(images) == 0:
                     sample["image_size"] = []
                     return [sample]
                 simple_info(
-                    f"DataGuard: empty image_size for non-text-only sample, skipping sample: {sample}",
+                    "DataGuard: empty image_size for non-text-only sample, skipping sample: "
+                    f"{summarize_sample_for_log(sample)}",
                     level="warning",
                 )
                 return []
-            if isinstance(image_size[0], (list, tuple)):
-                # If image_size is a list of sizes, check each one.
-                for size in image_size:
-                    if (
-                        not isinstance(size, (list, tuple))
-                        or len(size) != 2
-                        or not all(isinstance(dim, int) and dim > 0 for dim in size)
-                    ):
-                        simple_info(f"DataGuard: invalid image_size {size}, skipping sample: {sample}", level="warning")
-                        return []
-                if len(image_size) != len(images):
+            if not all(isinstance(size, (list, tuple)) for size in image_size):
+                simple_info(
+                    "DataGuard: image_size must be a list of width/height entries, "
+                    f"skipping sample: {summarize_sample_for_log(sample)}",
+                    level="warning",
+                )
+                return []
+
+            for size in image_size:
+                if len(size) != 2 or not all(isinstance(dim, int) and dim > 0 for dim in size):
                     simple_info(
-                        "DataGuard: image_size list length does not match images list length, "
-                        f"skipping sample: {sample}",
+                        f"DataGuard: invalid image_size {size}, skipping sample: {summarize_sample_for_log(sample)}",
                         level="warning",
                     )
                     return []
-            else:
-                # If image_size is a single size, check it directly.
-                if len(image_size) != 2 or not all(isinstance(dim, int) and dim > 0 for dim in image_size):
-                    simple_info(
-                        f"DataGuard: invalid image_size {image_size}, skipping sample: {sample}",
-                        level="warning",
-                    )
-                    return []
+            if len(image_size) != len(images):
+                simple_info(
+                    "DataGuard: image_size list length does not match images list length, "
+                    f"skipping sample: {summarize_sample_for_log(sample)}",
+                    level="warning",
+                )
+                return []
 
         return [sample]
 
