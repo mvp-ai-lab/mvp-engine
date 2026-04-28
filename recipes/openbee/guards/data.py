@@ -26,14 +26,14 @@ def build_empty_sample():
     }
 
 
-class DataGuard(Assembler[dict[str, Any], dict[str, Any]]):
+class DataGuard(Assembler[Any, Any]):
     """Filter malformed OpenBee samples before expensive downstream processing.
 
     ``DataGuard`` is a lightweight dataset assembler. It receives one decoded
-    sample at a time and either forwards it unchanged or returns an empty list
-    to drop it from the stream. The enabled checks are intentionally controlled
-    by flags so callers can use only the guards that make sense for the current
-    pipeline stage.
+    sample or one deferred packed sample group at a time and either forwards it
+    unchanged or returns an empty list to drop it from the stream. The enabled
+    checks are intentionally controlled by flags so callers can use only the
+    guards that make sense for the current pipeline stage.
 
     Attributes:
         check_basic_formats: Drop samples with basic format errors, such as missing or malformed
@@ -66,7 +66,7 @@ class DataGuard(Assembler[dict[str, Any], dict[str, Any]]):
         if self.record:
             record_skip(reason, sample, detail=detail)
 
-    def push(self, sample: dict[str, Any]) -> Iterable[dict[str, Any]]:
+    def push(self, sample: Any) -> Iterable[Any]:
         """Validate a single sample and emit zero or one samples.
 
         Args:
@@ -78,6 +78,19 @@ class DataGuard(Assembler[dict[str, Any], dict[str, Any]]):
             when the sample should be skipped. Invalid samples are logged before
             they are dropped.
         """
+        if isinstance(sample, list):
+            filtered_sample: list[dict[str, Any]] = []
+            for item in sample:
+                if not isinstance(item, dict):
+                    self._record_skip("guard.invalid_pack_item", item)
+                    continue
+                filtered_sample.extend(self.push(item))
+
+            if not filtered_sample:
+                self._record_skip("guard.empty_pack", sample)
+                return []
+            return [filtered_sample]
+
         # =============================
         # Check basic formats
         if self.check_basic_formats:
@@ -138,7 +151,7 @@ class DataGuard(Assembler[dict[str, Any], dict[str, Any]]):
 
         return [sample]
 
-    def finish(self, *, drop_last: bool = False) -> Iterable[dict[str, Any]]:
+    def finish(self, *, drop_last: bool = False) -> Iterable[Any]:
         """Flush buffered samples at the end of assembly.
 
         ``DataGuard`` is stateless and never buffers samples, so there is

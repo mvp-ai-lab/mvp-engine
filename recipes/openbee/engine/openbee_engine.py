@@ -340,8 +340,9 @@ class OpenbeeEngine(Engine):
                             "OpenBee train loader did not yield any batches during resume skip."
                         ) from exc
                 del data
-                torch.distributed.barrier()
                 current_skip_count = skipped_micro_batches + 1
+                if dist.is_available() and dist.is_initialized() and current_skip_count % log_interval == 0:
+                    dist.barrier()
                 if is_main_process() and current_skip_count % log_interval == 0:
                     logger.info(
                         f"Resume data skip progress: {current_skip_count}/{resume_skip_micro_batches} micro-batches"

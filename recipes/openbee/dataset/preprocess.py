@@ -93,37 +93,45 @@ def convert_images_to_pixel_values(
     if isinstance(sample, list):
         return [convert_images_to_pixel_values(s, processor=processor) for s in sample]
 
-    images = sample.pop("images", [])
-    adjusted_sizes = sample.pop("adjusted_image_size", [])
-    if not images:
+    try:
+        images = sample.get("images", [])
+        adjusted_sizes = sample.get("adjusted_image_size", [])
+        if not images:
+            sample.pop("images", None)
+            sample.pop("adjusted_image_size", None)
+            return sample
+
+        def _load_resized_image_tensor(image: Any, target_size: list[int]) -> torch.Tensor:
+            height, width = int(target_size[0]), int(target_size[1])
+            pil_image = process_image(image)
+            image_tensor = tvF.pil_to_tensor(pil_image)
+            if tuple(image_tensor.shape[-2:]) != (height, width):
+                image_tensor = tvF.resize(
+                    image_tensor,
+                    [height, width],
+                    interpolation=InterpolationMode.BICUBIC,
+                    antialias=True,
+                )
+            return image_tensor
+
+        resized_images = [
+            _load_resized_image_tensor(image, target_size)
+            for image, target_size in zip(images, adjusted_sizes, strict=True)
+        ]
+
+        image_inputs = processor.image_processor(
+            images=resized_images,
+            do_resize=False,
+            return_tensors="pt",
+        )
+        sample.pop("images", None)
+        sample.pop("adjusted_image_size", None)
+        sample["pixel_values"] = image_inputs["pixel_values"]
+        sample["image_grid_thw"] = image_inputs["image_grid_thw"]
         return sample
-
-    def _load_resized_image_tensor(image: Any, target_size: list[int]) -> torch.Tensor:
-        height, width = int(target_size[0]), int(target_size[1])
-        pil_image = process_image(image)
-        image_tensor = tvF.pil_to_tensor(pil_image)
-        if tuple(image_tensor.shape[-2:]) != (height, width):
-            image_tensor = tvF.resize(
-                image_tensor,
-                [height, width],
-                interpolation=InterpolationMode.BICUBIC,
-                antialias=True,
-            )
-        return image_tensor
-
-    resized_images = [
-        _load_resized_image_tensor(image, target_size)
-        for image, target_size in zip(images, adjusted_sizes, strict=True)
-    ]
-
-    image_inputs = processor.image_processor(
-        images=resized_images,
-        do_resize=False,
-        return_tensors="pt",
-    )
-    sample["pixel_values"] = image_inputs["pixel_values"]
-    sample["image_grid_thw"] = image_inputs["image_grid_thw"]
-    return sample
+    except Exception as exc:
+        record_skip("convert_images_to_pixel_values", sample, detail=str(exc))
+        return build_empty_sample()
 
 
 def _resolve_image_processor_config(processor: Any) -> tuple[Any, int, int, int, int]:

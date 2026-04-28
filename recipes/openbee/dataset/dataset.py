@@ -101,7 +101,19 @@ def build_dataset(
             partial(convert_images_to_pixel_values, processor=processor)
         )
 
-    # 7. Materialize deferred packs after references have been resolved.
+    # 7. Drop sentinels created by late image decode/materialization failures.
+    # In packed mode this also drops empty packed groups before finalization.
+    dataset = dataset.assemble(
+        partial(
+            build_dataguard,
+            check_basic_formats=False,
+            check_input_ids=True,
+            check_image_sizes=False,
+            record=False,
+        )
+    )
+
+    # 8. Materialize deferred packs after references have been resolved.
     if config.data.packing:
         dataset = dataset.map(finalize_packed_sample_group)
 
