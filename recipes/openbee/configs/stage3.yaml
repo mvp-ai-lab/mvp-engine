@@ -30,7 +30,7 @@ data:
   packing_buffer_size: 64
   max_seq_len: 16384
   batch_size: 1
-  num_workers: 8
+  num_workers: 4
 model:
   pretrained_model_name_or_path: "./pretrained/Qwen3-VL-8B-Base-woDS-stage2"
   attn_implementation: "flash_attention_2"
