@@ -20,10 +20,8 @@ description: Add recipe-local tensor parallel plans and optional TP postprocess 
 - The target `modeling_*.py` file under `recipes/**/model/**/`.
 - The top-level model class actually used by training.
 - The repeated compute block classes that contain the linears TP should shard.
-- The current training config and mesh settings.
-- If config changes are needed and the user did not specify them already:
-  - GPUs per node
-  - target TP size
+- The current training config and mesh settings. If config changes are needed,
+  include GPUs per node and the TP size that should be set.
 
 ## Workflow
 

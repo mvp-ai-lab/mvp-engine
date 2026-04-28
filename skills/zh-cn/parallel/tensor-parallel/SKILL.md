@@ -19,10 +19,8 @@ description: 为本仓库中的模型增加 recipe-local 的 tensor parallel pla
 - `recipes/**/model/**/` 下的目标 `modeling_*.py` 文件。
 - 训练实际使用的顶层模型类。
 - 需要做 TP 分片的重复计算 block 类。
-- 当前训练配置和 mesh 设置。
-- 如果需要修改配置且用户尚未明确说明：
-  - 单机 GPU 数量
-  - 目标 TP size
+- 当前训练配置和 mesh 设置；如果需要修改配置，应包含单机 GPU 数量以及需要设置的
+  TP size。
 
 ## Workflow
 
