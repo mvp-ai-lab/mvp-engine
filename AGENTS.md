@@ -102,6 +102,8 @@ Useful existing tests include:
 
 ## Working Rules
 
+Defensive coding: Don't add error handling, fallbacks, or validation **for scenarios that can't happen**. Trust internal code and framework guarantees. **Only validate at system boundaries** (user input, external APIs).
+
 Recommended decision order:
 
 1. After the user states a need, first check whether `skills/` already contains a matching skill

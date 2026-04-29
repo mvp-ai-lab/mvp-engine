@@ -374,7 +374,6 @@ class OpenbeeEngine(Engine):
             return int((shifted_labels != ignore_index).sum().item())
 
         gradient_accumulation_steps = int(self.config.optim.gradient_accumulation_steps)
-        train_iterator = iter(self.train_loader)
 
         if hasattr(self, "timer"):
             self.timer.set_progress(self.step, self.total_steps)
@@ -383,8 +382,132 @@ class OpenbeeEngine(Engine):
         if self.config.resume is not None and self.step < self.total_steps:
             resume_skip_micro_batches = self.step * gradient_accumulation_steps + int(self._accumulate_step)
 
+        train_iterator: Any
         if resume_skip_micro_batches > 0:
-            train_iterator = self._skip_resume_micro_batches(train_iterator, resume_skip_micro_batches)
+            if self.processor is None:
+                self.processor = build_qwen3_vl_processor(self.config.model)
+
+            torch_rng_state = torch.get_rng_state()
+            python_rng_state = random.getstate()
+            numpy_rng_state = np.random.get_state()
+            skip_start_time = time.perf_counter()
+            skip_counts: dict[int, int] = {}
+            total_skip_markers = 0
+            fast_resume_error: Exception | None = None
+
+            try:
+                if is_main_process():
+                    logger.info(
+                        "OpenBee fast resume post-pack skip: "
+                        f"step={self.step}, "
+                        f"accumulate_step={self._accumulate_step}, "
+                        f"micro_batches={resume_skip_micro_batches}"
+                    )
+
+                pre_skip_dataset = build_dataset(
+                    self.config,
+                    processor=self.processor,
+                    resolve_refs=False,
+                    skip_mode="pre_calculate",
+                )
+                pre_skip_loader = TorchLoader(
+                    pre_skip_dataset,
+                    num_workers=int(self.config.data.num_workers),
+                    pin_memory=self.device.type in ["cuda", "npu"],
+                    persistent_workers=False,
+                    multiprocessing_context="spawn",
+                ).batch(
+                    batch_size=int(self.config.data.batch_size),
+                    drop_last=True,
+                )
+                pre_skip_iterator = iter(pre_skip_loader)
+                log_interval = 50
+
+                for skipped_micro_batches in range(resume_skip_micro_batches):
+                    try:
+                        marker_batch = next(pre_skip_iterator)
+                    except StopIteration:
+                        pre_skip_iterator = iter(pre_skip_loader)
+                        try:
+                            marker_batch = next(pre_skip_iterator)
+                        except StopIteration as exc:
+                            raise RuntimeError("OpenBee fast resume marker loader did not yield any batches.") from exc
+
+                    if not isinstance(marker_batch, list) or not marker_batch:
+                        raise RuntimeError("OpenBee fast resume marker loader yielded an invalid marker batch.")
+
+                    for marker in marker_batch:
+                        worker_slot = int(marker["worker_slot"])
+                        skip_counts[worker_slot] = skip_counts.get(worker_slot, 0) + 1
+                        total_skip_markers += 1
+
+                    current_skip_count = skipped_micro_batches + 1
+                    if is_main_process() and current_skip_count % log_interval == 0:
+                        logger.info(
+                            "OpenBee fast resume skip progress: "
+                            f"{current_skip_count}/{resume_skip_micro_batches} micro-batches"
+                        )
+
+                expected_skip_markers = resume_skip_micro_batches * int(self.config.data.batch_size)
+                if total_skip_markers != expected_skip_markers:
+                    raise RuntimeError(
+                        "OpenBee fast resume marker count mismatch: "
+                        f"expected={expected_skip_markers}, actual={total_skip_markers}."
+                    )
+                if not skip_counts:
+                    raise RuntimeError("OpenBee fast resume produced no post-pack skip markers.")
+            except Exception as exc:
+                fast_resume_error = exc
+            finally:
+                torch.set_rng_state(torch_rng_state)
+                random.setstate(python_rng_state)
+                np.random.set_state(numpy_rng_state)
+
+            fast_resume_ok = torch.tensor(
+                0 if fast_resume_error is not None else 1,
+                device=self.device,
+                dtype=torch.long,
+            )
+            if dist.is_available() and dist.is_initialized():
+                dist.all_reduce(fast_resume_ok, op=dist.ReduceOp.MIN)
+            if int(fast_resume_ok.item()) == 0:
+                if fast_resume_error is not None:
+                    raise RuntimeError("OpenBee fast resume failed on this rank.") from fast_resume_error
+                raise RuntimeError("OpenBee fast resume failed on another rank.")
+
+            if is_main_process():
+                elapsed = time.perf_counter() - skip_start_time
+                logger.info(
+                    "OpenBee fast resume skip counts ready: "
+                    f"workers={len(skip_counts)}, "
+                    f"post_pack_outputs={total_skip_markers}, "
+                    f"elapsed={elapsed:.1f}s"
+                )
+
+            dataset = build_dataset(
+                self.config,
+                processor=self.processor,
+                skip_mode="perform",
+                skip_counts=skip_counts,
+            )
+            collate_fn = OpenbeeCollator(
+                pad_token_id=int(self.processor.tokenizer.pad_token_id),
+                processor=self.processor,
+            )
+            loader = TorchLoader(
+                dataset,
+                num_workers=int(self.config.data.num_workers),
+                pin_memory=self.device.type in ["cuda", "npu"],
+                persistent_workers=False,
+                multiprocessing_context="spawn",
+            )
+            self.train_loader = loader.batch(
+                batch_size=int(self.config.data.batch_size),
+                drop_last=True,
+                collate_fn=collate_fn,
+            )
+
+        train_iterator = iter(self.train_loader)
 
         while self.step < self.total_steps:
             remaining_micro_steps = gradient_accumulation_steps - int(self._accumulate_step)
