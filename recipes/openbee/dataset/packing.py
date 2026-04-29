@@ -42,6 +42,7 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any] | list[dict
         seed: int = 0,
         defer_finalize: bool = False,
     ) -> None:
+        """Configure the streaming packer and its sample-selection strategy."""
         if max_length <= 0:
             raise ValueError(f"max_length must be positive, got {max_length}.")
         if open_pack_limit <= 0:
@@ -64,6 +65,7 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any] | list[dict
         self.defer_finalize = defer_finalize
 
     def push(self, sample: dict[str, Any]) -> Iterable[dict[str, Any] | list[dict[str, Any]]]:
+        """Buffer one processed sample and emit any packs made ready by it."""
         sample_length = int(sample["input_ids"].size(0))
         if sample_length <= 0:
             return []
@@ -85,6 +87,7 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any] | list[dict
         return []
 
     def finish(self, *, drop_last: bool = False) -> Iterable[dict[str, Any] | list[dict[str, Any]]]:
+        """Flush buffered samples and optionally drop unfinished open packs."""
         emitted: list[dict[str, Any] | list[dict[str, Any]]] = []
         emitted.extend(self._drain_pool_to_buffer_limit(buffer_limit=0))
 
@@ -111,6 +114,7 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any] | list[dict
         return emitted
 
     def _assign_pending_to_packs(self) -> list[dict[str, Any] | list[dict[str, Any]]]:
+        """Assign pending samples into existing or newly opened packs."""
         if not self.pending_samples:
             return []
 
@@ -168,6 +172,7 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any] | list[dict
         return emitted
 
     def _flush_ready_packs(self) -> list[dict[str, Any] | list[dict[str, Any]]]:
+        """Emit packs that have exactly reached ``max_length``."""
         emitted: list[dict[str, Any] | list[dict[str, Any]]] = []
         if self.selection_strategy == "best_fit":
             while self.open_pack_remaining and self.open_pack_remaining[0] == 0:
@@ -184,6 +189,7 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any] | list[dict
         return emitted
 
     def _close_most_filled_pack(self) -> dict[str, Any] | list[dict[str, Any]]:
+        """Finalize and remove the most-filled currently open pack."""
         if not self.open_packs:
             raise RuntimeError("Cannot close a pack when no open packs exist.")
 
@@ -198,6 +204,7 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any] | list[dict
         return self._pack_samples(pack.samples)
 
     def _open_pack_from_pending(self) -> None:
+        """Start a new open pack from one pending sample."""
         if not self.pending_samples:
             raise RuntimeError("Cannot open a pack from an empty sample pool.")
 
@@ -210,6 +217,7 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any] | list[dict
         *,
         buffer_limit: int | None = None,
     ) -> list[dict[str, Any] | list[dict[str, Any]]]:
+        """Emit packs until the pending-sample pool is within the buffer limit."""
         if buffer_limit is None:
             buffer_limit = self.pack_buffer_size
 
@@ -227,6 +235,7 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any] | list[dict
         return emitted
 
     def _add_open_pack(self, pack: _OpenPack) -> None:
+        """Insert an open pack and maintain best-fit ordering when needed."""
         pack.insertion_order = self.next_open_pack_order
         self.next_open_pack_order += 1
         self.open_packs.append(pack)
@@ -235,12 +244,14 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any] | list[dict
             self._restore_best_fit_order(len(self.open_packs) - 1)
 
     def _pop_open_pack(self, index: int) -> _OpenPack:
+        """Remove and return an open pack by index."""
         pack = self.open_packs.pop(index)
         if self.selection_strategy == "best_fit":
             del self.open_pack_remaining[index]
         return pack
 
     def _restore_best_fit_order(self, index: int) -> None:
+        """Move one best-fit pack until remaining-capacity order is restored."""
         if self.selection_strategy != "best_fit":
             return
 
@@ -255,6 +266,7 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any] | list[dict
         self.open_pack_remaining[index] = remaining
 
     def _pack_samples(self, samples: list[dict[str, Any]]) -> dict[str, Any] | list[dict[str, Any]]:
+        """Return deferred sample groups or a finalized packed sample."""
         if self.defer_finalize:
             return [dict(sample) for sample in samples]
         return finalize_packed_sample_group(samples)

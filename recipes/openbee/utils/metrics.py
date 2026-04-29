@@ -135,6 +135,7 @@ class DistributedMetric:
         accumulate: AccumulatorName,
         reduce: DistributedReducerName,
     ) -> None:
+        """Create one scalar metric bound to the reduction device."""
         self.name = name
         self.device = device
         self.accumulate = self._normalize_accumulate(accumulate)
@@ -189,6 +190,7 @@ class DistributedMetric:
         self._global_value = float(value.item())
 
     def _local_tensor(self) -> torch.Tensor:
+        """Return the scalar tensor representing the current local value."""
         if self._local_sum is None:
             raise RuntimeError(f"Metric '{self.name}' has no local value.")
         if self.accumulate == "mean":
@@ -198,18 +200,20 @@ class DistributedMetric:
         return self._local_sum
 
     def _as_tensor(self, value: Any) -> torch.Tensor:
+        """Convert one scalar metric update to a detached float64 tensor."""
         if isinstance(value, torch.Tensor):
             if value.numel() != 1:
                 raise ValueError(f"Metric '{self.name}' only supports scalar tensors.")
             return value.detach().to(device=self.device, dtype=torch.float64)
         if isinstance(value, bool):
             return torch.tensor(float(value), device=self.device, dtype=torch.float64)
-        if isinstance(value, int | float):
+        if isinstance(value, (int, float)):
             return torch.tensor(float(value), device=self.device, dtype=torch.float64)
         raise TypeError(f"Unsupported metric value type for '{self.name}': {type(value).__name__}")
 
     @staticmethod
     def _normalize_accumulate(accumulate: AccumulatorName) -> Literal["sum", "last", "max", "mean"]:
+        """Normalize local accumulation aliases."""
         if accumulate == "add":
             return "sum"
         if accumulate == "avg":
@@ -220,6 +224,7 @@ class DistributedMetric:
 
     @staticmethod
     def _normalize_reduce(reduce: DistributedReducerName) -> Literal["sum", "max", "mean", "none"]:
+        """Normalize distributed reduction aliases."""
         if reduce == "avg":
             return "mean"
         if reduce in {"sum", "max", "mean", "none"}:

@@ -44,6 +44,7 @@ LLM_PREFIXES = (
 
 
 def _matches(name: str, prefixes: tuple[str, ...]) -> bool:
+    """Return whether a parameter name belongs to one configured prefix group."""
     return any(name.startswith(p) for p in prefixes)
 
 
@@ -152,6 +153,7 @@ def inject_model_flops_calculation(model):
         freeze_merger: bool = False,
         freeze_llm: bool = False,
     ) -> float:
+        """Estimate local-rank training or inference FLOPs for one batch."""
         batch = int(batch_size)
         tokens = int(seq_len)
         if batch <= 0 or tokens <= 0:
@@ -275,6 +277,7 @@ def apply_qwen3_vl_compat_patches(model):
     from transformers.models.qwen3_vl import modeling_qwen3_vl
 
     def patch_embed_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """Run Qwen3-VL vision patch projection in fp32 and cast back."""
         target_dtype = self.proj.weight.dtype
         proj_weight = self.proj.weight
         proj_bias = self.proj.bias
@@ -289,6 +292,7 @@ def apply_qwen3_vl_compat_patches(model):
         return hidden_states.to(dtype=target_dtype)
 
     def rotate_half(x: torch.Tensor) -> torch.Tensor:
+        """Rotate the last dimension halves for RoPE application."""
         x1 = x[..., : x.shape[-1] // 2]
         x2 = x[..., x.shape[-1] // 2 :]
         return torch.cat((-x2, x1), dim=-1)
@@ -300,6 +304,7 @@ def apply_qwen3_vl_compat_patches(model):
         sin: torch.Tensor,
         unsqueeze_dim: int = 1,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Apply the LF-compatible vision RoPE embedding to query/key tensors."""
         cos = cos.unsqueeze(unsqueeze_dim)
         sin = sin.unsqueeze(unsqueeze_dim)
         q_embed = (q * cos) + (rotate_half(q) * sin)
@@ -331,6 +336,7 @@ def inject_sum_loss_forward(model, *, chunk_size: int = 4096):
         logits_to_keep=0,
         **kwargs,
     ):
+        """Forward Qwen3-VL with chunked per-token CE instead of mean loss."""
         outputs = self.model(
             input_ids=input_ids,
             pixel_values=pixel_values,

@@ -30,6 +30,7 @@ def apply_packed_fa2_patch() -> None:
         return
 
     def _return_segment_mask(*args, **kwargs):
+        """Return Qwen3-VL's integer packed segment mask unchanged."""
         if "attention_mask" in kwargs:
             return kwargs["attention_mask"]
         if len(args) >= 3:
@@ -37,6 +38,7 @@ def apply_packed_fa2_patch() -> None:
         raise ValueError("Unable to recover attention_mask for packed Qwen3-VL FA2 patch.")
 
     def _get_seqlens_in_batch(attention_mask):
+        """Convert packed segment ids to FA2 per-segment sequence lengths."""
         batch_size = attention_mask.size(0)
         dtype, device = attention_mask.dtype, attention_mask.device
         max_segment_id = torch.max(attention_mask).item()
@@ -47,6 +49,7 @@ def apply_packed_fa2_patch() -> None:
         return counts[counts.nonzero().squeeze(dim=-1)]
 
     def _get_unpad_data(attention_mask):
+        """Build FA2 unpadding metadata from packed segment-id masks."""
         seqlens_in_batch = _get_seqlens_in_batch(attention_mask)
         max_seqlen_in_batch = int(seqlens_in_batch.max().item())
         indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()

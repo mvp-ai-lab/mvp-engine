@@ -88,6 +88,7 @@ def convert_images_to_pixel_values(sample: dict[str, Any], *, processor: Any) ->
         return sample
 
     def _load_resized_image_tensor(image: Any, target_size: list[int]) -> torch.Tensor:
+        """Load one image and resize it to its precomputed smart-resize shape."""
         height, width = int(target_size[0]), int(target_size[1])
         pil_image = process_image(image)
         image_tensor = tvF.pil_to_tensor(pil_image)
@@ -395,6 +396,7 @@ def _process_message(
 
 def _normalize_image_size(size_entry: Any) -> list[int]:
     """Parse OpenBee image metadata into ``[height, width]``.
+
     The input may be a dict with ``{"height", "width"}`` fields or a list/tuple
     with width and height as the first two elements.
     """
@@ -601,6 +603,7 @@ def process_sample(
         attention_mask = tokenized["attention_mask"][0]
 
         def _token_count(text: str) -> int:
+            """Count final tokenizer tokens for one text prefix."""
             counted = tokenizer(
                 text,
                 return_tensors="pt",

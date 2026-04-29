@@ -35,6 +35,7 @@ def calculate_mfu(
     device_peak_tflops: float,
     world_size: int,
 ) -> float:
+    """Compute model FLOPs utilization for one synchronized optimizer step."""
     if step_time_seconds <= 0:
         raise ValueError("step_time_seconds must be > 0")
     if device_peak_tflops <= 0:
@@ -77,6 +78,7 @@ def reduce_to_global_flops_and_step_time(
 
 
 def normalize_device_name(device_name: str) -> str | None:
+    """Map a raw GPU name to the canonical keys used by the peak table."""
     normalized = device_name.strip()
     if not normalized:
         return None
@@ -98,6 +100,7 @@ def normalize_device_name(device_name: str) -> str | None:
 
 
 def detect_cuda_device_name() -> str | None:
+    """Return the first CUDA device name reported by ``nvidia-smi``."""
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
@@ -121,6 +124,7 @@ def resolve_peak_tflops(
     configured_device_name: str | None,
     configured_peak_tflops: float | None,
 ) -> tuple[str | None, float | None]:
+    """Resolve the device name and peak TFLOPs used for MFU logging."""
     if configured_peak_tflops is not None:
         return normalize_device_name(configured_device_name) if configured_device_name else None, float(
             configured_peak_tflops
@@ -153,6 +157,7 @@ def build_mfu_log(
     freeze_merger: bool = False,
     freeze_llm: bool = False,
 ) -> dict[str, float]:
+    """Build the ``perf/mfu`` log payload when device peak FLOPs are known."""
     if step_time_seconds <= 0:
         return {}
 

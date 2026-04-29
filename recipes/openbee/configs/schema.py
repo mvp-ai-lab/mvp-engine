@@ -8,6 +8,8 @@ from mvp_engine.config.schema import BaseEngineConfig, BaseLoopConfig, BaseOptim
 
 
 class OpenbeeDataConfig(BaseModel):
+    """Dataset and batching options for the OpenBee recipe."""
+
     model_config = ConfigDict(frozen=False, extra="forbid")
 
     train_path: Optional[str] = "./data/openbee/alignment_demo.jsonl"
@@ -28,6 +30,7 @@ class OpenbeeDataConfig(BaseModel):
     @field_validator("train_path", mode="before")
     @classmethod
     def validate_train_path(cls, value: str | None) -> str | None:
+        """Normalize the optional train dataset path."""
         if value is None:
             return None
         if not isinstance(value, str):
@@ -41,6 +44,7 @@ class OpenbeeDataConfig(BaseModel):
     @field_validator("batch_size")
     @classmethod
     def validate_batch_size(cls, value: int) -> int:
+        """Allow a positive micro batch size or ``-1`` for inference."""
         if value == 0 or value < -1:
             raise ValueError("`data.batch_size` must be positive or exactly -1.")
         return value
@@ -48,6 +52,7 @@ class OpenbeeDataConfig(BaseModel):
     @field_validator("thinking_mode", mode="before")
     @classmethod
     def validate_thinking_mode(cls, value: bool | str | None) -> bool | None | Literal["non-empty"]:
+        """Normalize string forms of the assistant thinking-block policy."""
         if value is None or isinstance(value, bool):
             return value
         if not isinstance(value, str):
@@ -66,6 +71,8 @@ class OpenbeeDataConfig(BaseModel):
 
 
 class OpenbeeGradientCheckpointingConfig(BaseModel):
+    """Gradient checkpointing options passed to the Qwen3-VL model."""
+
     model_config = ConfigDict(frozen=False, extra="forbid")
 
     enabled: bool = False
@@ -73,6 +80,8 @@ class OpenbeeGradientCheckpointingConfig(BaseModel):
 
 
 class OpenbeeModelConfig(BaseModel):
+    """Model loading, precision compatibility, and freeze-policy options."""
+
     model_config = ConfigDict(frozen=False, extra="forbid")
 
     pretrained_model_name_or_path: str = "./recipes/openbee/pretrained/Qwen3-VL-8B-Instruct"
@@ -95,6 +104,7 @@ class OpenbeeModelConfig(BaseModel):
     @field_validator("pretrained_model_name_or_path", mode="before")
     @classmethod
     def validate_pretrained_model_name_or_path(cls, value: str) -> str:
+        """Normalize the model name or local checkpoint path."""
         if not isinstance(value, str):
             raise TypeError("`model.pretrained_model_name_or_path` must be a string.")
 
@@ -105,6 +115,8 @@ class OpenbeeModelConfig(BaseModel):
 
 
 class OpenbeeOptimConfig(BaseOptimConfig):
+    """Optimizer options extended with OpenBee batch and loss-guard settings."""
+
     model_config = ConfigDict(frozen=False)
 
     gradient_accumulation_steps: int = 1
@@ -116,12 +128,15 @@ class OpenbeeOptimConfig(BaseOptimConfig):
     @field_validator("gradient_accumulation_steps")
     @classmethod
     def validate_gradient_accumulation_steps(cls, value: int) -> int:
+        """Allow a positive accumulation count or ``-1`` for inference."""
         if value == 0 or value < -1:
             raise ValueError("`optim.gradient_accumulation_steps` must be positive or exactly -1.")
         return value
 
 
 class OpenbeeLoopConfig(BaseLoopConfig):
+    """Iteration-loop options for OpenBee training."""
+
     model_config = ConfigDict(frozen=False)
 
     total_steps: int = 10000
@@ -129,12 +144,15 @@ class OpenbeeLoopConfig(BaseLoopConfig):
     @field_validator("total_steps")
     @classmethod
     def validate_total_steps(cls, value: int) -> int:
+        """Allow a positive step count or ``-1`` for dataset-based inference."""
         if value == 0 or value < -1:
             raise ValueError("`loop.total_steps` must be positive or exactly -1.")
         return value
 
 
 class OpenbeeConfig(BaseEngineConfig):
+    """Top-level OpenBee recipe config."""
+
     model_config = ConfigDict(frozen=False, extra="allow")
 
     resume: str | None = None
@@ -146,6 +164,7 @@ class OpenbeeConfig(BaseEngineConfig):
     @field_validator("resume", mode="before")
     @classmethod
     def validate_resume(cls, value: str | None) -> str | None:
+        """Normalize the optional checkpoint resume path."""
         if value is None:
             return None
         if not isinstance(value, str):

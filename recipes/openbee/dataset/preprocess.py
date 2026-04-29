@@ -88,7 +88,11 @@ def convert_images_to_pixel_values(
     *,
     processor: Any,
 ) -> dict[str, Any] | list[dict[str, Any]]:
-    """Convert resolved OpenBee images into Qwen image-processor tensors."""
+    """Convert resolved OpenBee images into Qwen image-processor tensors.
+
+    Packed groups may arrive as a list while image references are still
+    unresolved. Each member is materialized independently before final packing.
+    """
     if isinstance(sample, list):
         return [convert_images_to_pixel_values(s, processor=processor) for s in sample]
 
@@ -101,6 +105,7 @@ def convert_images_to_pixel_values(
             return sample
 
         def _load_resized_image_tensor(image: Any, target_size: list[int]) -> torch.Tensor:
+            """Load one image and resize it to its precomputed smart-resize shape."""
             height, width = int(target_size[0]), int(target_size[1])
             pil_image = process_image(image)
             image_tensor = tvF.pil_to_tensor(pil_image)
@@ -413,6 +418,7 @@ def _process_message(
 
 def _normalize_image_size(size_entry: Any) -> list[int]:
     """Parse OpenBee image metadata into ``[height, width]``.
+
     The input may be a dict with ``{"height", "width"}`` fields or a list/tuple
     with width and height as the first two elements.
     """
@@ -431,6 +437,7 @@ def _normalize_image_size(size_entry: Any) -> list[int]:
 
 
 def _infer_seqlen(source_len: int, target_len: int, cutoff_len: int) -> tuple[int, int]:
+    """Allocate the remaining token budget between source and target text."""
     if target_len * 2 < cutoff_len:
         max_target_len = cutoff_len
     elif source_len * 2 < cutoff_len:
@@ -444,6 +451,7 @@ def _infer_seqlen(source_len: int, target_len: int, cutoff_len: int) -> tuple[in
 
 
 def _get_vision_token_ids(tokenizer: Any, image_token: str) -> tuple[set[int], torch.Tensor]:
+    """Return cached tokenizer ids for tokens that must never contribute loss."""
     cache_key = (id(tokenizer), image_token)
     if cache_key not in _VISION_TOKEN_ID_CACHE:
         token_ids: set[int] = set()
@@ -551,6 +559,7 @@ def process_sample(
         image_cursor = 0
 
         def _expand_image_placeholders(text: str) -> str:
+            """Expand each image placeholder to the estimated number of image tokens."""
             nonlocal image_cursor
 
             placeholder = IMAGE_TOKEN_PLACEHOLDER if IMAGE_TOKEN_PLACEHOLDER in text else image_token
@@ -626,6 +635,7 @@ def process_sample(
         vision_token_ids, vision_token_id_tensor = _get_vision_token_ids(tokenizer, image_token)
 
         def _will_cut_vision_tokens(token_ids: list[int], keep_len: int) -> bool:
+            """Return whether truncation would cut away any vision special tokens."""
             return any(token_id in vision_token_ids for token_id in token_ids[keep_len:])
 
         input_ids_list: list[int] = []

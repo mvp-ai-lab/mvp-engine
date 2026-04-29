@@ -21,6 +21,7 @@ class LossGuard:
         window_size: int,
         min_history: int,
     ) -> None:
+        """Initialize the scalar-loss spike detector."""
         self.spike_multiplier = spike_multiplier
         self.min_history = min_history
         self.loss_history: deque[float] = deque(maxlen=window_size)
@@ -57,6 +58,7 @@ class LossGuard:
 
     @staticmethod
     def _as_float(loss: torch.Tensor | float | Any) -> float:
+        """Convert a scalar tensor or Python value to a float."""
         if isinstance(loss, torch.Tensor):
             return float(loss.detach().item())
         return float(loss)
@@ -98,6 +100,7 @@ class PerTokenLossGuard(LossGuard):
 
     @staticmethod
     def _as_tensor(value: torch.Tensor | float, *, device: torch.device) -> torch.Tensor:
+        """Convert a per-rank loss sum into a float64 scalar tensor."""
         if isinstance(value, torch.Tensor):
             return value.detach().to(device=device, dtype=torch.float64)
         return torch.tensor(float(value), device=device, dtype=torch.float64)

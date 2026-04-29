@@ -14,13 +14,16 @@ class SkipRecorder(Assembler[Any, dict[str, int]]):
     """Replace each post-pack output with a lightweight worker-slot marker."""
 
     def __init__(self, *, worker_slot: int) -> None:
+        """Store the dataset worker slot that produced future markers."""
         self.worker_slot = int(worker_slot)
 
     def push(self, sample: Any) -> Iterable[dict[str, int]]:
+        """Emit one worker-slot marker for each post-pack output."""
         del sample
         return [{"worker_slot": self.worker_slot}]
 
     def finish(self, *, drop_last: bool = False) -> Iterable[dict[str, int]]:
+        """Emit no final markers because the recorder is stateless."""
         del drop_last
         return []
 
@@ -29,6 +32,7 @@ class SkipByWorker(Assembler[Any, Any]):
     """Drop the first N post-pack outputs assigned to this worker slot."""
 
     def __init__(self, *, worker_slot: int, skip_counts: Mapping[int, int]) -> None:
+        """Initialize the remaining skip count for this worker slot."""
         self.worker_slot = int(worker_slot)
         normalized_counts: dict[int, int] = {}
         for slot, count in skip_counts.items():
@@ -38,12 +42,14 @@ class SkipByWorker(Assembler[Any, Any]):
         self.remaining = normalized_counts.get(self.worker_slot, 0)
 
     def push(self, sample: Any) -> Iterable[Any]:
+        """Drop samples until this worker's skip budget reaches zero."""
         if self.remaining > 0:
             self.remaining -= 1
             return []
         return [sample]
 
     def finish(self, *, drop_last: bool = False) -> Iterable[Any]:
+        """Emit nothing at stream end because no samples are buffered."""
         del drop_last
         return []
 

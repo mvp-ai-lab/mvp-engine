@@ -47,6 +47,7 @@ class OpenbeeEngine(Engine):
     metric_accumulator: DistributedMetricAccumulator
 
     def __init__(self, config):
+        """Initialize OpenBee-local distributed state and metric reducers."""
         super().__init__(config)
         self.dp_world_size = get_data_parallel_world_size(self.device_mesh)
         disable_progress_bar()
@@ -57,14 +58,15 @@ class OpenbeeEngine(Engine):
         self.metric_accumulator.register("model_flops", accumulate="sum", reduce="none")
 
     def prepare_dataloader(self, workflow: str = "train"):
-        """Build the train-only dataloader over preprocessed multimodal samples.
+        """Build the train dataloader over preprocessed multimodal samples.
 
         Args:
             workflow: Workflow name passed by the shared engine. Only ``train``
                 is supported by this recipe.
 
         Returns:
-            A ``TorchLoader`` pipeline that yields padded multimodal batches.
+            A ``TorchLoader`` pipeline that yields padded multimodal batches,
+            or ``None`` for unsupported non-training workflows.
         """
         if workflow != "train":
             logger.warning(f"OpenBee engine does not support workflow '{workflow}'.")
@@ -110,7 +112,7 @@ class OpenbeeEngine(Engine):
         )
 
     def prepare_model(self) -> torch.nn.Module:
-        """Build the recipe model and wrap it for distributed training.
+        """Build, patch, compile, and parallelize the recipe model.
 
         Args:
             None.
@@ -152,7 +154,7 @@ class OpenbeeEngine(Engine):
         return parallelized_model
 
     def prepare_optimizer(self) -> torch.optim.Optimizer:
-        """Construct AdamW over the subset of trainable model parameters.
+        """Construct AdamW and initialize the per-token loss guard.
 
         Args:
             None.
@@ -194,7 +196,7 @@ class OpenbeeEngine(Engine):
         )
 
     def before_train(self) -> None:
-        """Initialize training and apply OpenBee post-pack fast resume when needed."""
+        """Initialize training, then apply post-pack fast resume when needed."""
         super().before_train()
         self.timer.set_progress(self.step, self.total_steps)
 
@@ -207,7 +209,7 @@ class OpenbeeEngine(Engine):
             self.train_loader = self._build_fast_resume_train_loader(resume_skip_micro_batches)
 
     def _build_fast_resume_train_loader(self, resume_skip_micro_batches: int) -> Any:
-        """Build a train loader advanced to the post-pack resume boundary."""
+        """Build a train loader advanced to the saved post-pack micro-batch boundary."""
         if self.processor is None:
             self.processor = build_qwen3_vl_processor(self.config.model)
 
@@ -332,13 +334,11 @@ class OpenbeeEngine(Engine):
         )
 
     def train_pre_step(self, data: ModelInputs) -> ModelInputs:
-        """Move the collated batch to the local device and normalize keys.
+        """Prepare one micro-batch for forward.
 
-        Args:
-            data: Raw batch emitted by the dataloader.
-
-        Returns:
-            A normalized batch dictionary ready for the model forward pass.
+        This counts total and shifted-label supervised tokens before moving
+        tensors to the local device, prepares packed attention inputs, and casts
+        visual tensors to the active mixed-precision dtype.
         """
         data["total_token_num"] = int(data["attention_mask"].sum().item())
         shifted_labels = F.pad(data["labels"], (0, 1), value=-100)[..., 1:]
@@ -365,13 +365,11 @@ class OpenbeeEngine(Engine):
         return batch
 
     def train_one_step(self, data: ModelInputs) -> dict[str, Any]:
-        """Run one forward pass and collect training metrics.
+        """Run one forward pass and collect micro-batch training metrics.
 
-        Args:
-            data: Normalized multimodal batch on the local device.
-
-        Returns:
-            A dictionary containing the loss tensor and logging scalars.
+        The patched model returns unreduced per-token CE loss. Token counts and
+        local FLOPs are carried into ``train_after_step`` for accumulation-window
+        reduction and logging.
         """
         with torch.autocast(
             device_type=self.device_type,
@@ -402,7 +400,14 @@ class OpenbeeEngine(Engine):
         }
 
     def train_after_step(self, outputs: dict[str, Any]) -> dict[str, Any]:
-        """Run the optimizer step and include recipe-local MFU metrics in logs."""
+        """Backward one micro-batch and step/log at accumulation boundaries.
+
+        Per-token loss is backpropagated immediately with a fixed provisional
+        divisor so data loading can overlap with GPU work. At the sync micro
+        step, accumulated gradients are rescaled by the reduced global supervised
+        token count before clipping and optimizer stepping. Loss-guarded spike
+        micro-batches contribute zero loss to both gradients and logs.
+        """
         assert "loss" in outputs, "The model output must contain 'loss' key."
         assert "logs" in outputs, "The model output must contain 'logs' key."
 

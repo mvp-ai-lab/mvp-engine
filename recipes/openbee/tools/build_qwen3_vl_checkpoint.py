@@ -30,6 +30,7 @@ LM_HEAD_PREFIX = "lm_head."
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse checkpoint-build CLI arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--vl-model-name-or-path", default=DEFAULT_VL_MODEL)
     parser.add_argument("--llm-model-name-or-path", default=DEFAULT_LLM_MODEL)
@@ -45,6 +46,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def resolve_model_path(name_or_path: str, cache_dir: Path | None, allow_patterns: list[str] | None = None) -> Path:
+    """Resolve a local model path or download a Hugging Face snapshot."""
     path = Path(name_or_path)
     if path.exists():
         return path.resolve()
@@ -58,6 +60,7 @@ def resolve_model_path(name_or_path: str, cache_dir: Path | None, allow_patterns
 
 
 def copy_repo_tree(source_dir: Path, target_dir: Path) -> None:
+    """Copy non-ignored repository files into the output checkpoint directory."""
     for source_path in sorted(source_dir.rglob("*")):
         relative_path = source_path.relative_to(source_dir)
         if any(part in IGNORE_COPY_NAMES for part in relative_path.parts):
@@ -73,6 +76,7 @@ def copy_repo_tree(source_dir: Path, target_dir: Path) -> None:
 
 
 def load_weight_map(model_dir: Path) -> tuple[dict[str, str], str | None]:
+    """Load or synthesize a safetensors weight map for one checkpoint directory."""
     index_files = sorted(model_dir.glob("*.safetensors.index.json"))
     if index_files:
         if len(index_files) != 1:
@@ -95,6 +99,7 @@ def load_weight_map(model_dir: Path) -> tuple[dict[str, str], str | None]:
 
 
 def invert_weight_map(weight_map: dict[str, str]) -> dict[str, list[str]]:
+    """Group tensor names by safetensors shard file."""
     keys_by_file: dict[str, list[str]] = defaultdict(list)
     for tensor_name, file_name in weight_map.items():
         keys_by_file[file_name].append(tensor_name)
@@ -105,6 +110,7 @@ def invert_weight_map(weight_map: dict[str, str]) -> dict[str, list[str]]:
 
 
 def classify_modified_key(tensor_name: str) -> str | None:
+    """Classify checkpoint tensors that are rewritten by this build script."""
     if tensor_name.startswith(LANGUAGE_MODEL_PREFIX):
         return "language_model"
     if tensor_name.startswith(LM_HEAD_PREFIX):
@@ -115,6 +121,7 @@ def classify_modified_key(tensor_name: str) -> str | None:
 
 
 def get_base_tensor_name(vl_tensor_name: str) -> str:
+    """Map a Qwen3-VL tensor name to the source Qwen3-Base tensor name."""
     if vl_tensor_name.startswith(LANGUAGE_MODEL_PREFIX):
         suffix = vl_tensor_name.removeprefix(LANGUAGE_MODEL_PREFIX)
         return f"{LANGUAGE_MODEL_SOURCE_PREFIX}{suffix}"
@@ -126,6 +133,7 @@ def get_base_tensor_name(vl_tensor_name: str) -> str:
 
 
 def load_tensor_metadata(file_path: Path) -> dict[str, str]:
+    """Read safetensors metadata from one shard."""
     with safe_open(file_path, framework="pt", device="cpu") as handle:
         return handle.metadata() or {}
 
@@ -136,6 +144,7 @@ def build_random_merger_tensor(
     initializer_range: float,
     generator: torch.Generator,
 ) -> torch.Tensor:
+    """Create one freshly initialized merger tensor matching a reference tensor."""
     if tensor_name.endswith(".norm.weight"):
         return torch.ones_like(reference_tensor)
     if tensor_name.endswith(".bias") or tensor_name.endswith(".norm.bias"):
@@ -155,6 +164,7 @@ def rewrite_output_shards(
     llm_weight_map: dict[str, str],
     seed: int,
 ) -> dict[str, Any]:
+    """Rewrite VL checkpoint shards with base-LLM tensors and new merger weights."""
     vl_keys_by_file = invert_weight_map(vl_weight_map)
     llm_initializer_range = 0.02
     config_path = output_dir / "config.json"
@@ -243,6 +253,7 @@ def write_build_metadata(
     seed: int,
     stats: dict[str, Any],
 ) -> None:
+    """Write a JSON metadata record describing the generated checkpoint."""
     metadata = {
         "vl_model_name_or_path": vl_model_name_or_path,
         "llm_model_name_or_path": llm_model_name_or_path,
@@ -263,6 +274,7 @@ def write_build_metadata(
 
 
 def main() -> None:
+    """CLI entry point for checkpoint construction."""
     args = parse_args()
     output_dir = args.output_dir.resolve()
 

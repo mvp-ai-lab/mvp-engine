@@ -19,6 +19,7 @@ ROLE_MAP = {
 
 
 def _message_role(message: dict[str, Any]) -> str | None:
+    """Return the canonical role for a raw message, when recognized."""
     role = message.get("role")
     if role is None:
         role = message.get("from")
@@ -28,12 +29,14 @@ def _message_role(message: dict[str, Any]) -> str | None:
 
 
 def _message_content(message: dict[str, Any]) -> Any:
+    """Return the raw content payload from either supported message schema."""
     if "content" in message:
         return message.get("content")
     return message.get("value")
 
 
 def _content_length(content: Any) -> int:
+    """Estimate text length for string or multimodal block content."""
     if isinstance(content, str):
         return len(content)
     if isinstance(content, list):
@@ -50,6 +53,7 @@ def _content_length(content: Any) -> int:
 
 
 def _count_image_placeholders(content: Any) -> int:
+    """Count image placeholders represented by text markers or image blocks."""
     if isinstance(content, str):
         return content.count(IMAGE_PLACEHOLDER)
     if isinstance(content, list):
@@ -67,6 +71,7 @@ def _count_image_placeholders(content: Any) -> int:
 
 
 def _image_size_list(sample: dict[str, Any], key: str, image_count: int) -> list[Any] | None:
+    """Normalize one image-size metadata field to a list."""
     value = sample.get(key)
     if value is None:
         return None
@@ -89,6 +94,7 @@ class LongConversationSplitAssembler(Assembler[dict[str, Any], dict[str, Any]]):
         max_chars: int | None = None,
         overlap_turns: int = 0,
     ) -> None:
+        """Configure turn-count, character-count, and overlap split limits."""
         super().__init__()
         if max_turns is not None and max_turns <= 0:
             raise ValueError(f"max_turns must be positive when set, got {max_turns}.")
@@ -104,6 +110,7 @@ class LongConversationSplitAssembler(Assembler[dict[str, Any], dict[str, Any]]):
         self.overlap_turns = overlap_turns
 
     def push(self, sample: dict[str, Any]) -> Iterable[dict[str, Any]]:
+        """Split one raw conversation sample into smaller windows when needed."""
         if self.max_turns is None and self.max_chars is None:
             return [sample]
 
@@ -141,15 +148,18 @@ class LongConversationSplitAssembler(Assembler[dict[str, Any], dict[str, Any]]):
         ]
 
     def finish(self, *, drop_last: bool = False) -> Iterable[dict[str, Any]]:
+        """Emit nothing at stream end because this splitter is stateless."""
         del drop_last
         return []
 
     def _needs_split(self, turn_count: int, char_count: int) -> bool:
+        """Return whether the sample exceeds configured split limits."""
         if self.max_turns is not None and turn_count > self.max_turns:
             return True
         return self.max_chars is not None and char_count > self.max_chars
 
     def _split_turns(self, messages: list[dict[str, Any]]) -> tuple[list[int], list[list[int]]]:
+        """Separate leading system messages from user-started conversation turns."""
         system_indices: list[int] = []
         start_index = 0
         while start_index < len(messages) and _message_role(messages[start_index]) == "system":
@@ -176,6 +186,7 @@ class LongConversationSplitAssembler(Assembler[dict[str, Any], dict[str, Any]]):
         system_indices: list[int],
         turns: list[list[int]],
     ) -> list[tuple[int, int, list[int]]]:
+        """Build overlapping turn windows that include leading system messages."""
         windows: list[tuple[int, int, list[int]]] = []
         system_chars = self._message_indices_length(messages, system_indices)
         turn_chars = [self._message_indices_length(messages, turn) for turn in turns]
@@ -216,9 +227,11 @@ class LongConversationSplitAssembler(Assembler[dict[str, Any], dict[str, Any]]):
         return windows
 
     def _message_indices_length(self, messages: list[dict[str, Any]], indices: Iterable[int]) -> int:
+        """Estimate total content length for selected message indices."""
         return sum(_content_length(_message_content(messages[index])) for index in indices)
 
     def _image_indices_by_message(self, messages: list[dict[str, Any]]) -> list[list[int]]:
+        """Map each message to the image indices consumed by its placeholders."""
         next_image_index = 0
         image_indices_by_message: list[list[int]] = []
         for message in messages:
@@ -241,6 +254,7 @@ class LongConversationSplitAssembler(Assembler[dict[str, Any], dict[str, Any]]):
         turn_start: int,
         turn_end: int,
     ) -> dict[str, Any]:
+        """Create one split sample with matching messages, images, and metadata."""
         window = dict(sample)
         window[message_key] = [messages[index] for index in message_indices]
 

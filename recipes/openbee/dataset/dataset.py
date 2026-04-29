@@ -110,8 +110,6 @@ def build_dataset(
             )
         )
     elif skip_mode != "off":
-        pass
-    else:
         raise ValueError(f"Invalid skip_mode: {skip_mode}. Must be one of 'off', 'pre_calculate', or 'perform'.")
 
     # 7. Resolve references after packing so invalid/short samples avoid image IO.

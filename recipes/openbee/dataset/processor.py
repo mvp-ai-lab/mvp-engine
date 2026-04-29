@@ -11,9 +11,11 @@ class ProcessorFingerprint:
     """Pickle-safe callable that returns a stable processor fingerprint."""
 
     def __init__(self, value: str):
+        """Store the precomputed fingerprint string."""
         self.value = value
 
     def __call__(self) -> str:
+        """Return the stored fingerprint."""
         return self.value
 
 

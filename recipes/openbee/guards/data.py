@@ -29,6 +29,8 @@ def build_empty_sample():
 
 @dataclass(frozen=True, slots=True)
 class CheckResult:
+    """Result of one data-guard validation pass."""
+
     is_valid: bool
     reason: str | None = None
 
@@ -63,6 +65,7 @@ class DataGuard(Assembler[Any, Any]):
         check_image_sizes: bool = False,
         verbose: bool = True,
     ):
+        """Configure which OpenBee sample checks are active."""
         super().__init__()
         self.check_basic_formats = check_basic_formats
         self.check_input_ids = check_input_ids
@@ -70,6 +73,7 @@ class DataGuard(Assembler[Any, Any]):
         self.verbose = verbose
 
     def _print_skip(self, result: CheckResult, sample: Any) -> None:
+        """Log a compact description for one skipped sample."""
         if not self.verbose or result.reason is None:
             return
 
@@ -110,6 +114,7 @@ class DataGuard(Assembler[Any, Any]):
         simple_info(f"Data guard skip: reason={result.reason} sample={sample_info}", level="warning")
 
     def check(self, sample: Any) -> CheckResult:
+        """Validate one sample against the enabled checks."""
         if not isinstance(sample, dict):
             return CheckResult(is_valid=False, reason="guard.not_dict")
 
@@ -218,6 +223,7 @@ def build_dataguard(
     Args:
         assemble_context: Runtime assembly context supplied by ``mvp_dataset``.
             It is currently unused because this guard has no worker-local setup.
+        check_basic_formats: Whether to validate source message/image fields.
         check_input_ids: Whether to drop samples with empty ``input_ids``.
         check_image_sizes: Whether to validate ``image_size`` metadata against
             the sample's image list.
@@ -231,5 +237,5 @@ def build_dataguard(
         check_basic_formats=check_basic_formats,
         check_input_ids=check_input_ids,
         check_image_sizes=check_image_sizes,
-        record=record,
+        verbose=record,
     )

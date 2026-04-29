@@ -82,6 +82,7 @@ class TarShardWriter:
     """Write image payloads into sequential tar shards."""
 
     def __init__(self, output_dir: Path, *, prefix: str, samples_per_shard: int) -> None:
+        """Initialize shard naming and rotation state."""
         self.output_dir = output_dir
         self.prefix = prefix
         self.samples_per_shard = samples_per_shard
