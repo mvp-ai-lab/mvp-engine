@@ -12,6 +12,7 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 from mvp_dataset import TorchLoader
+from transformers import ProcessorMixin
 from transformers.optimization import get_scheduler
 from transformers.utils.logging import disable_progress_bar
 
@@ -32,6 +33,7 @@ from ..model import build_qwen3_vl_model
 from ..model.packing import apply_packed_fa2_patch, prepare_packed_model_inputs
 from ..utils.log.mfu import build_mfu_log
 from ..utils.metrics import MetricAccumulator
+from ..utils.misc import infer_total_steps, resolve_batching_config
 
 
 @ENGINE_REGISTRY.register()
@@ -41,7 +43,9 @@ class OpenbeeEngine(Engine):
     ConfigClass = OpenbeeConfig
     config: OpenbeeConfig
 
-    processor: Any | None = None
+    processor: ProcessorMixin | None = None
+    loss_guard: LossGuard
+    metric_accumulator: MetricAccumulator
 
     def __init__(self, config):
         super().__init__(config)
@@ -53,62 +57,6 @@ class OpenbeeEngine(Engine):
         self.metric_accumulator.register("local_token_count", "last")
         self.metric_accumulator.register("local_loss_sum", "sum")
         self.metric_accumulator.register("local_model_flops", "sum")
-        self.loss_guard = LossGuard(
-            spike_multiplier=self.config.optim.loss_spike_skip_multiplier,
-            window_size=int(self.config.optim.loss_spike_skip_window_size),
-            min_history=int(self.config.optim.loss_spike_skip_min_history),
-        )
-
-    def _resolve_batching_config(self) -> None:
-        """Resolve OpenBee global batch size into micro batch size or accumulation."""
-
-        global_batch_size = self.config.optim.global_batch_size
-        gradient_accumulation_steps = int(self.config.optim.gradient_accumulation_steps)
-        micro_batch_size = int(self.config.data.batch_size)
-
-        if global_batch_size is None:
-            if gradient_accumulation_steps == -1:
-                raise ValueError("`optim.gradient_accumulation_steps=-1` requires `optim.global_batch_size`.")
-            if micro_batch_size == -1:
-                raise ValueError("`data.batch_size=-1` requires `optim.global_batch_size`.")
-            return
-
-        if micro_batch_size == -1 and gradient_accumulation_steps == -1:
-            raise ValueError(
-                "`optim.global_batch_size` cannot infer both `data.batch_size` and "
-                "`optim.gradient_accumulation_steps` at the same time."
-            )
-
-        dp_world_size = self.dp_world_size
-
-        if micro_batch_size == -1:
-            divisor = dp_world_size * gradient_accumulation_steps
-            if divisor <= 0 or global_batch_size % divisor != 0:
-                raise ValueError(
-                    "`data.batch_size` cannot be inferred exactly: "
-                    "`optim.global_batch_size` must be divisible by "
-                    "`data_parallel_world_size * optim.gradient_accumulation_steps`."
-                )
-            self.config.data.batch_size = global_batch_size // divisor
-            micro_batch_size = int(self.config.data.batch_size)
-        elif gradient_accumulation_steps == -1:
-            divisor = dp_world_size * micro_batch_size
-            if divisor <= 0 or global_batch_size % divisor != 0:
-                raise ValueError(
-                    "`optim.gradient_accumulation_steps` cannot be inferred exactly: "
-                    "`optim.global_batch_size` must be divisible by "
-                    "`data_parallel_world_size * data.batch_size`."
-                )
-            self.config.optim.gradient_accumulation_steps = global_batch_size // divisor
-            gradient_accumulation_steps = int(self.config.optim.gradient_accumulation_steps)
-
-        effective_global_batch_size = dp_world_size * micro_batch_size * gradient_accumulation_steps
-        if effective_global_batch_size != global_batch_size:
-            raise ValueError(
-                "`optim.global_batch_size` does not match the configured batching: "
-                f"expected {effective_global_batch_size} from "
-                "`data_parallel_world_size * data.batch_size * optim.gradient_accumulation_steps`."
-            )
 
     def prepare_dataloader(self, workflow: str = "train"):
         """Build the train-only dataloader over preprocessed multimodal samples.
@@ -124,7 +72,7 @@ class OpenbeeEngine(Engine):
             logger.warning(f"OpenBee engine does not support workflow '{workflow}'.")
             return
 
-        self._resolve_batching_config()
+        resolve_batching_config(self.config, data_parallel_world_size=self.dp_world_size)
 
         # Step 1: build the shared processor once so both the temporary counting
         # loader and the real training loader use the exact same tokenizer setup.
@@ -134,78 +82,11 @@ class OpenbeeEngine(Engine):
         # Step 2: when total_steps=-1, run one finite lightweight data pass to
         # count packed samples and infer one-epoch optimization steps.
         if int(self.config.loop.total_steps) == -1:
-            temp_config = self.config.model_copy(deep=True)
-
-            # Step 2.1: build a temporary dataset/loader
-            temp_collate_fn = OpenbeeCollator(
-                pad_token_id=int(self.processor.tokenizer.pad_token_id),
+            self.config.loop.total_steps = infer_total_steps(
+                self.config,
                 processor=self.processor,
-            )
-            temp_dataset = build_dataset(
-                temp_config,
-                processor=self.processor,
-                resample=False,
-                resolve_refs=False,
-            )
-            temp_loader = TorchLoader(
-                temp_dataset,
-                num_workers=int(temp_config.data.num_workers),
-                pin_memory=self.device.type in ["cuda", "npu"],
-                persistent_workers=False,
-                drop_last=False,
-                multiprocessing_context="spawn",
-            ).batch(
-                batch_size=int(temp_config.data.batch_size),
-                drop_last=True,
-                collate_fn=temp_collate_fn,
-            )
-
-            # Step 2.3: count how many packed samples this rank receives from
-            # the temporary loader. This pass mirrors the real train loader's
-            # batch/drop-last behavior, but avoids resolving image refs.
-            temp_iterator = iter(temp_loader)
-            local_packed_sample_count = 0
-            local_batch_count = 0
-            log_interval = int(temp_config.data.step_inference_log_interval)
-
-            for batch in temp_iterator:
-                local_packed_sample_count += int(batch["input_ids"].shape[0])
-                local_batch_count += 1
-                if local_batch_count % log_interval == 0:
-                    logger.info(f"Step inference progress: {local_batch_count} local batches...")
-
-            # Step 2.4: reduce all local counts to get the real global packed
-            # sample count across all ranks.
-            total_sample_count = torch.tensor(local_packed_sample_count, device=self.device, dtype=torch.long)
-            if dist.is_available() and dist.is_initialized():
-                dist.all_reduce(total_sample_count, op=dist.ReduceOp.SUM)
-
-            total_sample_count_value = int(total_sample_count.item())
-            if total_sample_count_value <= 0:
-                raise RuntimeError("OpenBee step inference found no packed training samples.")
-
-            samples_per_optimization_step = (
-                self.dp_world_size
-                * int(self.config.data.batch_size)
-                * int(self.config.optim.gradient_accumulation_steps)
-            )
-            if samples_per_optimization_step <= 0:
-                raise RuntimeError(
-                    "OpenBee step inference cannot infer steps with non-positive samples per optimization step."
-                )
-            inferred_total_steps = (
-                total_sample_count_value + samples_per_optimization_step - 1
-            ) // samples_per_optimization_step
-            if inferred_total_steps <= 0:
-                raise RuntimeError("Step inference found fewer packed samples than one optimization step requires.")
-
-            self.config.loop.total_steps = inferred_total_steps
-
-            logger.info(
-                f"Step inference: packed_samples={total_sample_count_value}, "
-                f"dp_world_size={self.dp_world_size}, "
-                f"samples_per_optimization_step={samples_per_optimization_step}, "
-                f"inferred_total_steps={inferred_total_steps}"
+                device=self.device,
+                data_parallel_world_size=self.dp_world_size,
             )
 
         # Step 3: build the real training/eval dataset with the full preprocess.
@@ -285,6 +166,12 @@ class OpenbeeEngine(Engine):
         Returns:
             The optimizer used by this recipe.
         """
+        self.loss_guard = LossGuard(
+            spike_multiplier=self.config.optim.loss_spike_skip_multiplier,
+            window_size=int(self.config.optim.loss_spike_skip_window_size),
+            min_history=int(self.config.optim.loss_spike_skip_min_history),
+        )
+
         trainable_parameters = [parameter for parameter in self.model.parameters() if parameter.requires_grad]
         if not trainable_parameters:
             raise ValueError("No trainable parameters found for the OpenBee recipe.")
@@ -311,55 +198,6 @@ class OpenbeeEngine(Engine):
             num_warmup_steps=warmup_steps,
             num_training_steps=self.total_steps,
         )
-
-    def _skip_resume_micro_batches(self, train_iterator: Any, resume_skip_micro_batches: int) -> Any:
-        """Advance the training iterator to the checkpoint's saved micro-batch position."""
-        torch_rng_state = torch.get_rng_state()
-        python_rng_state = random.getstate()
-        numpy_rng_state = np.random.get_state()
-        skip_start_time = time.perf_counter()
-        log_interval = 50
-        if is_main_process():
-            logger.info(
-                "Resume data skip: "
-                f"step={self.step}, "
-                f"accumulate_step={self._accumulate_step}, "
-                f"micro_batches={resume_skip_micro_batches}"
-            )
-
-        try:
-            for skipped_micro_batches in range(resume_skip_micro_batches):
-                try:
-                    data = next(train_iterator)
-                except StopIteration:
-                    train_iterator = iter(self.train_loader)
-                    try:
-                        data = next(train_iterator)
-                    except StopIteration as exc:
-                        raise RuntimeError(
-                            "OpenBee train loader did not yield any batches during resume skip."
-                        ) from exc
-                del data
-                current_skip_count = skipped_micro_batches + 1
-                if dist.is_available() and dist.is_initialized() and current_skip_count % log_interval == 0:
-                    dist.barrier()
-                if is_main_process() and current_skip_count % log_interval == 0:
-                    logger.info(
-                        f"Resume data skip progress: {current_skip_count}/{resume_skip_micro_batches} micro-batches"
-                    )
-        finally:
-            torch.set_rng_state(torch_rng_state)
-            random.setstate(python_rng_state)
-            np.random.set_state(numpy_rng_state)
-
-        if dist.is_available() and dist.is_initialized():
-            dist.barrier()
-
-        if is_main_process():
-            elapsed = time.perf_counter() - skip_start_time
-            logger.info(f"Resume data skip finished: micro_batches={resume_skip_micro_batches}, elapsed={elapsed:.1f}s")
-
-        return train_iterator
 
     def run_iter_train(self) -> None:
         """Run iteration-based training with window-prefetched token normalization."""

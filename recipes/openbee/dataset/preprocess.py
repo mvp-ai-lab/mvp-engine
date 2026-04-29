@@ -11,7 +11,6 @@ from PIL import Image
 from torchvision.transforms import InterpolationMode
 
 from ..guards.data import build_empty_sample
-from ..utils.data_logging import record_skip
 
 IMAGE_PLACEHOLDER = "<image>"
 ROLE_MAP = {
@@ -130,7 +129,7 @@ def convert_images_to_pixel_values(
         sample["image_grid_thw"] = image_inputs["image_grid_thw"]
         return sample
     except Exception as exc:
-        record_skip("convert_images_to_pixel_values", sample, detail=str(exc))
+        print(exc)
         return build_empty_sample()
 
 
@@ -668,5 +667,5 @@ def process_sample(
         return sample
 
     except Exception as exc:
-        record_skip("process_sample", sample, detail=str(exc))
+        print(exc)
         return build_empty_sample()
