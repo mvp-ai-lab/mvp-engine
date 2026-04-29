@@ -20,7 +20,6 @@ from mvp_engine.distributed.parallelize import parallelize_model
 from mvp_engine.distributed.utils import get_data_parallel_world_size, is_main_process
 from mvp_engine.engine import ENGINE_REGISTRY, Engine
 from mvp_engine.utils.log import logger
-from mvp_engine.utils.misc import calculate_model_size
 from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
 from ..configs.schema import OpenbeeConfig
@@ -28,11 +27,11 @@ from ..dataset.collator import OpenbeeCollator
 from ..dataset.dataset import build_dataset
 from ..dataset.processor import build_qwen3_vl_processor
 from ..dataset.types import ModelInputs
-from ..guards.loss import LossGuard
+from ..guards.loss import PerTokenLossGuard
 from ..model import build_qwen3_vl_model
 from ..model.packing import apply_packed_fa2_patch, prepare_packed_model_inputs
 from ..utils.log.mfu import build_mfu_log
-from ..utils.metrics import MetricAccumulator
+from ..utils.metrics import DistributedMetricAccumulator
 from ..utils.misc import infer_total_steps, resolve_batching_config
 
 
@@ -44,19 +43,18 @@ class OpenbeeEngine(Engine):
     config: OpenbeeConfig
 
     processor: ProcessorMixin | None = None
-    loss_guard: LossGuard
-    metric_accumulator: MetricAccumulator
+    loss_guard: PerTokenLossGuard
+    metric_accumulator: DistributedMetricAccumulator
 
     def __init__(self, config):
         super().__init__(config)
         self.dp_world_size = get_data_parallel_world_size(self.device_mesh)
         disable_progress_bar()
-        self.metric_accumulator = MetricAccumulator()
-        self.metric_accumulator.register("global_total_token_count", "last")
-        self.metric_accumulator.register("global_token_count", "last")
-        self.metric_accumulator.register("local_token_count", "last")
-        self.metric_accumulator.register("local_loss_sum", "sum")
-        self.metric_accumulator.register("local_model_flops", "sum")
+        self.metric_accumulator = DistributedMetricAccumulator(device=self.device)
+        self.metric_accumulator.register("total_token_count", accumulate="sum", reduce="sum")
+        self.metric_accumulator.register("loss_token_count", accumulate="sum", reduce="sum")
+        self.metric_accumulator.register("loss_sum", accumulate="sum", reduce="sum")
+        self.metric_accumulator.register("model_flops", accumulate="sum", reduce="none")
 
     def prepare_dataloader(self, workflow: str = "train"):
         """Build the train-only dataloader over preprocessed multimodal samples.
@@ -120,6 +118,7 @@ class OpenbeeEngine(Engine):
         Returns:
             The distributed-ready Qwen3-VL model.
         """
+        # FIXME: canbe removed once the patch system PR is merged
         using_fsdp2 = self.device_mesh["shard"].size() * self.device_mesh["tensor"].size() > 1
         model_config = self.config.model.model_copy(deep=True)
         if using_fsdp2 and bool(model_config.gradient_checkpointing.enabled):
@@ -150,11 +149,6 @@ class OpenbeeEngine(Engine):
             backend_kwargs=self.config.parallel.backend_kwargs.model_dump(),
         )
 
-        if is_main_process():
-            model_size, trainable_size = calculate_model_size(parallelized_model)
-            logger.info(f" - Model size: {model_size / 1e9:.4f} B")
-            logger.info(f" - Trainable model size: {trainable_size / 1e9:.4f} B")
-
         return parallelized_model
 
     def prepare_optimizer(self) -> torch.optim.Optimizer:
@@ -166,7 +160,7 @@ class OpenbeeEngine(Engine):
         Returns:
             The optimizer used by this recipe.
         """
-        self.loss_guard = LossGuard(
+        self.loss_guard = PerTokenLossGuard(
             spike_multiplier=self.config.optim.loss_spike_skip_multiplier,
             window_size=int(self.config.optim.loss_spike_skip_window_size),
             min_history=int(self.config.optim.loss_spike_skip_min_history),
@@ -199,199 +193,143 @@ class OpenbeeEngine(Engine):
             num_training_steps=self.total_steps,
         )
 
-    def run_iter_train(self) -> None:
-        """Run iteration-based training with window-prefetched token normalization."""
+    def before_train(self) -> None:
+        """Initialize training and apply OpenBee post-pack fast resume when needed."""
+        super().before_train()
+        self.timer.set_progress(self.step, self.total_steps)
 
-        def _count_total_tokens(attention_mask: torch.Tensor) -> int:
-            """Count all non-padding tokens in one collated micro-batch."""
-            return int(attention_mask.sum().item())
-
-        def _count_valid_loss_tokens(labels: torch.Tensor, *, ignore_index: int = -100) -> int:
-            """Count the valid shifted labels used by causal-LM cross entropy."""
-            shifted_labels = F.pad(labels, (0, 1), value=ignore_index)[..., 1:]
-            return int((shifted_labels != ignore_index).sum().item())
+        if self.config.resume is None or self.step >= self.total_steps:
+            return
 
         gradient_accumulation_steps = int(self.config.optim.gradient_accumulation_steps)
-
-        if hasattr(self, "timer"):
-            self.timer.set_progress(self.step, self.total_steps)
-
-        resume_skip_micro_batches = 0
-        if self.config.resume is not None and self.step < self.total_steps:
-            resume_skip_micro_batches = self.step * gradient_accumulation_steps + int(self._accumulate_step)
-
-        train_iterator: Any
+        resume_skip_micro_batches = self.step * gradient_accumulation_steps + int(self._accumulate_step)
         if resume_skip_micro_batches > 0:
-            if self.processor is None:
-                self.processor = build_qwen3_vl_processor(self.config.model)
+            self.train_loader = self._build_fast_resume_train_loader(resume_skip_micro_batches)
 
-            torch_rng_state = torch.get_rng_state()
-            python_rng_state = random.getstate()
-            numpy_rng_state = np.random.get_state()
-            skip_start_time = time.perf_counter()
-            skip_counts: dict[int, int] = {}
-            total_skip_markers = 0
-            fast_resume_error: Exception | None = None
+    def _build_fast_resume_train_loader(self, resume_skip_micro_batches: int) -> Any:
+        """Build a train loader advanced to the post-pack resume boundary."""
+        if self.processor is None:
+            self.processor = build_qwen3_vl_processor(self.config.model)
 
-            try:
-                if is_main_process():
-                    logger.info(
-                        "OpenBee fast resume post-pack skip: "
-                        f"step={self.step}, "
-                        f"accumulate_step={self._accumulate_step}, "
-                        f"micro_batches={resume_skip_micro_batches}"
-                    )
+        torch_rng_state = torch.get_rng_state()
+        python_rng_state = random.getstate()
+        numpy_rng_state = np.random.get_state()
+        skip_start_time = time.perf_counter()
+        skip_counts: dict[int, int] = {}
+        total_skip_markers = 0
+        fast_resume_error: Exception | None = None
 
-                pre_skip_dataset = build_dataset(
-                    self.config,
-                    processor=self.processor,
-                    resolve_refs=False,
-                    skip_mode="pre_calculate",
-                )
-                pre_skip_loader = TorchLoader(
-                    pre_skip_dataset,
-                    num_workers=int(self.config.data.num_workers),
-                    pin_memory=self.device.type in ["cuda", "npu"],
-                    persistent_workers=False,
-                    multiprocessing_context="spawn",
-                ).batch(
-                    batch_size=int(self.config.data.batch_size),
-                    drop_last=True,
-                )
-                pre_skip_iterator = iter(pre_skip_loader)
-                log_interval = 50
-
-                for skipped_micro_batches in range(resume_skip_micro_batches):
-                    try:
-                        marker_batch = next(pre_skip_iterator)
-                    except StopIteration:
-                        pre_skip_iterator = iter(pre_skip_loader)
-                        try:
-                            marker_batch = next(pre_skip_iterator)
-                        except StopIteration as exc:
-                            raise RuntimeError("OpenBee fast resume marker loader did not yield any batches.") from exc
-
-                    if not isinstance(marker_batch, list) or not marker_batch:
-                        raise RuntimeError("OpenBee fast resume marker loader yielded an invalid marker batch.")
-
-                    for marker in marker_batch:
-                        worker_slot = int(marker["worker_slot"])
-                        skip_counts[worker_slot] = skip_counts.get(worker_slot, 0) + 1
-                        total_skip_markers += 1
-
-                    current_skip_count = skipped_micro_batches + 1
-                    if is_main_process() and current_skip_count % log_interval == 0:
-                        logger.info(
-                            "OpenBee fast resume skip progress: "
-                            f"{current_skip_count}/{resume_skip_micro_batches} micro-batches"
-                        )
-
-                expected_skip_markers = resume_skip_micro_batches * int(self.config.data.batch_size)
-                if total_skip_markers != expected_skip_markers:
-                    raise RuntimeError(
-                        "OpenBee fast resume marker count mismatch: "
-                        f"expected={expected_skip_markers}, actual={total_skip_markers}."
-                    )
-                if not skip_counts:
-                    raise RuntimeError("OpenBee fast resume produced no post-pack skip markers.")
-            except Exception as exc:
-                fast_resume_error = exc
-            finally:
-                torch.set_rng_state(torch_rng_state)
-                random.setstate(python_rng_state)
-                np.random.set_state(numpy_rng_state)
-
-            fast_resume_ok = torch.tensor(
-                0 if fast_resume_error is not None else 1,
-                device=self.device,
-                dtype=torch.long,
-            )
-            if dist.is_available() and dist.is_initialized():
-                dist.all_reduce(fast_resume_ok, op=dist.ReduceOp.MIN)
-            if int(fast_resume_ok.item()) == 0:
-                if fast_resume_error is not None:
-                    raise RuntimeError("OpenBee fast resume failed on this rank.") from fast_resume_error
-                raise RuntimeError("OpenBee fast resume failed on another rank.")
-
+        try:
             if is_main_process():
-                elapsed = time.perf_counter() - skip_start_time
                 logger.info(
-                    "OpenBee fast resume skip counts ready: "
-                    f"workers={len(skip_counts)}, "
-                    f"post_pack_outputs={total_skip_markers}, "
-                    f"elapsed={elapsed:.1f}s"
+                    "OpenBee fast resume post-pack skip: "
+                    f"step={self.step}, "
+                    f"accumulate_step={self._accumulate_step}, "
+                    f"micro_batches={resume_skip_micro_batches}"
                 )
 
-            dataset = build_dataset(
+            pre_skip_dataset = build_dataset(
                 self.config,
                 processor=self.processor,
-                skip_mode="perform",
-                skip_counts=skip_counts,
+                resolve_refs=False,
+                skip_mode="pre_calculate",
             )
-            collate_fn = OpenbeeCollator(
-                pad_token_id=int(self.processor.tokenizer.pad_token_id),
-                processor=self.processor,
-            )
-            loader = TorchLoader(
-                dataset,
+            pre_skip_loader = TorchLoader(
+                pre_skip_dataset,
                 num_workers=int(self.config.data.num_workers),
                 pin_memory=self.device.type in ["cuda", "npu"],
                 persistent_workers=False,
                 multiprocessing_context="spawn",
-            )
-            self.train_loader = loader.batch(
+            ).batch(
                 batch_size=int(self.config.data.batch_size),
                 drop_last=True,
-                collate_fn=collate_fn,
             )
+            pre_skip_iterator = iter(pre_skip_loader)
+            log_interval = 50
 
-        train_iterator = iter(self.train_loader)
-
-        while self.step < self.total_steps:
-            remaining_micro_steps = gradient_accumulation_steps - int(self._accumulate_step)
-            if remaining_micro_steps <= 0:
-                remaining_micro_steps = gradient_accumulation_steps
-
-            local_total_token_count = 0
-            local_token_count = 0
-            micro_batches: list[ModelInputs] = []
-            for _ in range(remaining_micro_steps):
+            for skipped_micro_batches in range(resume_skip_micro_batches):
                 try:
-                    data = next(train_iterator)
+                    marker_batch = next(pre_skip_iterator)
                 except StopIteration:
-                    train_iterator = iter(self.train_loader)
+                    pre_skip_iterator = iter(pre_skip_loader)
                     try:
-                        data = next(train_iterator)
+                        marker_batch = next(pre_skip_iterator)
                     except StopIteration as exc:
-                        raise RuntimeError("OpenBee train loader did not yield any batches.") from exc
-                local_total_token_count += _count_total_tokens(data["attention_mask"])
-                effective_token_num = _count_valid_loss_tokens(data["labels"])
-                data["effective_token_num"] = effective_token_num
-                local_token_count += effective_token_num
+                        raise RuntimeError("OpenBee fast resume marker loader did not yield any batches.") from exc
 
-                micro_batches.append(data)
+                if not isinstance(marker_batch, list) or not marker_batch:
+                    raise RuntimeError("OpenBee fast resume marker loader yielded an invalid marker batch.")
 
-            token_counts = torch.tensor(
-                [local_total_token_count, local_token_count],
-                device=self.device,
-                dtype=torch.long,
+                for marker in marker_batch:
+                    worker_slot = int(marker["worker_slot"])
+                    skip_counts[worker_slot] = skip_counts.get(worker_slot, 0) + 1
+                    total_skip_markers += 1
+
+                current_skip_count = skipped_micro_batches + 1
+                if is_main_process() and current_skip_count % log_interval == 0:
+                    logger.info(
+                        "OpenBee fast resume skip progress: "
+                        f"{current_skip_count}/{resume_skip_micro_batches} micro-batches"
+                    )
+
+            expected_skip_markers = resume_skip_micro_batches * int(self.config.data.batch_size)
+            if total_skip_markers != expected_skip_markers:
+                raise RuntimeError(
+                    "OpenBee fast resume marker count mismatch: "
+                    f"expected={expected_skip_markers}, actual={total_skip_markers}."
+                )
+            if not skip_counts:
+                raise RuntimeError("OpenBee fast resume produced no post-pack skip markers.")
+        except Exception as exc:
+            fast_resume_error = exc
+        finally:
+            torch.set_rng_state(torch_rng_state)
+            random.setstate(python_rng_state)
+            np.random.set_state(numpy_rng_state)
+
+        fast_resume_ok = torch.tensor(
+            0 if fast_resume_error is not None else 1,
+            device=self.device,
+            dtype=torch.long,
+        )
+        if dist.is_available() and dist.is_initialized():
+            dist.all_reduce(fast_resume_ok, op=dist.ReduceOp.MIN)
+        if int(fast_resume_ok.item()) == 0:
+            if fast_resume_error is not None:
+                raise RuntimeError("OpenBee fast resume failed on this rank.") from fast_resume_error
+            raise RuntimeError("OpenBee fast resume failed on another rank.")
+
+        if is_main_process():
+            elapsed = time.perf_counter() - skip_start_time
+            logger.info(
+                "OpenBee fast resume skip counts ready: "
+                f"workers={len(skip_counts)}, "
+                f"post_pack_outputs={total_skip_markers}, "
+                f"elapsed={elapsed:.1f}s"
             )
-            if dist.is_available() and dist.is_initialized():
-                dist.all_reduce(token_counts, op=dist.ReduceOp.SUM)
 
-            self.metric_accumulator.reset()
-            self.metric_accumulator.update(
-                global_total_token_count=int(token_counts[0].item()),
-                global_token_count=int(token_counts[1].item()),
-                local_token_count=local_token_count,
-            )
-
-            global_loss_token_count = self.metric_accumulator.get("global_token_count")
-            if global_loss_token_count is None or int(global_loss_token_count) <= 0:
-                raise ValueError("Accumulation window must contain at least one supervised token.")
-
-            for data in micro_batches:
-                self.train_after_step(self.train_one_step(self.train_pre_step(data)))
+        dataset = build_dataset(
+            self.config,
+            processor=self.processor,
+            skip_mode="perform",
+            skip_counts=skip_counts,
+        )
+        collate_fn = OpenbeeCollator(
+            pad_token_id=int(self.processor.tokenizer.pad_token_id),
+            processor=self.processor,
+        )
+        loader = TorchLoader(
+            dataset,
+            num_workers=int(self.config.data.num_workers),
+            pin_memory=self.device.type in ["cuda", "npu"],
+            persistent_workers=False,
+            multiprocessing_context="spawn",
+        )
+        return loader.batch(
+            batch_size=int(self.config.data.batch_size),
+            drop_last=True,
+            collate_fn=collate_fn,
+        )
 
     def train_pre_step(self, data: ModelInputs) -> ModelInputs:
         """Move the collated batch to the local device and normalize keys.
@@ -402,6 +340,10 @@ class OpenbeeEngine(Engine):
         Returns:
             A normalized batch dictionary ready for the model forward pass.
         """
+        data["total_token_num"] = int(data["attention_mask"].sum().item())
+        shifted_labels = F.pad(data["labels"], (0, 1), value=-100)[..., 1:]
+        data["effective_token_num"] = int((shifted_labels != -100).sum().item())
+
         batch: ModelInputs = {}
         for key, value in data.items():
             if isinstance(value, torch.Tensor):
@@ -416,18 +358,10 @@ class OpenbeeEngine(Engine):
             mask_dtype=self.dtype if self.dtype.is_floating_point else torch.float32,
         )
 
-        def _cast_visual_inputs(batch: dict[str, Any]) -> dict[str, Any]:
-            """Match LF-private by casting visual tensors to the active mixed-precision dtype."""
-            if self.dtype == torch.float32:
-                return batch
-
-            for key in ("pixel_values", "pixel_values_videos"):
-                value = batch.get(key)
-                if isinstance(value, torch.Tensor) and torch.is_floating_point(value):
-                    batch[key] = value.to(dtype=self.dtype)
-            return batch
-
-        batch = _cast_visual_inputs(batch)
+        for key in ("pixel_values", "pixel_values_videos"):
+            value = batch.get(key)
+            if isinstance(value, torch.Tensor) and torch.is_floating_point(value):
+                batch[key] = value.to(dtype=self.dtype)
         return batch
 
     def train_one_step(self, data: ModelInputs) -> dict[str, Any]:
@@ -452,6 +386,7 @@ class OpenbeeEngine(Engine):
                 "train/loss": 0.0,
             },
             "effective_tokens": data["effective_token_num"],
+            "total_tokens": data["total_token_num"],
             "model_flops": float(
                 self.unwrapped_model.calculate_model_flops(
                     batch_size=int(data["input_ids"].shape[0]),
@@ -473,50 +408,36 @@ class OpenbeeEngine(Engine):
 
         is_sync = self.accumulate_step()
 
-        # 1. Read the accumulation-window token counts prepared in run_iter_train.
-        global_total_token_count = self.metric_accumulator.get("global_total_token_count")
-        if global_total_token_count is None or int(global_total_token_count) <= 0:
-            raise ValueError("OpenBee accumulation window is missing a valid global total token count.")
-        global_loss_token_count = self.metric_accumulator.get("global_token_count")
-        if global_loss_token_count is None or int(global_loss_token_count) <= 0:
-            raise ValueError("OpenBee accumulation window is missing a valid global token count.")
-        local_token_count = self.metric_accumulator.get("local_token_count")
-        if local_token_count is None or int(local_token_count) <= 0:
-            raise ValueError("OpenBee accumulation window is missing a valid local token count.")
-
-        # 2. Record this micro-step's local loss/flops into the accumulation window.
+        # 1. Read this micro-step's local token/loss/flops.
         local_micro_loss_sum = outputs["loss"].sum()
         micro_loss_token_count = int(outputs["effective_tokens"])
-        if micro_loss_token_count < 0:
-            raise ValueError("OpenBee micro-batch has an invalid effective token count.")
-        self.metric_accumulator.update(
-            local_loss_sum=local_micro_loss_sum.detach().to(device=self.device, dtype=torch.float64),
-            local_model_flops=float(outputs["model_flops"]),
+        micro_total_token_count = int(outputs["total_tokens"])
+
+        # 2. Backward immediately so the dataloader can prepare later micro-batches
+        # while GPU work is active. The exact per-token denominator is applied to
+        # accumulated gradients once the full accumulation window token count is known.
+        backward_loss_divisor = (
+            int(self.config.data.batch_size)
+            * int(self.config.data.max_seq_len)
+            * int(self.config.optim.gradient_accumulation_steps)
         )
+        loss = local_micro_loss_sum / float(backward_loss_divisor)
 
-        # 3. Build the backward loss. DDP/FSDP averages gradients across DP ranks,
-        # so compensate by DP world size after using the global token denominator.
-        loss = local_micro_loss_sum / int(global_loss_token_count)
-        if self.dp_world_size > 1:
-            loss = loss * float(self.dp_world_size)
+        if self.loss_guard.check(
+            local_micro_loss_sum,
+            micro_loss_token_count,
+            step=int(self.step),
+            device=self.device,
+        ):
+            loss = loss * 0.0
+            local_micro_loss_sum = local_micro_loss_sum * 0.0
 
-        if self.loss_guard.spike_multiplier is not None:
-            micro_loss_stats = torch.stack(
-                (
-                    local_micro_loss_sum.detach().to(device=self.device, dtype=torch.float64),
-                    torch.tensor(float(micro_loss_token_count), device=self.device, dtype=torch.float64),
-                )
-            )
-            if dist.is_available() and dist.is_initialized():
-                dist.all_reduce(micro_loss_stats, op=dist.ReduceOp.SUM)
-
-            global_micro_token_count = int(micro_loss_stats[1].item())
-            if global_micro_token_count > 0 and self.loss_guard.check(
-                micro_loss_stats[0] / micro_loss_stats[1],
-                step=int(self.step),
-                token_count=global_micro_token_count,
-            ):
-                loss = loss * 0.0
+        self.metric_accumulator.update(
+            total_token_count=micro_total_token_count,
+            loss_token_count=micro_loss_token_count,
+            loss_sum=local_micro_loss_sum.detach(),
+            model_flops=float(outputs["model_flops"]),
+        )
 
         with accumulate_gradients(self.model, sync=is_sync):
             self.scaler.scale(loss).backward()
@@ -524,9 +445,21 @@ class OpenbeeEngine(Engine):
         if not is_sync:
             return outputs
 
-        # 4. Apply the optimizer update at the end of the accumulation window.
-        self.scaler.unscale_(self.optimizer)
+        # 3. Resolve the final global token denominator, then normalize accumulated gradients.
+        self.metric_accumulator.reduce_all()
+        global_total_token_count = int(self.metric_accumulator.total_token_count.global_value)
+        global_loss_token_count = int(self.metric_accumulator.loss_token_count.global_value)
+        if global_loss_token_count <= 0:
+            raise ValueError("Accumulation window must contain at least one supervised token.")
 
+        self.scaler.unscale_(self.optimizer)
+        gradient_scale = float(backward_loss_divisor) * float(self.dp_world_size) / float(global_loss_token_count)
+        with torch.no_grad():
+            for parameter in self.model.parameters():
+                if parameter.grad is not None:
+                    parameter.grad.mul_(gradient_scale)
+
+        # 4. Apply the optimizer update at the end of the accumulation window.
         max_grad_norm = self.config.optim.clip_grad_norm
         if max_grad_norm is not None:
             clip_grad_norm_(self.model, max_grad_norm)
@@ -541,28 +474,21 @@ class OpenbeeEngine(Engine):
         self.step += 1
         self.timer.tick()
 
-        # 5. Reduce accumulated loss and write one optimizer-step log record.
-        global_loss_sum = self.metric_accumulator.get("local_loss_sum")
-        if global_loss_sum is None:
-            raise ValueError("OpenBee accumulation window is missing a valid local loss sum.")
-        if not isinstance(global_loss_sum, torch.Tensor):
-            global_loss_sum = torch.tensor(global_loss_sum, device=self.device, dtype=torch.float64)
-        else:
-            global_loss_sum = global_loss_sum.detach().clone()
-        if dist.is_available() and dist.is_initialized():
-            dist.all_reduce(global_loss_sum, op=dist.ReduceOp.SUM)
-
-        accumulated_metrics = self.metric_accumulator.finalize()
-        other_logs = {
-            "eta": self.timer.eta_string,
-            "perf/batch_time": self.timer.batch_time,
-            "perf/toks_per_sec": int(global_loss_token_count) / self.timer.batch_time,
-            "tokens/global_total": int(global_total_token_count),
-            "tokens/global_loss": int(global_loss_token_count),
-        }
-        other_logs.update(
+        # 5. Write one optimizer-step log record.
+        global_loss_sum = self.metric_accumulator.loss_sum.global_value
+        outputs["logs"]["train/loss"] = float(global_loss_sum / int(global_loss_token_count))
+        outputs["logs"].update(
+            {
+                "eta": self.timer.eta_string,
+                "perf/batch_time": self.timer.batch_time,
+                "perf/toks_per_sec": global_loss_token_count / self.timer.batch_time,
+                "tokens/global_total": global_total_token_count,
+                "tokens/global_loss": global_loss_token_count,
+            }
+        )
+        outputs["logs"].update(
             build_mfu_log(
-                model_flops_per_step=float(accumulated_metrics["local_model_flops"]),
+                model_flops_per_step=self.metric_accumulator.model_flops.local_value,
                 device_type=self.device.type,
                 precision=str(self.config.optim.mixed_precision),
                 step_time_seconds=float(self.timer.batch_time_latest),
@@ -570,11 +496,10 @@ class OpenbeeEngine(Engine):
         )
 
         for i, lr in enumerate(step_lrs):
-            other_logs[f"lr/group_{i}"] = lr
+            outputs["logs"][f"lr/group_{i}"] = lr
 
-        outputs["logs"]["train/loss"] = float(global_loss_sum / int(global_loss_token_count))
         logger.log_metrics(
-            {**outputs["logs"], **other_logs},
+            outputs["logs"],
             step=self.step,
             total_steps=self.total_steps,
         )

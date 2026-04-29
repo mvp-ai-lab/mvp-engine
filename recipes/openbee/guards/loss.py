@@ -6,6 +6,7 @@ from collections import deque
 from typing import Any
 
 import torch
+import torch.distributed as dist
 
 from mvp_engine.utils.log import simple_info
 
@@ -59,3 +60,44 @@ class LossGuard:
         if isinstance(loss, torch.Tensor):
             return float(loss.detach().item())
         return float(loss)
+
+
+class PerTokenLossGuard(LossGuard):
+    """Detect spikes from per-token loss sums and valid token counts."""
+
+    def check(
+        self,
+        loss_sum: torch.Tensor | float,
+        token_count: int,
+        *,
+        step: int,
+        device: torch.device,
+    ) -> bool:
+        """Return whether the current per-token micro-batch loss should be skipped."""
+        if self.spike_multiplier is None:
+            return False
+
+        loss_stats = torch.stack(
+            (
+                self._as_tensor(loss_sum, device=device),
+                torch.tensor(float(token_count), device=device, dtype=torch.float64),
+            )
+        )
+        if dist.is_available() and dist.is_initialized():
+            dist.all_reduce(loss_stats, op=dist.ReduceOp.SUM)
+
+        global_token_count = int(loss_stats[1].item())
+        if global_token_count <= 0:
+            return False
+
+        return super().check(
+            loss_stats[0] / loss_stats[1],
+            step=step,
+            token_count=global_token_count,
+        )
+
+    @staticmethod
+    def _as_tensor(value: torch.Tensor | float, *, device: torch.device) -> torch.Tensor:
+        if isinstance(value, torch.Tensor):
+            return value.detach().to(device=device, dtype=torch.float64)
+        return torch.tensor(float(value), device=device, dtype=torch.float64)

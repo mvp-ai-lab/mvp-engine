@@ -33,7 +33,7 @@ from mvp_engine.utils.checkpointing.parallel_sl_util import (
 )
 from mvp_engine.utils.log import init_logger, logger
 from mvp_engine.utils.log.backend import FileBackend, TerminalBackend, WandbBackend
-from mvp_engine.utils.misc import Timer, get_device, get_git_info
+from mvp_engine.utils.misc import Timer, calculate_model_size, get_device, get_git_info
 from mvp_engine.utils.training import (
     GradientScaler,
     accumulate_gradients,
@@ -393,6 +393,9 @@ class Engine(ABC):
 
         logger.info("Building Model...")
         self.model = self.prepare_model()
+        model_size, trainable_size = calculate_model_size(self.model)
+        logger.info(f" - Model size: {model_size / 1e9:.4f} B")
+        logger.info(f" - Trainable model size: {trainable_size / 1e9:.4f} B")
 
         logger.info("Building Optimizer...")
         self.optimizer = self.prepare_optimizer()
