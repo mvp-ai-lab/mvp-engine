@@ -7,10 +7,11 @@ from pathlib import Path
 from omegaconf import OmegaConf
 
 from mvp_engine.engine import ENGINE_REGISTRY
+from mvp_engine.utils import skill_testing_util
 from recipes.magic_transformer.configs.schema import MagicTransformerConfig
 from recipes.magic_transformer.model import MagicTransformer, TransformerConfig
 
-repo_root = Path(__file__).resolve().parents[4]
+repo_root = skill_testing_util.find_repo_root(Path(__file__))
 
 
 def recipe_dir() -> Path:

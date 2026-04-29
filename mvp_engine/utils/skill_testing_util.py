@@ -24,7 +24,7 @@ MANIFEST_FILENAME = "skill_manifest.yaml"
 LAYER_ORDER = ("structure", "runtime", "smoke")
 MANIFEST_LAYER_STATUSES = ("not_run", "passed", "failed")
 MANIFEST_SKILL_STATUSES = ("pending", "applied", "failed", "not_applicable")
-MANAGED_SKILL_CATEGORIES = ("training", "parallel", "model")
+MANAGED_SKILL_CATEGORIES = ("training", "parallel", "model", "recipe")
 DEFAULT_LAYER_FILES = {
     "structure": ("test_structure.py",),
     "runtime": ("test_runtime.py",),

@@ -16,7 +16,7 @@ from mvp_engine.utils import skill_testing_util
 from mvp_engine.utils.log import get_logger
 from recipes.magic_transformer.configs.schema import MagicTransformerConfig
 
-repo_root = Path(__file__).resolve().parents[4]
+repo_root = skill_testing_util.find_repo_root(Path(__file__))
 
 
 def recipe_dir() -> Path:

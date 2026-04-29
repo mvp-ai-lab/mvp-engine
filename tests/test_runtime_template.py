@@ -24,7 +24,7 @@ from mvp_engine.utils.log import get_logger
 # Update this import block when copying the template to a new recipe.
 from recipes.magic_transformer.configs.schema import MagicTransformerConfig
 
-repo_root = Path(__file__).resolve().parents[1]
+repo_root = skill_testing_util.find_repo_root(Path(__file__))
 
 if Path(__file__).name.endswith("_template.py"):
     pytestmark = pytest.mark.skip(reason="Template file. Copy and rename into a recipe-local skill_tests directory.")
