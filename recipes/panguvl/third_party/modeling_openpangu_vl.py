@@ -25,10 +25,11 @@ from typing import Any, Callable, Optional, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch_npu
+
+# import torch_npu
 from einops import rearrange
-from processor.imageprocessor_openpangu_vl import rescale_and_normalize
 from transformers.cache_utils import Cache
+from transformers.configuration_utils import PretrainedConfig
 from transformers.generation import GenerationMixin
 from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 from transformers.modeling_layers import GradientCheckpointingLayer
@@ -37,7 +38,6 @@ from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_u
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from transformers.processing_utils import Unpack
 from transformers.utils import (
-    LossKwargs,
     auto_docstring,
     can_return_tuple,
     is_torchdynamo_compiling,
@@ -46,6 +46,7 @@ from transformers.utils import (
 
 from .configuration_openpangu_vl import OpenPanguVLConfig as OpenPanguConfig
 from .configuration_openpangu_vl import OpenPanguVLTextConfig, OpenPanguVLVisionConfig
+from .imageprocessor_openpangu_vl import rescale_and_normalize
 from .modeling_openpangu_embedded import (
     PanguEmbeddedConfig,
     PanguEmbeddedMLP,
@@ -53,14 +54,63 @@ from .modeling_openpangu_embedded import (
     PanguEmbeddedRMSNorm,
 )
 
-if "910" in torch.npu.get_device_name():
-    NPU_ATTN_INFR = True
-    print("[INFO] torch_npu detected. Using NPU fused infer attention.")
-else:
-    NPU_ATTN_INFR = False
-
+try:
+    import torch_npu
+except ImportError:
+    torch_npu = None
+# if "910" in torch.npu.get_device_name():
+#     NPU_ATTN_INFR = True
+#     print("[INFO] torch_npu detected. Using NPU fused infer attention.")
+# else:
+#     NPU_ATTN_INFR = False
+NPU_ATTN_INFR = False
 
 logger = logging.get_logger(__name__)
+
+
+def _compute_default_rope_parameters(
+    config: Optional[PretrainedConfig] = None,
+    device: Optional["torch.device"] = None,
+    seq_len: Optional[int] = None,
+    **rope_kwargs,
+) -> tuple["torch.Tensor", float]:
+    """
+    Computes the inverse frequencies according to the original RoPE implementation
+    Args:
+        config ([`~transformers.PretrainedConfig`]):
+            The model configuration.
+        device (`torch.device`):
+            The device to use for initialization of the inverse frequencies.
+        seq_len (`int`, *optional*):
+            The current sequence length. Unused for this type of RoPE.
+        rope_kwargs (`Dict`, *optional*):
+            BC compatibility with the previous RoPE class instantiation, will be removed in v4.45.
+    Returns:
+        Tuple of (`torch.Tensor`, `float`), containing the inverse frequencies for the RoPE embeddings and the
+        post-processing scaling factor applied to the computed cos/sin (unused in this type of RoPE).
+    """
+    if config is not None and len(rope_kwargs) > 0:
+        raise ValueError(
+            "Unexpected arguments: `**rope_kwargs` and `config` are mutually exclusive in "
+            f"`_compute_default_rope_parameters`, got `rope_kwargs`={rope_kwargs} and `config`={config}"
+        )
+    if len(rope_kwargs) > 0:
+        base = rope_kwargs["base"]
+        dim = rope_kwargs["dim"]
+    elif config is not None:
+        base = config.rope_theta
+        partial_rotary_factor = config.partial_rotary_factor if hasattr(config, "partial_rotary_factor") else 1.0
+        head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+        dim = int(head_dim * partial_rotary_factor)
+
+    attention_factor = 1.0  # Unused in this type of RoPE
+
+    # Compute the inverse frequencies
+    inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim))
+    return inv_freq, attention_factor
+
+
+ROPE_INIT_FUNCTIONS.setdefault("default", _compute_default_rope_parameters)
 
 
 class OpenPanguVLMLP(PanguEmbeddedMLP):
@@ -908,7 +958,9 @@ class OpenPanguVLDecoderLayer(GradientCheckpointingLayer):
         return outputs
 
 
-class KwargsForCausalLM(FlashAttentionKwargs, LossKwargs): ...
+class KwargsForCausalLM(
+    FlashAttentionKwargs,
+): ...
 
 
 class ProjectionSingle(nn.Module):
@@ -1276,6 +1328,8 @@ class OpenPanguVLModel(OpenPanguPreTrainedModel):
             The temporal, height and width of feature shape of each video in LLM.
         rope_deltas (`torch.LongTensor` of shape `(batch_size, )`, *optional*):
             The rope index difference between sequence length and multimodal rope.
+        cache_position (`torch.LongTensor` of shape `(sequence_length)`, *optional*):
+            Indices describing the positions of the input sequence tokens in the cache.
         second_per_grid_ts (`torch.Tensor` of shape `(num_videos)`, *optional*):
             The time interval (in seconds) for each grid along the temporal dimension in the 3D position IDs.
         """
@@ -1516,6 +1570,8 @@ class OpenPanguVL(OpenPanguPreTrainedModel, GenerationMixin):
             The temporal, height and width of feature shape of each video in LLM.
         rope_deltas (`torch.LongTensor` of shape `(batch_size, )`, *optional*):
             The rope index difference between sequence length and multimodal rope.
+        cache_position (`torch.LongTensor` of shape `(sequence_length)`, *optional*):
+            Indices describing the positions of the input sequence tokens in the cache.
         second_per_grid_ts (`torch.Tensor` of shape `(num_videos)`, *optional*):
             The time interval (in seconds) for each grid along the temporal dimension in the 3D position IDs.
 

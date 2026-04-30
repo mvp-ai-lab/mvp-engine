@@ -22,15 +22,7 @@
 from typing import Callable, Optional, Union
 
 import torch
-import torch_npu
 from torch import nn
-
-if "910" in torch.npu.get_device_name():
-    NPU_ATTN_INFR = True
-    print("[INFO] torch_npu detected. Using NPU fused infer attention.")
-else:
-    NPU_ATTN_INFR = False
-
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache
 from transformers.configuration_utils import PretrainedConfig
@@ -45,7 +37,23 @@ from transformers.modeling_outputs import (
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from transformers.processing_utils import Unpack
-from transformers.utils import LossKwargs, auto_docstring, can_return_tuple, logging
+from transformers.utils import auto_docstring, can_return_tuple, logging
+
+# import torch_npu
+# from torch_npu.contrib import transfer_to_npu
+
+# if "910" in torch.npu.get_device_name():
+#     NPU_ATTN_INFR = True
+#     print("[INFO] torch_npu detected. Using NPU fused infer attention.")
+# else:
+#     NPU_ATTN_INFR = False
+
+
+try:
+    import torch_npu
+except ImportError:
+    torch_npu = None
+NPU_ATTN_INFR = False
 
 
 class PanguEmbeddedConfig(PretrainedConfig):
@@ -96,6 +104,51 @@ class PanguEmbeddedConfig(PretrainedConfig):
 
 
 logger = logging.get_logger(__name__)
+
+
+def _compute_default_rope_parameters(
+    config: Optional[PretrainedConfig] = None,
+    device: Optional["torch.device"] = None,
+    seq_len: Optional[int] = None,
+    **rope_kwargs,
+) -> tuple["torch.Tensor", float]:
+    """
+    Computes the inverse frequencies according to the original RoPE implementation
+    Args:
+        config ([`~transformers.PretrainedConfig`]):
+            The model configuration.
+        device (`torch.device`):
+            The device to use for initialization of the inverse frequencies.
+        seq_len (`int`, *optional*):
+            The current sequence length. Unused for this type of RoPE.
+        rope_kwargs (`Dict`, *optional*):
+            BC compatibility with the previous RoPE class instantiation, will be removed in v4.45.
+    Returns:
+        Tuple of (`torch.Tensor`, `float`), containing the inverse frequencies for the RoPE embeddings and the
+        post-processing scaling factor applied to the computed cos/sin (unused in this type of RoPE).
+    """
+    if config is not None and len(rope_kwargs) > 0:
+        raise ValueError(
+            "Unexpected arguments: `**rope_kwargs` and `config` are mutually exclusive in "
+            f"`_compute_default_rope_parameters`, got `rope_kwargs`={rope_kwargs} and `config`={config}"
+        )
+    if len(rope_kwargs) > 0:
+        base = rope_kwargs["base"]
+        dim = rope_kwargs["dim"]
+    elif config is not None:
+        base = config.rope_theta
+        partial_rotary_factor = config.partial_rotary_factor if hasattr(config, "partial_rotary_factor") else 1.0
+        head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+        dim = int(head_dim * partial_rotary_factor)
+
+    attention_factor = 1.0  # Unused in this type of RoPE
+
+    # Compute the inverse frequencies
+    inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim))
+    return inv_freq, attention_factor
+
+
+ROPE_INIT_FUNCTIONS.setdefault("default", _compute_default_rope_parameters)
 
 
 class PanguEmbeddedRMSNorm(nn.Module):
@@ -482,7 +535,10 @@ class PanguEmbeddedPreTrainedModel(PreTrainedModel):
 class PanguEmbeddedModel(PanguEmbeddedPreTrainedModel):
     def __init__(self, config: PanguEmbeddedConfig):
         super().__init__(config)
-        self.padding_idx = config.pad_token_id
+        try:
+            self.padding_idx = config.pad_token_id
+        except AttributeError:
+            self.padding_idx = 2  # default padding token id for backward compatibility if not specified in the config
         self.vocab_size = config.vocab_size
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
@@ -517,6 +573,10 @@ class PanguEmbeddedModel(PanguEmbeddedPreTrainedModel):
         cache_position: Optional[torch.LongTensor] = None,
         **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
     ) -> BaseModelOutputWithPast:
+        r"""
+        cache_position (`torch.LongTensor` of shape `(sequence_length)`, *optional*):
+            Indices describing the positions of the input sequence tokens in the cache.
+        """
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -606,7 +666,7 @@ class PanguEmbeddedModel(PanguEmbeddedPreTrainedModel):
         )
 
 
-class KwargsForCausalLM(FlashAttentionKwargs, LossKwargs): ...
+class KwargsForCausalLM(FlashAttentionKwargs): ...
 
 
 @auto_docstring
@@ -659,6 +719,10 @@ class PanguEmbeddedForCausalLM(PanguEmbeddedPreTrainedModel, GenerationMixin):
         logits_to_keep: Union[int, torch.Tensor] = 0,
         **kwargs: Unpack[KwargsForCausalLM],
     ) -> CausalLMOutputWithPast:
+        r"""
+        cache_position (`torch.LongTensor` of shape `(sequence_length)`, *optional*):
+            Indices describing the positions of the input sequence tokens in the cache.
+        """
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states

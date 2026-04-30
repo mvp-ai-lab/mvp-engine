@@ -29,6 +29,7 @@ class OpenPanguVLVisionConfig(PretrainedConfig):
         hidden_size=1536,
         hidden_act="gelu",
         intermediate_size=4608,
+        initializer_range=0.02,
         out_hidden_size=3584,
         in_chans=3,
         patch_size=14,
@@ -46,6 +47,7 @@ class OpenPanguVLVisionConfig(PretrainedConfig):
         self.hidden_size = hidden_size
         self.hidden_act = hidden_act
         self.intermediate_size = intermediate_size
+        self.initializer_range = initializer_range
         self.out_hidden_size = out_hidden_size
         self.in_channels = in_chans
         self.patch_size = patch_size

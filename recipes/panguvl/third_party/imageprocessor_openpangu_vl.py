@@ -33,7 +33,11 @@ from torchvision.transforms.v2 import functional as F
 from transformers.image_processing_utils import BatchFeature
 from transformers.image_utils import (
     ChannelDimension,
+    ImageInput,
+    ImageType,
     SizeDict,
+    get_image_type,
+    infer_channel_dimension_format,
     make_flat_list_of_images,
     pil_torch_interpolation_mapping,
     valid_images,
@@ -190,6 +194,44 @@ class OpenPanguVLImageProcessorFast(Qwen2VLImageProcessorFast):
     min_pxl = 28
     min_edge = 56
     dtype = torch.bfloat16
+
+    def _process_image(
+        self,
+        image: ImageInput,
+        do_convert_rgb: Optional[bool] = None,
+        input_data_format: Optional[Union[str, ChannelDimension]] = None,
+        device: Optional["torch.device"] = None,
+    ) -> "torch.Tensor":
+        image_type = get_image_type(image)
+        if image_type not in [ImageType.PIL, ImageType.TORCH, ImageType.NUMPY]:
+            raise ValueError(f"Unsupported input image type {image_type}")
+
+        if do_convert_rgb:
+            image = self.convert_to_rgb(image)
+
+        if image_type == ImageType.PIL:
+            image = F.pil_to_tensor(image)
+        elif image_type == ImageType.NUMPY:
+            # not using F.to_tensor as it doesn't handle (C, H, W) numpy arrays
+            image = torch.from_numpy(image).contiguous()
+
+        # If the image is 2D, we need to unsqueeze it to add a channel dimension for processing
+        if image.ndim == 2:
+            image = image.unsqueeze(0)
+
+        # Infer the channel dimension format if not provided
+        if input_data_format is None:
+            input_data_format = infer_channel_dimension_format(image)
+
+        if input_data_format == ChannelDimension.LAST:
+            # We force the channel dimension to be first for torch tensors as this is what torchvision expects.
+            image = image.permute(2, 0, 1).contiguous()
+
+        # Now that we have torch tensors, we can move them to the right device
+        if device is not None:
+            image = image.to(device)
+
+        return image
 
     def _prepare_input_images(
         self,

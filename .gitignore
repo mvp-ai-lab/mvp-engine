@@ -189,3 +189,7 @@ slurmlogs
 CUSTOM.md
 /references
 .codex
+
+batch_files/
+slurm/
+notebooks/

@@ -1,11 +1,11 @@
 dev_mode: false
-engine: OpenbeeEngine
+engine: PanguvlEngine
 
-seed: 42
+seed: 219
 deterministic: false
 
 project:
-  name: "openbee-qwen3vl_8b-alignment"
+  name: "panguvl"
   dir: "./outputs"
 
 log:
@@ -17,41 +17,42 @@ log:
 parallel:
   mesh:
     replicate: -1
-    shard: 1
+    shard: 8
     tensor: 1
 data:
-  train_path: "/home/k00885418/projects/mvp-engine/data/Open-Bee/Bee-Training-Data-Stage1-Stage2-mm-only/stage1/**/*.parquet"
+  train_path: "./data/panguvl/stage2-shuffle-v2/*.parquet"
   enable_thinking: "non-empty"
   cache: false
-  shuffle_buffer: 1000
+  shuffle_buffer: 4096
   packing: true
   packing_selection_strategy: "best_fit"
   packing_open_pack_limit: 8
   packing_buffer_size: 64
-  max_seq_len: 8192
+  max_seq_len: 16384
   batch_size: 1
-  num_workers: 12
+  num_workers: 4
 model:
-  pretrained_model_name_or_path: "/home/k00885418/projects/mvp-engine/recipes/openbee/pretrained/Qwen3-VL-8B-Instruct"
+  pretrained_model_name_or_path: "./pretrained/Qwen3-VL-8B-Base-woDS-stage1"
   attn_implementation: "flash_attention_2"
-  image_max_pixels: 1048576
+  image_max_pixels: 1280000
   gradient_checkpointing:
-    enabled: false
+    enabled: true
     use_reentrant: false
   # Freeze flags — set true to stop gradient for the corresponding sub-module.
   # Defaults follow the alignment-stage convention: train merger only.
-  freeze_vit: true
+  freeze_vit: false
   freeze_merger: false
-  freeze_llm: true
-  compile: true
+  freeze_llm: false
+  compile: false
   compile_backend: "inductor"
   compile_mode: "default"
 optim:
-  lr: 1.0e-4
+  lr: 4.0e-5
   weight_decay: 0.0
-  gradient_accumulation_steps: 4
+  global_batch_size: 256
+  gradient_accumulation_steps: -1
   mixed_precision: "bf16"
-  warmup_ratio: 0.0
+  warmup_ratio: 0.002
   clip_grad_norm: 1.0
 
 loop:
@@ -59,6 +60,6 @@ loop:
   total_steps: -1
 
 checkpoint:
-  interval: 100
+  interval: 200
   keep_n: 2
   hf_enable: true
