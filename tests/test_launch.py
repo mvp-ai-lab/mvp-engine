@@ -37,3 +37,19 @@ def test_import_recipe_modules_respects_nested_gitignore(tmp_path, monkeypatch):
     launch._import_recipe_modules(recipe_dir)
 
     assert imported_modules == ["recipes.demo.keep", "recipes.demo.nested.keep_nested"]
+
+
+def test_apply_runtime_patches_is_idempotent(monkeypatch):
+    calls = []
+
+    def fake_apply_all_patches():
+        calls.append("called")
+        return []
+
+    monkeypatch.setattr(launch, "apply_all_patches", fake_apply_all_patches)
+    monkeypatch.setattr(launch, "_RUNTIME_PATCHES_APPLIED", False)
+
+    launch._apply_runtime_patches()
+    launch._apply_runtime_patches()
+
+    assert calls == ["called"]
