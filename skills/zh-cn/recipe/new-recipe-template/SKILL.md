@@ -83,19 +83,54 @@ python3 -m compileall recipes/<recipe_name>
 uv run --with ruff ruff check recipes/<recipe_name>
 ```
 
-如果生成了测试，再执行：
-
-```bash
-uv run --with pytest pytest -q recipes/<recipe_name>/tests
-```
-
 ## Validation
 
-- 生成后的目录树包含预期的 recipe-local 文件和目录。
-- recipe 名称是 `snake_case`，engine class 使用匹配的 PascalCase 形式。
-- 在已知信息足够的地方，placeholder 文本已被收紧。
-- `dataset/` 和 `model/` 仍然保持有意的空实现状态。
-- 生成出的 recipe 已经过编译检查，并在可行时跑过 lint 和 smoke test。
+在 `recipes/<recipe>/skill_tests/new-recipe-template/` 下补 recipe-local 测试：
+
+- `test_spec.yaml`：声明这个 skill 在该 recipe 上要求哪些测试层级。
+- `test_structure.py`：至少验证 recipe import、registry 接线、config schema 校验、
+  required slots，以及 logger/checkpoint hooks；对这个 scaffold skill 还必须验证
+  生成出的目录结构存在、预期文件已创建、包名与模块名和 recipe 名一致，以及
+  README / config 中的占位内容已按用户请求改写。
+- `test_runtime.py`：至少成功构建 dataset、collator、model、optimizer、
+  scheduler 和 engine，且不直接启动训练；对这个 scaffold skill 还必须验证
+  recipe 模块可正常 import、config schema 可通过校验、engine class 以配置
+  里的名字完成注册，并且这套 scaffold 接线可被解析。
+- `test_smoke.py`：覆盖 1 个真实、recipe-owned 的 single step：forward、loss、
+  backward、optimizer step、logger write，以及 checkpoint noop 或临时保存；
+  使用 scaffold 自己的入口，并把配置或 batch 缩到仍能证明 scaffold 接通正确
+  的最小规模。
+- 优先先把 `tests/test_structure_template.py`、
+  `tests/test_runtime_template.py`、`tests/test_smoke_template.py` 复制到
+  recipe-local skill 目录，再只改 import 区块和最少量的 scaffold-specific 断言。
+- 如果这个 skill 的 smoke 路径需要分布式执行，复制出来的 `test_smoke.py`
+  应使用 `tests/test_smoke_template.py` 里的 `multi_rank_distributed_env(...)`，
+  并根据 skill 要求或用户偏好，把运行模式配置成 DDP、FSDP2 shard、Tensor
+  Parallel 或其他需要的分布式模式。
+- `test_smoke.py` 必须走该 skill 的完整真实能力路径：真实 scaffold recipe 入口、
+  真实 engine 接线，以及真实 logger / checkpoint 行为；禁止用 monkeypatch、
+  fake engine、fake training step 或类似测试桩把要验证的能力短路掉。
+- 如果该 recipe 的 full-capability single-step 只能在 GPU 或分布式环境下成立，
+  就把 smoke test 写成真实 launcher 测试，并在 `test_spec.yaml` 里把
+  `gpu_preferred` 设为 `true`；不要为了在更弱环境里跑通而退化成 fake 逻辑。
+
+这些 skill tests 与 scaffold 自带的普通 `tests/` 目录是分开的。它们应聚焦在
+脚手架正确性上，而不是尚未实现的任务训练行为。
+
+不要换成与该 recipe 无关的 toy recipe 或 toy model。应直接使用用户新建的
+recipe package、config 和 engine 入口，只把验证路径缩到仍能覆盖 scaffold
+落点的最小规模。
+
+当你在用户 recipe 上执行这个 skill 时，应默认自动补齐这些测试，不要要求用户自己列出测试文件。
+验证必须且只能交给全新的 subagent，并使用 `fork_context=false`。禁止主 agent
+在本地终端、后台终端会话或其他任何非 subagent shell fallback 中直接运行这些
+`python -m tests.test_skills` 命令。先启动一个 subagent 运行
+`python -m tests.test_skills --recipe <recipe> --skill new-recipe-template --layer structure`，
+只有它通过后，主 agent 才再启动新的 subagent 运行 `--layer runtime`；只有
+runtime 通过后，主 agent 才再启动新的 subagent 运行 `--layer smoke`。最后由
+主 agent 统一汇总三个层级的结果。如果 `test_smoke.py` 因 GPU、分布式启动条件
+或执行权限受限而无法运行，主 agent 直接把准确的 `python -m tests.test_skills`
+命令以及所需 launcher 命令返回给用户。
 
 ## Output
 

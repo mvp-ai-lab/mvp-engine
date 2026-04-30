@@ -104,6 +104,48 @@ class <TopModelClass>(...):
 - 确认 callable 具备幂等 guard，重复调用不会重复改写状态。
 - 确认没有引入新的通用 prefetch DSL、graph helper 或 YAML 配置项。
 
+在 `recipes/<recipe>/skill_tests/fsdp2-prefetching/` 下补 recipe-local 测试：
+
+- `test_spec.yaml`：声明这个 skill 在该 recipe 上要求哪些测试层级。
+- `test_structure.py`：至少验证 recipe import、registry 接线、config schema 校验、
+  required slots，以及 logger/checkpoint hooks；还必须验证顶层模型类暴露了
+  `APPLY_FSDP2_CUSTOM_PREFETCHING`。
+- `test_runtime.py`：至少成功构建 dataset、collator、model、optimizer、
+  scheduler 和 engine，且不直接启动训练；还必须验证运行时确实调用 hook，
+  且幂等保护生效。
+- `test_smoke.py`：覆盖 1 个真实、recipe-owned 的 single step：forward、loss、
+  backward、optimizer step、logger write，以及 checkpoint noop 或临时保存；
+  还必须验证应用该 hook 后，用户自己的 recipe / model 能在 FSDP2 prefetching
+  开启的情况下完成这一步。
+- 优先先把 `tests/test_structure_template.py`、
+  `tests/test_runtime_template.py`、`tests/test_smoke_template.py` 复制到
+  recipe-local skill 目录，再只改 import 区块和 FSDP2 prefetch 相关断言或
+  launcher 路径。
+- 由于这个 skill 往往需要分布式 smoke，复制出来的 `test_smoke.py` 应使用
+  `tests/test_smoke_template.py` 里的 `multi_rank_distributed_env(...)`，并把
+  运行模式配置为 FSDP2 shard；如果该 skill 路径或用户偏好要求，也可以和 DDP
+  / Tensor Parallel 组合。
+- `test_smoke.py` 必须走完整真实能力路径：真实 engine、真实 parallelize 入口、
+  真实 FSDP2 wrap / TP / launcher / logger / checkpoint；禁止用 monkeypatch、fake
+  wrapper、fake parallelize_model、fake fully_shard、fake process group、fake
+  device mesh 等方式把并行能力短路掉。
+- 如果该 recipe 的 full-capability single-step 只能在多卡或 GPU 环境下成立，就把
+  smoke test 写成真实 launcher 测试，并在 `test_spec.yaml` 里把 `gpu_preferred`
+  设为 `true`；不要为了在 CPU 或单进程下跑通而退化成 fake 逻辑。
+
+这些测试必须围绕用户自己的 recipe / model 落点来写，不能为了方便而换成无关的 tiny model。
+
+当你在用户 recipe 上执行这个 skill 时，应默认自动补齐这些测试，不要等用户再单独提出。
+验证必须且只能交给全新的 subagent，并使用 `fork_context=false`。禁止主 agent
+在本地终端、后台终端会话或其他任何非 subagent shell fallback 中直接运行这些
+`python -m tests.test_skills` 命令。先启动一个 subagent 运行
+`python -m tests.test_skills --recipe <recipe> --skill fsdp2-prefetching --layer structure`，
+只有它通过后，主 agent 才再启动新的 subagent 运行 `--layer runtime`；只有
+runtime 通过后，主 agent 才再启动新的 subagent 运行 `--layer smoke`。最后由
+主 agent 统一汇总三个层级的结果。如果 `test_smoke.py` 因 GPU、分布式启动条件
+或执行权限受限而无法运行，主 agent 直接把准确的 `python -m tests.test_skills`
+命令以及所需 launcher 命令返回给用户。
+
 ## Output
 
 - 说明新增或修改了哪个模型文件，以及绑定了哪个

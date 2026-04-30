@@ -50,11 +50,59 @@ diff -u SOURCE_MODEL.py CHECKPOINT_DIR/modeling_*.py
 
 ### 4. Add recipe-local parity tests
 
-- Put migration tests under `recipes/<recipe>/tests/`.
+Create tests in:
+- `recipes/<recipe>/skill_tests/model-migration/`
+
+Add:
+- `test_spec.yaml`: declare the required test layers for this applied skill.
+- `test_structure.py`: at least verify recipe import, registry wiring, config
+  schema validation, required slots, and logger/checkpoint hooks; it must also
+  verify the migrated recipe entrypoints and migrated model class wiring exist.
+- `test_runtime.py`: at least build dataset, collator, model, optimizer,
+  scheduler, and engine successfully without starting training; it must also
+  verify parity-critical runtime paths are reachable through the migrated recipe
+  entrypoints.
+- `test_smoke.py`: cover one real recipe-owned single step: forward, loss,
+  backward, optimizer step, logger write, and checkpoint noop or temporary
+  save; it must also verify source-vs-migrated parity and strict checkpoint-load
+  coverage through the migrated recipe entrypoints.
+- Prefer copying `tests/test_structure_template.py`,
+  `tests/test_runtime_template.py`, and `tests/test_smoke_template.py` into the
+  recipe-local skill directory first, then only edit the import block and the
+  migration-specific assertions you need.
+- If this skill's smoke path needs distributed execution on the target recipe,
+  the copied `test_smoke.py` should use `multi_rank_distributed_env(...)` from
+  `tests/test_smoke_template.py` and configure the run as DDP, FSDP2 sharding,
+  tensor parallel, or another required mode based on the skill requirement or
+  user preference.
+- `test_smoke.py` must use the full real capability path for this skill: real
+  migrated recipe entrypoints, real parity checks, and real checkpoint-load /
+  logger / checkpoint wiring. Do not short-circuit it with monkeypatch-based
+  fake migrated models, fake load paths, or similar test-only stand-ins.
+- If the recipe's full-capability single step only makes sense on GPU, NPU, or
+  distributed hardware, write the smoke test as a real launcher-driven smoke
+  test and set `gpu_preferred: true` in `test_spec.yaml`; do not degrade it
+  into fake logic just to make it run in a weaker environment.
+
 - Cover at least:
   - source model vs migrated model parity on supported inputs
   - CPU or GPU class vs NPU class parity on shared weights when an NPU variant exists
 - Use strict comparisons such as `torch.equal` when the migration requires identity rather than loose closeness.
+
+When executing this skill for a user recipe, add these tests automatically. Do not
+require the user to ask for the test layout separately. Run validation only in
+fresh subagents with `fork_context=false`. Do not run these
+`python -m tests.test_skills` commands from the main agent's local terminal,
+background terminal sessions, or any other non-subagent shell fallback. First run
+`python -m tests.test_skills --recipe <recipe> --skill model-migration --layer structure`,
+then a new subagent for `--layer runtime` only after structure passes, and then a
+new subagent for `--layer smoke` only after runtime passes. The main agent should
+summarize all three layer results. If `test_smoke.py` is blocked by device
+availability, distributed-launch requirements, or permissions, the main agent
+should return the exact `python -m tests.test_skills` command and any required
+environment-specific launch command.
+
+If the environment allows, run tests on both CPU/GPU and NPU devices to validate parity across implementations.
 
 ### 5. Validate checkpoint compatibility
 
@@ -81,6 +129,19 @@ diff -u SOURCE_MODEL.py CHECKPOINT_DIR/modeling_*.py
 - State whether an NPU variant was added.
 - Summarize parity and strict-load validation results.
 - Call out any unresolved environment gap, such as missing NPU hardware for full parity validation.
+
+## Useful Commands
+
+```bash
+# run recipe-local tests in a fresh subagent
+python -m tests.test_skills --recipe <recipe> --skill model-migration
+
+# lint migration files
+uv run --with ruff ruff check recipes/<recipe>/model recipes/<recipe>/skill_tests/model-migration
+
+# inspect changed files
+git status --short --untracked-files=all
+```
 
 ## Read On Demand
 

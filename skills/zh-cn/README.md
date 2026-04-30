@@ -85,6 +85,66 @@ Agent 会按 skill 工作流生成适配代码和测试。
 参考 @skills/zh-cn/git/pr-gate/SKILL.md
 ```
 
+## Recipe 内 Skill 测试约定
+
+当某个 skill 修改的是用户自己的 recipe 时，对应测试应放在该 recipe
+目录下，而不是放到 `skills/` 里，也不是放到无关的示例 recipe 里。
+
+推荐结构：
+
+```text
+recipes/<recipe>/
+└── skill_tests/
+    ├── skill_manifest.yaml
+    └── <skill-id>/
+        ├── test_spec.yaml
+        ├── test_structure.py
+        ├── test_runtime.py
+        └── test_smoke.py
+```
+
+- `skill_tests/skill_manifest.yaml` 用来记录该 recipe 相关 skill 的状态，例如 `pending`、
+  `applied`、`failed`、`not_applicable`，以及每个单独 skill 的分层验证结果。
+- `test_spec.yaml` 用来声明该 skill 需要哪些测试层级。
+- 测试必须围绕用户自己的 recipe / model 入口来写，使用 recipe 自己的最小配置或最小 batch，
+  不要额外造一个与该 recipe 无关的 toy model。
+- `test_structure.py` 至少应验证 recipe import、registry 接线、config schema validate、
+  required slots，以及 logger/checkpoint hooks。
+- `test_runtime.py` 至少应构建 dataset、collator、model、optimizer、scheduler、engine，
+  但这一层不直接进入训练。
+- `test_smoke.py` 至少应覆盖 1 个真实 step：forward、loss、backward、optimizer step、
+  logger write，以及 checkpoint noop 或临时保存。
+- recipe-local skill 测试导入 recipe 模块时，应使用显式的仓库包路径，例如
+  `from recipes.<recipe>.configs.schema import ...`。不要为了支持
+  `from <recipe>...` 这种短导入而创建 `recipes/<recipe>/skill_tests/conftest.py`
+  去修改 `sys.path`；skill test runner 会从仓库根目录执行，这已经足够支持
+  `mvp_engine` 和 `recipes.<recipe>` 导入。
+- 优先从 `tests/test_structure_template.py`、`tests/test_runtime_template.py`、
+  `tests/test_smoke_template.py` 复制到
+  `recipes/<recipe>/skill_tests/<skill-id>/` 再开始修改。默认应尽量少改，通常只改
+  import 区块和 skill-specific 断言。
+- 如果当前 skill 需要分布式执行，复制出来的 `test_smoke.py` 应使用
+  `tests/test_smoke_template.py` 里的 `multi_rank_distributed_env(...)`，并根据
+  当前 skill 要求或用户偏好，把分布式模式配置成 DDP、FSDP2 shard、Tensor
+  Parallel 等。
+- 统一入口：`python -m tests.test_skills --recipe <recipe> --skill <skill-id>`。
+- recipe-local skill 验证必须且只能交给全新的 subagent，并且使用
+  `fork_context=false`。禁止主 agent 在本地终端、后台终端会话或其他任何
+  非 subagent shell fallback 中直接运行 `python -m tests.test_skills ...`。
+- 执行顺序必须是：先在一个全新 subagent 中跑 `--layer structure`，通过后再在
+  另一个全新 subagent 中跑 `--layer runtime`，最后再在第三个全新 subagent 中跑
+  `--layer smoke`。
+- 用户不应该还要自己提出“补这些测试”。当 agent 在用户 recipe 上应用某个 skill 时，
+  应默认同时补齐对应的 recipe-local 测试，并默认尝试执行。
+- agent 还应默认自动初始化或更新 `skill_tests/skill_manifest.yaml`，并且只有在该单个
+  skill 的 recipe-local 测试通过后，状态才保持为 `applied`。
+- 主 agent 应在这些 subagent 完成后统一汇总 `structure` / `runtime` / `smoke`
+  的结果。
+- 如果 `test_smoke.py` 需要 GPU 资源、分布式启动条件或更高执行权限，而当前环境不具备，
+  主 agent 应直接把准确命令返回给用户，而不是让用户自己设计测试流程。
+- 如果某个 recipe-local 测试确实需要真实 GPU 或分布式环境，不应 `skip`，而应直接失败并给出
+  用户在真实环境里需要执行的准确命令。
+
 ## Skill 列表
 
 - `parallel/fsdp2-prefetching`：[parallel/fsdp2-prefetching/SKILL.md](parallel/fsdp2-prefetching/SKILL.md)

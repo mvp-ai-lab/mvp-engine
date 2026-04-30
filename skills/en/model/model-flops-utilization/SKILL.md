@@ -272,6 +272,53 @@ logger.log(log_dict, step=step)
 - The logged MFU value is a `float` under `perf/mfu`.
 - The MFU value passes a sanity check: it is not negative, it is not implausibly larger than `1`, and suspicious values were traced back through FLOPs estimation, hardware lookup, precision mapping, timing, and `world_size`.
 
+Add recipe-local tests under `recipes/<recipe>/skill_tests/model-flops-utilization/`:
+
+- `test_spec.yaml`: declare the required test layers for this applied skill.
+- `test_structure.py`: at least verify recipe import, registry wiring, config
+  schema validation, required slots, and logger/checkpoint hooks; it must also
+  verify the injected method exists and the MFU logging keys are wired.
+- `test_runtime.py`: at least build dataset, collator, model, optimizer,
+  scheduler, and engine successfully without starting training; it must also
+  verify engine-side MFU calculation is reached with the recipe's own runtime inputs.
+- `test_smoke.py`: cover one real recipe-owned single step: forward, loss,
+  backward, optimizer step, logger write, and checkpoint noop or temporary
+  save; it must also verify that the same step records `perf/mfu` without
+  breaking training.
+- Prefer copying `tests/test_structure_template.py`,
+  `tests/test_runtime_template.py`, and `tests/test_smoke_template.py` into the
+  recipe-local skill directory first, then only edit the import block and the
+  MFU-specific assertions or launcher path that this skill needs.
+- If this skill's smoke path needs distributed execution on the target recipe,
+  the copied `test_smoke.py` should use `multi_rank_distributed_env(...)` from
+  `tests/test_smoke_template.py` and configure the run as DDP, FSDP2 sharding,
+  tensor parallel, or another required mode based on the skill requirement or
+  user preference.
+- `test_smoke.py` must use the full real capability path for this skill: real
+  engine, real recipe entrypoints, and the real MFU / logger / checkpoint
+  wiring under test. Do not short-circuit it with monkeypatch-based fake MFU
+  calculators, fake timers, fake loggers, or similar test-only stand-ins.
+- If the recipe's full-capability single step only makes sense on GPU or
+  distributed hardware, write the smoke test as a real launcher-driven smoke
+  test and set `gpu_preferred: true` in `test_spec.yaml`; do not degrade it
+  into fake logic just to make it run in a weaker environment.
+
+Use the user's real recipe/model entrypoints. Do not validate MFU by swapping in an
+unrelated toy model that bypasses the recipe's actual training flow.
+
+When executing this skill for a user recipe, add these tests automatically. Do not
+require the user to ask for test scaffolding separately. Run validation only in
+fresh subagents with `fork_context=false`. Do not run these
+`python -m tests.test_skills` commands from the main agent's local terminal,
+background terminal sessions, or any other non-subagent shell fallback. First run
+`python -m tests.test_skills --recipe <recipe> --skill model-flops-utilization --layer structure`,
+then a new subagent for `--layer runtime` only after structure passes, and then a
+new subagent for `--layer smoke` only after runtime passes. The main agent should
+summarize all three layer results. If `test_smoke.py` is blocked by GPU
+availability, distributed-launch requirements, or permissions, the main agent
+should return the exact `python -m tests.test_skills` command and any required
+launch command instead.
+
 ## Output
 
 - Summarize where `calculate_model_flops(...)` was injected.

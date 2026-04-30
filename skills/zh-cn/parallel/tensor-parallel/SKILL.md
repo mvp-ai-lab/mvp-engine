@@ -19,10 +19,8 @@ description: 为本仓库中的模型增加 recipe-local 的 tensor parallel pla
 - `recipes/**/model/**/` 下的目标 `modeling_*.py` 文件。
 - 训练实际使用的顶层模型类。
 - 需要做 TP 分片的重复计算 block 类。
-- 当前训练配置和 mesh 设置。
-- 如果需要修改配置且用户尚未明确说明：
-  - 单机 GPU 数量
-  - 目标 TP size
+- 当前训练配置和 mesh 设置；如果需要修改配置，应包含单机 GPU 数量以及需要设置的
+  TP size。
 
 ## Workflow
 
@@ -137,6 +135,47 @@ parallel:
 - 所有依赖缓存全局元数据的模块都检查过是否需要 TP 后处理。
 - 如果存在 `TP_MODULE_POSTPROCESSORS`，其 key 与真实运行时类名一致，且只修改本地运行时元数据。
 - mesh 配置里的 `replicate`、`shard` 和 `tensor` 彼此兼容。
+
+同时在 `recipes/<recipe>/skill_tests/tensor-parallel/` 下补 recipe-local 测试：
+
+- `test_spec.yaml`：声明这个 skill 在该 recipe 上要求哪些测试层级。
+- `test_structure.py`：至少验证 recipe import、registry 接线、config schema 校验、
+  required slots，以及 logger/checkpoint hooks；还必须验证用户顶层模型类上的
+  TP 类属性与配置接线存在。
+- `test_runtime.py`：至少成功构建 dataset、collator、model、optimizer、
+  scheduler 和 engine，且不直接启动训练；还必须验证运行时能解析
+  `TP_MODULE_CONFIG` 并执行必需的 postprocessor。
+- `test_smoke.py`：覆盖 1 个真实、recipe-owned 的 single step：forward、loss、
+  backward、optimizer step、logger write，以及 checkpoint noop 或临时保存；
+  还必须验证用户自己的 recipe / model 能在启用 TP 的情况下完成这一步。
+- 优先先把 `tests/test_structure_template.py`、
+  `tests/test_runtime_template.py`、`tests/test_smoke_template.py` 复制到
+  recipe-local skill 目录，再只改 import 区块和 TP 相关断言或 launcher 路径。
+- 由于这个 skill 往往需要分布式 smoke，复制出来的 `test_smoke.py` 应使用
+  `tests/test_smoke_template.py` 里的 `multi_rank_distributed_env(...)`，并把
+  运行模式配置为 Tensor Parallel；如果该 skill 路径或用户偏好要求，也可以和
+  DDP / FSDP2 shard 组合。
+- `test_smoke.py` 必须走该 skill 的完整真实能力路径：真实 engine、真实 recipe
+  入口、真实 TP / launcher / logger / checkpoint 接线；禁止用 monkeypatch、fake
+  wrapper、fake `parallelize_model`、fake process group、fake device mesh 等
+  测试桩把要验证的并行路径短路掉。
+- 如果该 recipe 的 full-capability single-step 只能在多卡或 GPU / 分布式环境下
+  成立，就把 smoke test 写成真实 launcher 测试，并在 `test_spec.yaml` 里把
+  `gpu_preferred` 设为 `true`；不要为了在 CPU 或单进程下跑通而退化成 fake 逻辑。
+
+不要换成与该 recipe 无关的 tiny model。smoke 测试应基于用户自己的 recipe / model
+真实入口，只把配置和 batch 缩到该 recipe 能接受的最小规模。
+
+当你在用户 recipe 上执行这个 skill 时，应默认自动补齐这些测试，不要要求用户自己列出测试文件。
+验证必须且只能交给全新的 subagent，并使用 `fork_context=false`。禁止主 agent
+在本地终端、后台终端会话或其他任何非 subagent shell fallback 中直接运行这些
+`python -m tests.test_skills` 命令。先启动一个 subagent 运行
+`python -m tests.test_skills --recipe <recipe> --skill tensor-parallel --layer structure`，
+只有它通过后，主 agent 才再启动新的 subagent 运行 `--layer runtime`；只有
+runtime 通过后，主 agent 才再启动新的 subagent 运行 `--layer smoke`。最后由
+主 agent 统一汇总三个层级的结果。如果 `test_smoke.py` 因 GPU、分布式启动条件
+或执行权限受限而无法运行，主 agent 直接把准确的 `python -m tests.test_skills`
+命令以及所需 launcher 命令返回给用户。
 
 ## Output
 

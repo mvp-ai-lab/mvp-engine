@@ -108,6 +108,46 @@ for layer in self.layers:
 - recipe-local 测试覆盖了开关、调用和梯度一致性。
 - 实现没有引入仓库级包装器，也没有把不需要梯度的输入作为显式 checkpoint 参数传入。
 
+在 `recipes/<recipe>/skill_tests/gradient-checkpointing/` 下补 recipe-local 测试：
+
+- `test_spec.yaml`：声明这个 skill 在该 recipe 上要求哪些测试层级。
+- `test_structure.py`：至少验证 recipe import、registry 接线、config schema 校验、
+  required slots，以及 logger/checkpoint hooks；还必须验证 enable/disable 开关
+  能正确设置模块状态。
+- `test_runtime.py`：至少成功构建 dataset、collator、model、optimizer、
+  scheduler 和 engine，且不直接启动训练；还必须验证训练时确实调用了
+  checkpoint 函数。
+- `test_smoke.py`：覆盖 1 个真实、recipe-owned 的 single step：forward、loss、
+  backward、optimizer step、logger write，以及 checkpoint noop 或临时保存；
+  还必须验证开启和关闭 checkpointing 时梯度一致。
+- 优先先把 `tests/test_structure_template.py`、
+  `tests/test_runtime_template.py`、`tests/test_smoke_template.py` 复制到
+  recipe-local skill 目录，再只改 import 区块和 checkpointing 相关断言。
+- 如果这个 skill 在目标 recipe 上的 smoke 路径需要分布式执行，复制出来的
+  `test_smoke.py` 应使用 `tests/test_smoke_template.py` 里的
+  `multi_rank_distributed_env(...)`，并根据 skill 要求或用户偏好，把运行模式
+  配置成 DDP、FSDP2 shard、Tensor Parallel 或其他需要的分布式模式。
+- `test_smoke.py` 必须走该 skill 的完整真实能力路径：真实 engine、真实 recipe
+  入口，以及真实 checkpointing / logger / checkpoint 接线；禁止用 monkeypatch、
+  fake checkpoint 函数、fake training step 或类似测试桩把要验证的能力短路掉。
+- 如果该 recipe 的 full-capability single-step 只能在 GPU 或分布式环境下成立，
+  就把 smoke test 写成真实 launcher 测试，并在 `test_spec.yaml` 里把
+  `gpu_preferred` 设为 `true`；不要为了在更弱环境里跑通而退化成 fake 逻辑。
+
+smoke 路径必须走用户自己的 recipe / model 真实入口，只能缩到该 recipe
+自己的最小配置或最小 batch，不能为了测试方便换成一个无关的 tiny demo 模型。
+
+当你在用户 recipe 上执行这个 skill 时，应默认自动补齐这些测试，不要等用户再额外提出。
+验证必须且只能交给全新的 subagent，并使用 `fork_context=false`。禁止主 agent
+在本地终端、后台终端会话或其他任何非 subagent shell fallback 中直接运行这些
+`python -m tests.test_skills` 命令。先启动一个 subagent 运行
+`python -m tests.test_skills --recipe <recipe> --skill gradient-checkpointing --layer structure`，
+只有它通过后，主 agent 才再启动新的 subagent 运行 `--layer runtime`；只有
+runtime 通过后，主 agent 才再启动新的 subagent 运行 `--layer smoke`。最后由
+主 agent 统一汇总三个层级的结果。如果 `test_smoke.py` 因 GPU、分布式启动条件
+或执行权限受限而无法运行，主 agent 直接把准确的 `python -m tests.test_skills`
+命令以及所需附加启动命令返回给用户。
+
 ## Output
 
 - 说明使用的是哪条路径：已有支持还是手动适配。

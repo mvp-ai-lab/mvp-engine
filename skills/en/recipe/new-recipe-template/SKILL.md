@@ -83,19 +83,63 @@ Prefer to run:
 uv run --with ruff ruff check recipes/<recipe_name>
 ```
 
-If tests were generated, run:
-
-```bash
-uv run --with pytest pytest -q recipes/<recipe_name>/tests
-```
-
 ## Validation
 
-- The generated tree contains the expected recipe-local directories and files.
-- The recipe name is `snake_case`, and the engine class uses the matching PascalCase form.
-- Placeholder text was tightened where the scaffold had enough information to do so.
-- `dataset/` and `model/` remain intentionally unimplemented.
-- The generated recipe was compiled and, when feasible, linted and smoke-tested.
+Add recipe-local tests under `recipes/<recipe>/skill_tests/new-recipe-template/`:
+
+- `test_spec.yaml`: declare the required test layers for this applied skill.
+- `test_structure.py`: at least verify recipe import, registry wiring, config
+  schema validation, required slots, and logger/checkpoint hooks; for this
+  scaffold skill it must also verify the generated layout exists, expected files
+  are created, package/module names match the recipe name, and the README/config
+  placeholders were rewritten for the requested recipe.
+- `test_runtime.py`: at least build dataset, collator, model, optimizer,
+  scheduler, and engine successfully without starting training; for this
+  scaffold skill it must also verify the recipe modules import cleanly, the
+  config schema validates, the engine class is registered under the configured
+  name, and the scaffold wiring can be resolved.
+- `test_smoke.py`: cover one real recipe-owned single step: forward, loss,
+  backward, optimizer step, logger write, and checkpoint noop or temporary
+  save, using the scaffold's own entrypoints with the smallest recipe-owned
+  config or batch that still proves the scaffold is connected correctly.
+- Prefer copying `tests/test_structure_template.py`,
+  `tests/test_runtime_template.py`, and `tests/test_smoke_template.py` into the
+  recipe-local skill directory first, then only edit the import block and the
+  minimum scaffold-specific assertions you need.
+- If this skill's smoke path needs distributed execution, the copied
+  `test_smoke.py` should use `multi_rank_distributed_env(...)` from
+  `tests/test_smoke_template.py` and configure the run as DDP, FSDP2 sharding,
+  tensor parallel, or another required mode based on the skill requirement or
+  user preference.
+- `test_smoke.py` must use the full real capability path for this skill: real
+  scaffold recipe entrypoints, real engine wiring, and real logger / checkpoint
+  behavior. Do not short-circuit it with monkeypatch-based fake engines, fake
+  training steps, or similar test-only stand-ins.
+- If the recipe's full-capability single step only makes sense on GPU or
+  distributed hardware, write the smoke test as a real launcher-driven smoke
+  test and set `gpu_preferred: true` in `test_spec.yaml`; do not degrade it
+  into fake logic just to make it run in a weaker environment.
+
+These skill tests are separate from the scaffold's normal `tests/` directory. Keep
+them focused on scaffold correctness, not task-specific training behavior that does
+not exist yet.
+
+Do not swap in an unrelated toy recipe or model for this skill. Use the user's new
+recipe package, config, and engine entrypoints directly, with the smallest
+recipe-owned validation path that still exercises the scaffold landing points.
+
+When executing this skill for a user recipe, add these tests automatically. Do not
+require the user to spell out the test file list. Run validation only in fresh
+subagents with `fork_context=false`. Do not run these `python -m tests.test_skills`
+commands from the main agent's local terminal, background terminal sessions, or
+any other non-subagent shell fallback. First run
+`python -m tests.test_skills --recipe <recipe> --skill new-recipe-template --layer structure`,
+then a new subagent for `--layer runtime` only after structure passes, and then a
+new subagent for `--layer smoke` only after runtime passes. The main agent should
+summarize all three layer results. If `test_smoke.py` is blocked by GPU
+availability, distributed-launch constraints, or permissions, the main agent
+should return the exact `python -m tests.test_skills` command and any required
+launcher command for the user.
 
 ## Output
 

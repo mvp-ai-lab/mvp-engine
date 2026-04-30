@@ -121,6 +121,54 @@ class <TopModelClass>(...):
 - Confirm the callable has an idempotence guard and can be called twice safely.
 - Confirm no generic prefetch DSL, graph helper, or YAML config field was introduced.
 
+Add recipe-local tests under `recipes/<recipe>/skill_tests/fsdp2-prefetching/`:
+
+- `test_spec.yaml`: declare the required test layers for this applied skill.
+- `test_structure.py`: at least verify recipe import, registry wiring, config
+  schema validation, required slots, and logger/checkpoint hooks; it must also
+  verify the top-level model class exposes `APPLY_FSDP2_CUSTOM_PREFETCHING`.
+- `test_runtime.py`: at least build dataset, collator, model, optimizer,
+  scheduler, and engine successfully without starting training; it must also
+  verify runtime calls the hook and the idempotence guard works.
+- `test_smoke.py`: cover one real recipe-owned single step: forward, loss,
+  backward, optimizer step, logger write, and checkpoint noop or temporary
+  save; it must also verify the user's own recipe/model completes that step with
+  FSDP2 prefetching applied.
+- Prefer copying `tests/test_structure_template.py`,
+  `tests/test_runtime_template.py`, and `tests/test_smoke_template.py` into the
+  recipe-local skill directory first, then only edit the import block and the
+  FSDP2-prefetch-specific assertions or launcher path that this skill needs.
+- Because this skill typically needs distributed smoke execution, the copied
+  `test_smoke.py` should use `multi_rank_distributed_env(...)` from
+  `tests/test_smoke_template.py` and configure the run for FSDP2 sharding,
+  optionally combined with DDP or tensor parallel if the skill path requires it
+  or the user explicitly prefers that layout.
+- `test_smoke.py` must use the full real capability path: real engine, real
+  parallelize entry, real FSDP2 wrap / TP / launcher / logger / checkpoint.
+  Do not short-circuit the parallel path with monkeypatch-based fake wrappers,
+  fake `parallelize_model`, fake `fully_shard`, fake process groups, fake
+  device meshes, or similar test-only stand-ins.
+- If the recipe's full-capability single step only makes sense on multi-GPU or
+  distributed hardware, write the smoke test as a real launcher-driven smoke
+  test and set `gpu_preferred: true` in `test_spec.yaml`; do not degrade it
+  into fake logic just to make it run on CPU or single-process setups.
+
+These tests must use the user's recipe/model landing points. Do not replace them
+with an unrelated tiny model just to make the hook easier to test.
+
+When executing this skill for a user recipe, add these tests automatically. Do not
+wait for the user to request them. Run validation only in fresh subagents with
+`fork_context=false`. Do not run these `python -m tests.test_skills` commands
+from the main agent's local terminal, background terminal sessions, or any
+other non-subagent shell fallback. First run
+`python -m tests.test_skills --recipe <recipe> --skill fsdp2-prefetching --layer structure`,
+then a new subagent for `--layer runtime` only after structure passes, and then a
+new subagent for `--layer smoke` only after runtime passes. The main agent should
+summarize all three layer results. If `test_smoke.py` is blocked by GPU
+availability, distributed-launch constraints, or permissions, the main agent
+should return the exact `python -m tests.test_skills` command and any required
+launcher command for the user.
+
 ## Output
 
 - State which model file was added or updated and which
