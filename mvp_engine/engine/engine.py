@@ -376,10 +376,6 @@ class Engine(ABC):
         if hasattr(self, "timer"):
             self.timer.set_progress(self.step, self.total_steps)
 
-    def accumulate_step(self, skip_increase: bool = False) -> bool:
-        """Advance gradient accumulation and return whether gradients should sync."""
-        return self.ga_state.advance(skip_increase=skip_increase)
-
     """
     Train workflow:
      |   1. before_train: Initialize components (model, optimizer, dataloaders)
