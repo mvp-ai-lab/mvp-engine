@@ -193,7 +193,7 @@ def get_recipe_skill_manifest_path(recipe_dir: Path) -> Path:
 def discover_managed_skill_ids(repo_root: Path | None = None) -> list[str]:
     """Return skill ids that should appear in recipe skill manifests by default."""
     repo_root = repo_root or find_repo_root()
-    skills_root = repo_root / "skills" / "en"
+    skills_root = repo_root / "skills"
     skill_ids: set[str] = set()
 
     for category in MANAGED_SKILL_CATEGORIES:
@@ -208,15 +208,10 @@ def discover_managed_skill_ids(repo_root: Path | None = None) -> list[str]:
 
 
 def find_skill_doc_paths(skill_id: str, repo_root: Path | None = None) -> tuple[Path, ...]:
-    """Return known SKILL.md paths for one skill id across supported languages."""
+    """Return known SKILL.md paths for one skill id."""
     repo_root = repo_root or find_repo_root()
-    skill_docs: list[Path] = []
-    for language in ("en", "zh-cn"):
-        language_root = repo_root / "skills" / language
-        if not language_root.exists():
-            continue
-        skill_docs.extend(path.resolve() for path in language_root.glob(f"*/{skill_id}/SKILL.md") if path.is_file())
-    return tuple(sorted(skill_docs))
+    skills_root = repo_root / "skills"
+    return tuple(sorted(path.resolve() for path in skills_root.glob(f"*/{skill_id}/SKILL.md") if path.is_file()))
 
 
 def skill_declares_effectiveness(skill_id: str, repo_root: Path | None = None) -> bool:
@@ -317,7 +312,6 @@ def ensure_manifest_skill_entry(
     if entry["status"] not in MANIFEST_SKILL_STATUSES:
         raise SkillTestSpecError(f"Invalid manifest skill status for '{skill_id}': {entry['status']}")
 
-    entry.setdefault("language", None)
     last_validated = entry.setdefault("last_validated", {})
     if effectiveness_applicable is None:
         effectiveness_applicable = skill_declares_effectiveness(skill_id, repo_root)
@@ -348,7 +342,6 @@ def set_manifest_skill_status(
     skill_id: str,
     *,
     status: str,
-    language: str | None = None,
     layer_results: dict[str, bool] | None = None,
     repo_root: Path | None = None,
 ) -> dict:
@@ -365,8 +358,6 @@ def set_manifest_skill_status(
         effectiveness_applicable=_recipe_skill_effectiveness_applicable(recipe_dir, skill_id),
     )
     entry["status"] = status
-    if language is not None:
-        entry["language"] = language
 
     if layer_results:
         for layer, passed in layer_results.items():
@@ -376,18 +367,6 @@ def set_manifest_skill_status(
 
     save_recipe_skill_manifest(recipe_dir, manifest)
     return manifest
-
-
-def detect_skill_language(skill_id: str, repo_root: Path | None = None) -> str | None:
-    """Infer the preferred language for a skill id from repo docs."""
-    repo_root = repo_root or find_repo_root()
-    zh_path = list((repo_root / "skills" / "zh-cn").glob(f"*/{skill_id}/SKILL.md"))
-    en_path = list((repo_root / "skills" / "en").glob(f"*/{skill_id}/SKILL.md"))
-    if zh_path and not en_path:
-        return "zh-cn"
-    if en_path and not zh_path:
-        return "en"
-    return None
 
 
 def mark_manifest_skill_not_applicable(
@@ -405,7 +384,6 @@ def get_default_skill_test_command(
     recipe_name: str,
     *,
     skill_id: str,
-    language: str | None = None,
     layer: str | None = None,
 ) -> str:
     """Build the default CLI command for recipe-local skill tests."""
@@ -415,8 +393,6 @@ def get_default_skill_test_command(
         raise SkillTestSpecError(f"Unknown test layer '{layer}'.")
 
     parts = ["python", "-m", "tests.test_skills", "--recipe", recipe_name]
-    if language:
-        parts.extend(["--language", language])
     parts.extend(["--skill", skill_id])
     if layer is not None:
         parts.extend(["--layer", layer])
@@ -426,7 +402,6 @@ def get_default_skill_test_command(
 def get_real_env_command(
     spec: RecipeSkillTestSpec,
     *,
-    language: str | None = None,
     layer: str | None = None,
 ) -> str:
     """Resolve the best available real-environment command for a spec."""
@@ -436,7 +411,6 @@ def get_real_env_command(
     return get_default_skill_test_command(
         spec.recipe_name,
         skill_id=spec.skill_id,
-        language=language,
         layer=layer,
     )
 

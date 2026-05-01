@@ -114,12 +114,10 @@ def build_skill_test_command(
     skill_id: str,
     layer: str | None = None,
     recipe_name: str = "magic_transformer",
-    language: str = "zh-cn",
 ) -> str:
     """Return the canonical skill test command for the selected recipe and skill."""
     return skill_testing_util.get_default_skill_test_command(
         recipe_name,
-        language=language,
         skill_id=skill_id,
         layer=layer,
     )
@@ -131,10 +129,9 @@ def require_cuda_gpus_for_skill(
     layer: str,
     count: int,
     recipe_name: str = "magic_transformer",
-    language: str = "zh-cn",
 ) -> None:
     """Raise a real-env requirement when the requested CUDA GPU count is unavailable."""
-    command = build_skill_test_command(skill_id=skill_id, layer=layer, recipe_name=recipe_name, language=language)
+    command = build_skill_test_command(skill_id=skill_id, layer=layer, recipe_name=recipe_name)
     try:
         import torch
     except Exception:

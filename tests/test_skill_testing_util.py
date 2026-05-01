@@ -7,7 +7,7 @@ from mvp_engine.utils import skill_testing_util
 
 def _write_minimal_repo(root: Path, *, skill_body: str) -> Path:
     (root / "pyproject.toml").write_text("[project]\nname = 'tmp-skill-tests'\n", encoding="utf-8")
-    skill_dir = root / "skills" / "en" / "training" / "demo-skill"
+    skill_dir = root / "skills" / "training" / "demo-skill"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(skill_body, encoding="utf-8")
 

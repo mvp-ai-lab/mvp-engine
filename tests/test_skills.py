@@ -24,11 +24,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         required=True,
         help="Recipe name under recipes/ or an explicit recipe directory path.",
     )
-    parser.add_argument(
-        "--language",
-        choices=("en", "zh-cn"),
-        help="Optional skill language to record in the recipe skill manifest.",
-    )
     selector = parser.add_mutually_exclusive_group(required=True)
     selector.add_argument("--skill", help="Run only one recipe-local skill test set.")
     selector.add_argument("--init-manifest", action="store_true", help="Create or sync the recipe skill manifest.")
@@ -64,7 +59,7 @@ def main() -> int:
             raise SkillTestSpecError("--layer can only be used together with --skill.")
 
         if args.skill:
-            result = run_one_skill(recipe_dir, args.skill, language=args.language, layer=args.layer)
+            result = run_one_skill(recipe_dir, args.skill, layer=args.layer)
             print_summary([result])
             return 0 if result.passed else result.returncode
 
@@ -78,13 +73,11 @@ def run_one_skill(
     recipe_dir: Path,
     skill_id: str,
     *,
-    language: str | None = None,
     layer: str | None = None,
 ) -> RunResult:
     spec = skill_testing_util.find_recipe_skill_spec(recipe_dir, skill_id)
-    language = language or skill_testing_util.detect_skill_language(spec.skill_id)
     print(f"[skill] {spec.skill_id} ({spec.recipe_name})")
-    _print_real_env_hint_if_needed(spec, language=language, layer=layer)
+    _print_real_env_hint_if_needed(spec, layer=layer)
 
     required_layers = spec.requirements.required_layers()
     if layer is not None and layer not in required_layers:
@@ -108,13 +101,12 @@ def run_one_skill(
         layer_results = {
             layer_name: (layer_status == "passed")
             for layer_name, layer_status in layer_statuses.items()
-            if layer_name in skill_testing_util.LAYER_ORDER and layer_status != "not_run"
+            if layer_name in skill_testing_util.LAYER_ORDER and layer_status in ("passed", "failed")
         }
         skill_testing_util.set_manifest_skill_status(
             recipe_dir,
             spec.skill_id,
             status=status,
-            language=language,
             layer_results=layer_results,
         )
         if returncode != 0:
@@ -143,13 +135,13 @@ def _format_repo_relative_path(path: Path) -> str:
     return str(path.relative_to(skill_testing_util.find_repo_root(path)))
 
 
-def _print_real_env_hint_if_needed(spec, *, language: str | None, layer: str | None = None) -> None:
+def _print_real_env_hint_if_needed(spec, *, layer: str | None = None) -> None:
     if not spec.requirements.gpu_preferred:
         return
     if not _cuda_unavailable():
         return
 
-    command = skill_testing_util.get_real_env_command(spec, language=language, layer=layer)
+    command = skill_testing_util.get_real_env_command(spec, layer=layer)
     print(
         f"[skill] {spec.skill_id} declares gpu_preferred=true. "
         "If local runtime/smoke/effectiveness tests fail because this environment has no usable GPU, "

@@ -103,12 +103,10 @@ def build_skill_test_command(
     skill_id: str,
     layer: str | None = None,
     recipe_name: str = "magic_transformer",
-    language: str = "en",
 ) -> str:
     """Return the canonical skill test command for this recipe-local skill."""
     return skill_testing_util.get_default_skill_test_command(
         recipe_name,
-        language=language,
         skill_id=skill_id,
         layer=layer,
     )
