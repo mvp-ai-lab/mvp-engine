@@ -9,17 +9,6 @@ Priority reading order:
 1. Read `AGENTS.md` files in the current directory and ancestor directories first
 2. If `CUSTOM.md` exists in the repository, read it as well
 
-## Project Structure & Module Organization
-- `mvp_engine/`: core package.
-- `mvp_engine/engine/`: training orchestration and engine base classes.
-- `mvp_engine/dataset/`: dataset builders and data pipeline utilities.
-- `mvp_engine/distributed/` and `mvp_engine/utils/`: distributed/runtime helpers and other utilities.
-- `skills/`: agent skills — structured guides for tasks that have clear patterns but cannot be generalized into a single API (for example gradient checkpointing, FSDP wrap policies). Organized by category (`training/`, `parallel/`, `model/`, `data/`, `debug/`, `recipe/`, `experiment/`, `config/`, `git`, `skills/`). See `skills/README.md` for overview and design rationale.
-- `recipes/`: experiment-specific engines, models, datasets, and Hydra YAML configs (for example `recipes/vit_classification/configs/`).
-- `tests/`: pytest suite (`test_*.py`) and shared fixtures (`conftest.py`).
-- `tools/dataviewer/`: local data viewer app.
-- `assets/`, `data/`, `outputs/`, `pretrained/`: static assets, local data links, run artifacts, and model weights.
-
 ## Repository Purpose
 
 This repository contains the core engine, shared utilities, and experiment-specific configurations for training multimodal models. The main components are:
@@ -111,22 +100,3 @@ Recipe-local test rules:
   - key changes
   - validation commands
   - config impacts
-
-### Skill Test
-- When a task explicitly or implicitly applies a skill, the agent must treat that skill's validation and test requirements as mandatory completion criteria rather than optional guidance.
-- Before any skill-related validation work, read the `Recipe-Local Skill Tests` section in `skills/README.md` and follow that workflow before proceeding.
-- Skill-required validation must be executed using the exact workflow defined by the skill and the repository's skill-testing conventions, including recipe-local artifacts such as `skill_tests/skill_manifest.yaml`, `skill_tests/<skill-id>/test_spec.yaml`, and the required `structure` / `runtime` / `smoke` layers when the skill calls for them.
-- Default to no local preflight before skill validation. Do not add a local pre-check unless it is narrowly scoped, quick, and likely to catch an obvious non-skill issue such as a syntax error, import error, or malformed test file.
-- Never run a full local dry run of the skill's `structure`, `runtime`, or `smoke` layer before launching the required subagent validation. In particular, do not locally pre-run the same recipe-local skill test files or launcher path just to "check first".
-- If a local preflight is truly necessary, keep it to the minimum needed to unblock the real validation flow, stop after the first useful signal, and do not treat it as part of the reported skill-validation result.
-- Run all validation only in fresh subagents with `fork_context=false`. Do not run these `python -m tests.test_skills` commands from the main agent's local terminal, background terminal sessions, or any other non-subagent shell fallback.
-- Ordinary unit tests, ad hoc `pytest` runs, or partial smoke checks do not substitute for skill validation unless the skill documentation explicitly allows that substitution.
-- A skill-driven task is not complete until the required skill validation has been run and passed, or the environment limitation has been identified precisely and reported together with the exact command the user should run in a real environment.
-- When skill validation fails, do not mark the work complete, do not manually override the manifest to a passing state, and do not omit the failing layer from the reported validation result.
-- Skill-related validation should prefer the real GPU execution path whenever the skill or recipe meaningfully depends on accelerator, distributed, launcher, logger, checkpoint, or parallel behavior; do not default to CPU-only or single-process `gloo` as a convenience fallback. Do not silently replace a GPU-expected `runtime` or `smoke` test with a weaker CPU variant just to get a local pass. Only use a CPU fallback when the skill documentation explicitly allows it and the CPU path still validates the same required capability.
-- If the required GPU or distributed environment is unavailable, do not invent a downgraded local substitute. Report the limitation precisely and print the exact `python -m tests.test_skills ...`, launcher, and any required environment commands the user should run in a real GPU environment instead.
-
-## Commit & Pull Request Guidelines
-- Follow existing history style: short, imperative subjects with prefixes like `feat:`, `fix:`, `chore:`, `enhance:`.
-- Reference related issues/PRs when applicable (for example `(#9)`).
-- PRs should include: purpose, key changes, validation commands run, and config impacts. Add screenshots only for UI/data-viewer changes.
