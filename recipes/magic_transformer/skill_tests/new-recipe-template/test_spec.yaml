@@ -3,4 +3,5 @@ requires:
   structure: true
   runtime: true
   smoke: true
+  effectiveness: false
   gpu_preferred: false

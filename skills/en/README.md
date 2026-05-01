@@ -99,13 +99,16 @@ recipes/<recipe>/
         ├── test_spec.yaml
         ├── test_structure.py
         ├── test_runtime.py
-        └── test_smoke.py
+        ├── test_smoke.py
+        └── test_effectiveness.py  # optional, only when the skill declares effectiveness checks
 ```
 
 - `skill_tests/skill_manifest.yaml` tracks recipe-relevant training skills with statuses such as
   `pending`, `applied`, `failed`, and `not_applicable`, plus per-layer validation
   results for each individual skill.
 - `test_spec.yaml` declares which layers are required for that applied skill.
+  Always set `requires.effectiveness` explicitly to `true` or `false` based on
+  whether the source `SKILL.md` references `test_effectiveness.py`.
 - Tests must exercise the user's real recipe/model entrypoints with a minimal
   recipe-owned config or batch, not a separate toy model unrelated to that recipe.
 - `test_structure.py` should at least verify recipe import, registry wiring, config
@@ -114,6 +117,12 @@ recipes/<recipe>/
   engine successfully, but it does not need to run training.
 - `test_smoke.py` should cover one real step: forward, loss, backward, optimizer
   step, logger write, and checkpoint noop or temporary save.
+- `test_effectiveness.py` is optional. Add it only when the corresponding
+  `SKILL.md` explicitly references `test_effectiveness.py`, usually to compare
+  the before/after behavior or measurable capability the skill is meant to
+  improve. Skills without that description should set
+  `requires.effectiveness: false` and record
+  `last_validated.effectiveness: not_applicable` in the manifest.
 - Recipe-local skill tests should import recipe modules through the explicit
   repository package path, such as `from recipes.<recipe>.configs.schema import ...`.
   Do not create `recipes/<recipe>/skill_tests/conftest.py` just to mutate `sys.path`
@@ -134,15 +143,18 @@ recipes/<recipe>/
   main agent's local terminal, background terminal sessions, or any other
   non-subagent shell fallback.
 - Run `--layer structure` in one fresh subagent, wait for it to pass, then run
-  `--layer runtime` in a new fresh subagent, and only then run `--layer smoke`
-  in another new fresh subagent.
+  `--layer runtime` in a new fresh subagent, then `--layer smoke`, and finally
+  `--layer effectiveness` when that layer is declared by the skill.
 - The user should not need to ask for these tests explicitly. When an agent applies
   a skill to a user recipe, it should also add the matching recipe-local tests and
   try to run them by default.
-- The agent should also initialize or update `skill_tests/skill_manifest.yaml` automatically,
-  and leave a skill as `applied` once that skill's recipe-local tests succeed.
-- The main agent should summarize the `structure` / `runtime` / `smoke` outcomes
-  after those subagents finish.
+- The agent should also initialize or update `skill_tests/skill_manifest.yaml`
+  automatically, and leave a skill as `applied` once all required recipe-local
+  layers succeed. If a skill declares effectiveness checks, all four layers must
+  pass before the skill is `applied`.
+- The main agent should summarize the `structure` / `runtime` / `smoke` /
+  `effectiveness` outcomes after those subagents finish, with effectiveness
+  shown as `not_applicable` for skills that do not define it.
 - If `test_smoke.py` needs GPU resources, distributed launch conditions, or higher
   execution permissions and those are not currently available, the main agent
   should report the exact command for the user instead of asking the user to

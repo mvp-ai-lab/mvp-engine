@@ -152,7 +152,7 @@ def _print_real_env_hint_if_needed(spec, *, language: str | None, layer: str | N
     command = skill_testing_util.get_real_env_command(spec, language=language, layer=layer)
     print(
         f"[skill] {spec.skill_id} declares gpu_preferred=true. "
-        "If local runtime/smoke tests fail because this environment has no usable GPU, "
+        "If local runtime/smoke/effectiveness tests fail because this environment has no usable GPU, "
         "run them in a real environment with:\n"
         f"  {command}"
     )

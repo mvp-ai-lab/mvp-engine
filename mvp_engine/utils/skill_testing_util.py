@@ -21,14 +21,16 @@ import yaml
 SKILL_TESTS_DIRNAME = "skill_tests"
 SPEC_FILENAME = "test_spec.yaml"
 MANIFEST_FILENAME = "skill_manifest.yaml"
-LAYER_ORDER = ("structure", "runtime", "smoke")
-MANIFEST_LAYER_STATUSES = ("not_run", "passed", "failed")
+LAYER_ORDER = ("structure", "runtime", "smoke", "effectiveness")
+MANIFEST_LAYER_STATUSES = ("not_run", "passed", "failed", "not_applicable")
 MANIFEST_SKILL_STATUSES = ("pending", "applied", "failed", "not_applicable")
 MANAGED_SKILL_CATEGORIES = ("training", "parallel", "model", "recipe")
+EFFECTIVENESS_MARKERS = ("test_effectiveness.py",)
 DEFAULT_LAYER_FILES = {
     "structure": ("test_structure.py",),
     "runtime": ("test_runtime.py",),
     "smoke": ("test_smoke.py",),
+    "effectiveness": ("test_effectiveness.py",),
 }
 
 
@@ -54,6 +56,7 @@ class SkillTestRequirements:
     structure: bool = True
     runtime: bool = False
     smoke: bool = False
+    effectiveness: bool = False
     gpu_preferred: bool = False
 
     @classmethod
@@ -64,7 +67,7 @@ class SkillTestRequirements:
 
         defaults = cls()
         normalized = {}
-        for key in ("structure", "runtime", "smoke", "gpu_preferred"):
+        for key in ("structure", "runtime", "smoke", "effectiveness", "gpu_preferred"):
             normalized[key] = bool(raw_dict.get(key, getattr(defaults, key)))
         return cls(**normalized)
 
@@ -204,6 +207,27 @@ def discover_managed_skill_ids(repo_root: Path | None = None) -> list[str]:
     return sorted(skill_ids)
 
 
+def find_skill_doc_paths(skill_id: str, repo_root: Path | None = None) -> tuple[Path, ...]:
+    """Return known SKILL.md paths for one skill id across supported languages."""
+    repo_root = repo_root or find_repo_root()
+    skill_docs: list[Path] = []
+    for language in ("en", "zh-cn"):
+        language_root = repo_root / "skills" / language
+        if not language_root.exists():
+            continue
+        skill_docs.extend(path.resolve() for path in language_root.glob(f"*/{skill_id}/SKILL.md") if path.is_file())
+    return tuple(sorted(skill_docs))
+
+
+def skill_declares_effectiveness(skill_id: str, repo_root: Path | None = None) -> bool:
+    """Return whether the skill documentation declares an effectiveness test layer."""
+    for skill_doc in find_skill_doc_paths(skill_id, repo_root):
+        text = skill_doc.read_text(encoding="utf-8").lower()
+        if any(marker in text for marker in EFFECTIVENESS_MARKERS):
+            return True
+    return False
+
+
 def initialize_recipe_skill_manifest(recipe_dir: Path, repo_root: Path | None = None) -> dict:
     """Create or sync the recipe skill manifest and return its contents."""
     repo_root = repo_root or find_repo_root(recipe_dir)
@@ -220,7 +244,15 @@ def initialize_recipe_skill_manifest(recipe_dir: Path, repo_root: Path | None = 
     manifest.setdefault("skills", {})
 
     for skill_id in discover_managed_skill_ids(repo_root):
-        ensure_manifest_skill_entry(manifest, skill_id)
+        ensure_manifest_skill_entry(manifest, skill_id, repo_root=repo_root)
+
+    for spec in discover_recipe_skill_specs(recipe_dir):
+        ensure_manifest_skill_entry(
+            manifest,
+            spec.skill_id,
+            repo_root=repo_root,
+            effectiveness_applicable=spec.requirements.effectiveness,
+        )
 
     save_recipe_skill_manifest(recipe_dir, manifest)
     return manifest
@@ -247,7 +279,15 @@ def load_recipe_skill_manifest(
     manifest.setdefault("skills", {})
 
     for skill_id in discover_managed_skill_ids(repo_root):
-        ensure_manifest_skill_entry(manifest, skill_id)
+        ensure_manifest_skill_entry(manifest, skill_id, repo_root=repo_root)
+
+    for spec in discover_recipe_skill_specs(recipe_dir):
+        ensure_manifest_skill_entry(
+            manifest,
+            spec.skill_id,
+            repo_root=repo_root,
+            effectiveness_applicable=spec.requirements.effectiveness,
+        )
 
     save_recipe_skill_manifest(recipe_dir, manifest)
     return manifest
@@ -263,7 +303,13 @@ def save_recipe_skill_manifest(recipe_dir: Path, manifest: dict) -> None:
     )
 
 
-def ensure_manifest_skill_entry(manifest: dict, skill_id: str) -> dict:
+def ensure_manifest_skill_entry(
+    manifest: dict,
+    skill_id: str,
+    *,
+    repo_root: Path | None = None,
+    effectiveness_applicable: bool | None = None,
+) -> dict:
     """Ensure a manifest contains a normalized entry for one skill."""
     skills = manifest.setdefault("skills", {})
     entry = skills.setdefault(skill_id, {})
@@ -273,8 +319,22 @@ def ensure_manifest_skill_entry(manifest: dict, skill_id: str) -> dict:
 
     entry.setdefault("language", None)
     last_validated = entry.setdefault("last_validated", {})
+    if effectiveness_applicable is None:
+        effectiveness_applicable = skill_declares_effectiveness(skill_id, repo_root)
+
     for layer in LAYER_ORDER:
-        last_validated.setdefault(layer, "not_run")
+        if layer == "effectiveness":
+            default_status = "not_run" if effectiveness_applicable else "not_applicable"
+            current_status = last_validated.get(layer)
+            if current_status is None:
+                last_validated[layer] = default_status
+            elif effectiveness_applicable and current_status == "not_applicable":
+                last_validated[layer] = "not_run"
+            elif not effectiveness_applicable:
+                last_validated[layer] = "not_applicable"
+        else:
+            last_validated.setdefault(layer, "not_run")
+
         if last_validated[layer] not in MANIFEST_LAYER_STATUSES:
             raise SkillTestSpecError(
                 f"Invalid manifest validation status for '{skill_id}.{layer}': {last_validated[layer]}"
@@ -298,7 +358,12 @@ def set_manifest_skill_status(
 
     repo_root = repo_root or find_repo_root(recipe_dir)
     manifest = load_recipe_skill_manifest(recipe_dir, repo_root)
-    entry = ensure_manifest_skill_entry(manifest, skill_id)
+    entry = ensure_manifest_skill_entry(
+        manifest,
+        skill_id,
+        repo_root=repo_root,
+        effectiveness_applicable=_recipe_skill_effectiveness_applicable(recipe_dir, skill_id),
+    )
     entry["status"] = status
     if language is not None:
         entry["language"] = language
@@ -416,6 +481,13 @@ def _load_manifest_file(manifest_path: Path) -> dict:
     if not isinstance(payload, dict):
         raise SkillTestSpecError(f"Manifest must be a mapping: {manifest_path}")
     return payload
+
+
+def _recipe_skill_effectiveness_applicable(recipe_dir: Path, skill_id: str) -> bool | None:
+    spec_path = recipe_dir / SKILL_TESTS_DIRNAME / skill_id / SPEC_FILENAME
+    if not spec_path.exists():
+        return None
+    return load_recipe_skill_spec(spec_path).requirements.effectiveness
 
 
 def _normalize_string_list(raw: object) -> tuple[str, ...]:

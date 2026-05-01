@@ -138,7 +138,8 @@ parallel:
 
 同时在 `recipes/<recipe>/skill_tests/tensor-parallel/` 下补 recipe-local 测试：
 
-- `test_spec.yaml`：声明这个 skill 在该 recipe 上要求哪些测试层级。
+- `test_spec.yaml`：声明这个 skill 在该 recipe 上要求哪些测试层级，并包含
+  `requires.effectiveness: true`。
 - `test_structure.py`：至少验证 recipe import、registry 接线、config schema 校验、
   required slots，以及 logger/checkpoint hooks；还必须验证用户顶层模型类上的
   TP 类属性与配置接线存在。
@@ -148,6 +149,14 @@ parallel:
 - `test_smoke.py`：覆盖 1 个真实、recipe-owned 的 single step：forward、loss、
   backward、optimizer step、logger write，以及 checkpoint noop 或临时保存；
   还必须验证用户自己的 recipe / model 能在启用 TP 的情况下完成这一步。
+- test_effectiveness.py: 参考 `tests/test_smoke_template.py` 创建 recipe-local
+  `test_effectiveness.py`，增加一个新的方法，例如
+  `assert_tp_tensor_dims_match_mesh(model, reference_shapes, tp_config, mesh)`。
+  比较每个被 TP plan 覆盖的参数 local shape 与并行前 reference shape。mesh
+  的 `tensor` size 作为 `tp_size`。`"col"` 检查 col 切分维度，分母是
+  `tp_size`。`"row"` 检查 row 切分维度，如果同时启用 FSDP2 sharding，分母是 `tp_size * fsdp_shard_size`。
+  如果参数是 DTensor，用 `param.to_local().shape` 比较；否则用 `param.shape`。
+  当 TP plan 覆盖的所有参数 local shape 都符合预期时，可视为 effectiveness 测试通过。
 - 优先先把 `tests/test_structure_template.py`、
   `tests/test_runtime_template.py`、`tests/test_smoke_template.py` 复制到
   recipe-local skill 目录，再只改 import 区块和 TP 相关断言或 launcher 路径。
@@ -172,10 +181,11 @@ parallel:
 `python -m tests.test_skills` 命令。先启动一个 subagent 运行
 `python -m tests.test_skills --recipe <recipe> --skill tensor-parallel --layer structure`，
 只有它通过后，主 agent 才再启动新的 subagent 运行 `--layer runtime`；只有
-runtime 通过后，主 agent 才再启动新的 subagent 运行 `--layer smoke`。最后由
-主 agent 统一汇总三个层级的结果。如果 `test_smoke.py` 因 GPU、分布式启动条件
-或执行权限受限而无法运行，主 agent 直接把准确的 `python -m tests.test_skills`
-命令以及所需 launcher 命令返回给用户。
+runtime 通过后，主 agent 才再启动新的 subagent 运行 `--layer smoke`；只有
+smoke 通过后，再启动新的 subagent 运行 `--layer effectiveness`。最后由
+主 agent 统一汇总四个层级的结果。如果 `test_smoke.py` 或
+`test_effectiveness.py` 因 GPU、分布式启动条件或执行权限受限而无法运行，主 agent
+直接把准确的 `python -m tests.test_skills` 命令以及所需 launcher 命令返回给用户。
 
 ## Output
 
