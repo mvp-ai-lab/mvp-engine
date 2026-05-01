@@ -269,21 +269,23 @@ class Engine(ABC):
         # Check if checkpoints directory exists
         checkpoints_dir.mkdir(parents=True, exist_ok=True)
 
-        # Keep only last N checkpoints
-        if is_main_process():
-            all_checkpoints = os.listdir(str(checkpoints_dir))
-            if len(all_checkpoints) >= self.config.checkpoint.keep_n:
-                checkpoint_paths = sorted(
-                    all_checkpoints,
-                    key=lambda dir: int(dir.split("_")[-1]),
-                )
-                delete_n = len(checkpoint_paths) - self.config.checkpoint.keep_n + 1
-                for delete_path in checkpoint_paths[:delete_n]:
-                    shutil.rmtree(checkpoints_dir / delete_path)
-
         cur_checkpoint_dir = checkpoints_dir / (
             f"iter_{self.step}" if self.loop_policy == "iter" else f"epoch_{self.epoch}"
         )
+
+        # Keep only last N checkpoints
+        if is_main_process():
+            all_checkpoints = os.listdir(str(checkpoints_dir))
+            checkpoint_paths = sorted(
+                all_checkpoints,
+                key=lambda dir: int(dir.split("_")[-1]),
+            )
+            checkpoint_paths = [path for path in checkpoint_paths if path != cur_checkpoint_dir.name]
+            keep_existing_n = self.config.checkpoint.keep_n - 1
+            delete_n = max(len(checkpoint_paths) - keep_existing_n, 0)
+            for delete_path in checkpoint_paths[:delete_n]:
+                shutil.rmtree(checkpoints_dir / delete_path)
+
         cur_checkpoint_dir.mkdir(parents=True, exist_ok=True)
         torch.distributed.barrier()
 

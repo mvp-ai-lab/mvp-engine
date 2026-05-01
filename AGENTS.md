@@ -9,7 +9,7 @@ This repository contains the core training engine and utilities for vision and l
 - `mvp_engine/engine/`: training orchestration and engine base classes.
 - `mvp_engine/dataset/`: dataset builders and data pipeline utilities.
 - `mvp_engine/distributed/` and `mvp_engine/utils/`: distributed/runtime helpers and other utilities.
-- `skills/`: agent skills — structured guides for tasks that have clear patterns but cannot be generalized into a single API (for example gradient checkpointing, FSDP wrap policies). Organized by language (`en/`, `zh-cn/`) and category (`training/`, `parallel/`, `model/`, `data/`, `debug/`, `recipe/`). See `skills/README.md` for overview and `skills/en/README.md` or `skills/zh-cn/README.md` for design rationale.
+- `skills/`: agent skills — structured guides for tasks that have clear patterns but cannot be generalized into a single API (for example gradient checkpointing, FSDP wrap policies). Organized by category (`training/`, `parallel/`, `model/`, `data/`, `debug/`, `recipe/`, `experiment/`, `config/`, `git/`, `skills/`). See `skills/README.md` for overview and design rationale.
 - `recipes/`: experiment-specific engines, models, datasets, and Hydra YAML configs (for example `recipes/vit_classification/configs/`).
 - `tests/`: pytest suite (`test_*.py`) and shared fixtures (`conftest.py`).
 - `tools/dataviewer/`: local data viewer app.
@@ -46,7 +46,7 @@ This repository contains the core training engine and utilities for vision and l
 
 ### Skill Test
 - When a task explicitly or implicitly applies a skill, the agent must treat that skill's validation and test requirements as mandatory completion criteria rather than optional guidance.
-- Before any skill-related validation work, read the `Recipe-Local Skill Tests` section in `skills/en/README.md` and follow that workflow before proceeding.
+- Before any skill-related validation work, read the `Recipe-Local Skill Tests` section in `skills/README.md` and follow that workflow before proceeding.
 - Skill-required validation must be executed using the exact workflow defined by the skill and the repository's skill-testing conventions, including recipe-local artifacts such as `skill_tests/skill_manifest.yaml`, `skill_tests/<skill-id>/test_spec.yaml`, and the required `structure` / `runtime` / `smoke` / optional `effectiveness` layers when the skill calls for them.
 - Default to no local preflight before skill validation. Do not add a local pre-check unless it is narrowly scoped, quick, and likely to catch an obvious non-skill issue such as a syntax error, import error, or malformed test file.
 - Never run a full local dry run of the skill's `structure`, `runtime`, `smoke`, or `effectiveness` layer before launching the required subagent validation. In particular, do not locally pre-run the same recipe-local skill test files or launcher path just to "check first".
