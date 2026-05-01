@@ -164,7 +164,7 @@ Add recipe-local tests under `recipes/<recipe>/skill_tests/tensor-parallel/`:
   backward, optimizer step, logger write, and checkpoint noop or temporary
   save; it must also verify the user's own recipe/model completes that step with
   tensor parallel enabled.
-- test_effectiveness.py: create the recipe-local `test_effectiveness.py` from
+- `test_effectiveness.py`: create the recipe-local `test_effectiveness.py` from
   `tests/test_smoke_template.py`, then add a method such as
   `assert_tp_tensor_dims_match_mesh(model, reference_shapes, tp_config, mesh)`.
   Compare each TP-covered parameter's local shape against its pre-parallel
