@@ -1,0 +1,1 @@
+"""Magic Transformer recipe package."""

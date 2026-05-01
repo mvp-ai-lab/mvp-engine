@@ -18,7 +18,7 @@ from transformers.utils.logging import disable_progress_bar
 
 from mvp_engine.distributed.parallelize import parallelize_model
 from mvp_engine.distributed.utils import get_data_parallel_world_size, is_main_process
-from mvp_engine.engine import ENGINE_REGISTRY, Engine
+from mvp_engine.engine import ENGINE_REGISTRY, Engine, TrainStepContext
 from mvp_engine.utils.log import logger
 from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
@@ -326,13 +326,14 @@ class OpenbeeEngine(Engine):
             collate_fn=collate_fn,
         )
 
-    def train_pre_step(self, data: ModelInputs) -> ModelInputs:
+    def train_pre_step(self, ctx: TrainStepContext) -> TrainStepContext:
         """Prepare one micro-batch for forward.
 
         This counts total and shifted-label supervised tokens before moving
         tensors to the local device, prepares packed attention inputs, and casts
         visual tensors to the active mixed-precision dtype.
         """
+        data: ModelInputs = ctx.data
         data["total_token_num"] = int(data["attention_mask"].sum().item())
         shifted_labels = F.pad(data["labels"], (0, 1), value=-100)[..., 1:]
         data["effective_token_num"] = int((shifted_labels != -100).sum().item())
@@ -355,15 +356,17 @@ class OpenbeeEngine(Engine):
             value = batch.get(key)
             if isinstance(value, torch.Tensor) and torch.is_floating_point(value):
                 batch[key] = value.to(dtype=self.dtype)
-        return batch
+        ctx.data = batch
+        return ctx
 
-    def train_one_step(self, data: ModelInputs) -> dict[str, Any]:
+    def forward_step(self, ctx: TrainStepContext) -> None:
         """Run one forward pass and collect micro-batch training metrics.
 
         The patched model returns unreduced per-token CE loss. Token counts and
-        local FLOPs are carried into ``train_after_step`` for accumulation-window
+        local FLOPs are carried into later hooks for accumulation-window
         reduction and logging.
         """
+        data: ModelInputs = ctx.data
         with torch.autocast(
             device_type=self.device_type,
             dtype=self.dtype,
@@ -371,7 +374,7 @@ class OpenbeeEngine(Engine):
         ):
             outputs = self.model(**data)
 
-        return {
+        ctx.outputs = {
             "loss": outputs.loss,
             "logs": {
                 "train/loss": 0.0,
@@ -392,19 +395,19 @@ class OpenbeeEngine(Engine):
             ),
         }
 
-    def train_after_step(self, outputs: dict[str, Any]) -> dict[str, Any]:
-        """Backward one micro-batch and step/log at accumulation boundaries.
+    def backward_step(self, ctx: TrainStepContext) -> None:
+        """Backward one micro-batch with delayed global token normalization.
 
         Per-token loss is backpropagated immediately with a fixed provisional
         divisor so data loading can overlap with GPU work. At the sync micro
-        step, accumulated gradients are rescaled by the reduced global supervised
-        token count before clipping and optimizer stepping. Loss-guarded spike
-        micro-batches contribute zero loss to both gradients and logs.
+        step, accumulated gradients are rescaled by the reduced global supervised token count.
         """
+        outputs = ctx.outputs
+        assert outputs is not None, "The forward step must populate ctx.outputs."
         assert "loss" in outputs, "The model output must contain 'loss' key."
         assert "logs" in outputs, "The model output must contain 'logs' key."
 
-        is_sync = self.accumulate_step()
+        ctx.should_sync = self.ga_state.advance()
 
         # 1. Read this micro-step's local token/loss/flops.
         local_micro_loss_sum = outputs["loss"].sum()
@@ -437,13 +440,16 @@ class OpenbeeEngine(Engine):
             model_flops=float(outputs["model_flops"]),
         )
 
-        with accumulate_gradients(self.model, sync=is_sync):
-            self.scaler.scale(loss).backward()
+        outputs["backward_loss_divisor"] = backward_loss_divisor
+        ctx.loss = loss
+        with accumulate_gradients(self.model, sync=ctx.should_sync):
+            self.scaler.scale(ctx.loss).backward()
 
-        if not is_sync:
-            return outputs
+    def optimizer_step(self, ctx: TrainStepContext) -> None:
+        """Scale accumulated gradients by global tokens and apply the optimizer step."""
+        if not ctx.should_sync:
+            return
 
-        # 3. Resolve the final global token denominator, then normalize accumulated gradients.
         self.metric_accumulator.reduce_all()
         global_total_token_count = int(self.metric_accumulator.total_token_count.global_value)
         global_loss_token_count = int(self.metric_accumulator.loss_token_count.global_value)
@@ -451,6 +457,9 @@ class OpenbeeEngine(Engine):
             raise ValueError("Accumulation window must contain at least one supervised token.")
 
         self.scaler.unscale_(self.optimizer)
+        outputs = ctx.outputs
+        assert outputs is not None, "The forward step must populate ctx.outputs."
+        backward_loss_divisor = int(outputs["backward_loss_divisor"])
         gradient_scale = float(backward_loss_divisor) * float(self.dp_world_size) / float(global_loss_token_count)
         with torch.no_grad():
             for parameter in self.model.parameters():
@@ -469,31 +478,50 @@ class OpenbeeEngine(Engine):
         self.scheduler.step()
         self.optimizer.zero_grad(set_to_none=True)
 
+        ctx.outputs["global_total_token_count"] = global_total_token_count
+        ctx.outputs["global_loss_token_count"] = global_loss_token_count
+        ctx.outputs["global_loss_sum"] = self.metric_accumulator.loss_sum.global_value
+        ctx.outputs["model_flops_per_step"] = self.metric_accumulator.model_flops.local_value
+        ctx.outputs["step_lrs"] = step_lrs
+        ctx.optimizer_step_completed = True
+
+    def train_post_step(self, ctx: TrainStepContext) -> None:
+        """Log one synchronized optimizer step and save checkpoints."""
+        if not ctx.optimizer_step_completed:
+            return
+
+        outputs = ctx.outputs
+        assert outputs is not None, "The forward step must populate ctx.outputs."
+
         self.step += 1
         self.timer.tick()
+        step_time_seconds = float(self.timer.progress_time_latest)
+        global_total_token_count = int(outputs["global_total_token_count"])
+        global_loss_token_count = int(outputs["global_loss_token_count"])
+        global_loss_sum = outputs["global_loss_sum"]
 
-        # 5. Write one optimizer-step log record.
-        global_loss_sum = self.metric_accumulator.loss_sum.global_value
         outputs["logs"]["train/loss"] = float(global_loss_sum / int(global_loss_token_count))
         outputs["logs"].update(
             {
                 "eta": self.timer.eta_string,
-                "perf/batch_time": self.timer.batch_time,
-                "perf/toks_per_sec": global_loss_token_count / self.timer.batch_time,
+                "perf/batch_time": step_time_seconds,
+                "perf/data_time": self.timer.get_scope_time("data_time"),
+                "perf/exec_time": self.timer.get_scope_time("exec_time"),
+                "perf/toks_per_sec": global_loss_token_count / step_time_seconds if step_time_seconds > 0 else 0.0,
                 "tokens/global_total": global_total_token_count,
                 "tokens/global_loss": global_loss_token_count,
             }
         )
         outputs["logs"].update(
             build_mfu_log(
-                model_flops_per_step=self.metric_accumulator.model_flops.local_value,
+                model_flops_per_step=outputs["model_flops_per_step"],
                 device_type=self.device.type,
                 precision=str(self.config.optim.mixed_precision),
-                step_time_seconds=float(self.timer.batch_time_latest),
+                step_time_seconds=step_time_seconds,
             )
         )
 
-        for i, lr in enumerate(step_lrs):
+        for i, lr in enumerate(outputs["step_lrs"]):
             outputs["logs"][f"lr/group_{i}"] = lr
 
         logger.log_metrics(
@@ -505,5 +533,3 @@ class OpenbeeEngine(Engine):
         self.metric_accumulator.reset()
 
         self.save()
-
-        return outputs

@@ -3,6 +3,7 @@
 import math
 from collections.abc import Iterable
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Generator, Union
 
 import torch
@@ -110,6 +111,24 @@ def _get_grad_mesh_key(grad: torch.Tensor) -> tuple:
         tuple(mesh.mesh_dim_names or ()),
         _get_dtensor_placements_key(grad),
     )
+
+
+@dataclass
+class GradientAccumulationState:
+    """Track micro-batch progress within a gradient accumulation window."""
+
+    gradient_accumulation_steps: int
+    micro_step: int = 0
+
+    def advance(self, skip_increase: bool = False) -> bool:
+        """Advance one micro-batch and return whether gradients should sync."""
+        if not skip_increase:
+            self.micro_step += 1
+
+        if self.micro_step % self.gradient_accumulation_steps == 0:
+            self.micro_step = 0
+            return True
+        return False
 
 
 @contextmanager
