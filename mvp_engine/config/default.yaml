@@ -19,6 +19,7 @@ runtime:
 log:
   interval: 20
   backends: ["terminal", "file"]
+  accumulation_size: null
   timer_window_size: 100
 
 parallel:
@@ -43,3 +44,4 @@ loop:
 checkpoint:
   keep_n: 5
   interval: 5000
+  hf_enable: false

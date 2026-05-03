@@ -54,15 +54,26 @@ class Logger:
         interval: Default aggregation interval (passed to MetricAggregator).
     """
 
-    def __init__(self, backends: List[Backend], interval: int = 20, level: LogLevel = LogLevel.INFO) -> None:
+    def __init__(
+        self,
+        backends: List[Backend],
+        interval: int = 20,
+        accumulation_size: int = 20,
+        level: LogLevel = LogLevel.INFO,
+    ) -> None:
         if get_world_size() > 1:
             os.environ["GLOO_LOG_LEVEL"] = "ERROR"
             gloo_group = dist.new_group(backend="gloo")
         else:
             gloo_group = None
 
-        self.metrics = MetricAggregator(dist_group=gloo_group, default_interval=interval)
+        self.metrics = MetricAggregator(
+            dist_group=gloo_group,
+            default_interval=interval,
+            default_accumulation_size=accumulation_size,
+        )
         self.step: int = 0
+        self.total_steps: Optional[int] = None
         self.backends: List[Backend] = backends
         self.level: LogLevel = level
 
@@ -79,12 +90,12 @@ class Logger:
         """Collect all metrics and forward them using the last known step."""
         collected = self.metrics.collect_all()
         for backend in self.backends:
-            backend.log_metrics(collected, self.step)
+            backend.log_metrics(collected, self.step, total_steps=self.total_steps)
 
     def add_metric(
         self,
         name: str,
-        accumulation_size: int = 20,
+        accumulation_size: Optional[int] = None,
         interval: Optional[int] = None,
         distributed: Optional[bool] = None,
         support_nan: bool = True,
@@ -109,7 +120,7 @@ class Logger:
     def add_metrics(
         self,
         names: List[str],
-        accumulation_size: int = 20,
+        accumulation_size: Optional[int] = None,
         interval: Optional[int] = None,
         distributed: Optional[bool] = None,
         support_nan: bool = True,
@@ -129,6 +140,7 @@ class Logger:
         metrics: Mapping[str, Union[int, float, str, torch.Tensor]],
         step: int,
         epoch: Optional[int] = None,
+        total_steps: Optional[int] = None,
     ) -> None:
         """Update aggregator with new values and forward aggregated metrics.
 
@@ -136,15 +148,18 @@ class Logger:
             metrics: Mapping of metric names to latest observed values.
             step: Current training step.
             epoch: Optional epoch index.
+            total_steps: Optional total number of training steps for progress display.
         """
         self.metrics.update(metrics)
         self.step = step
+        effective_total_steps = total_steps if total_steps is not None else self.total_steps
+        self.total_steps = effective_total_steps
 
         collected = self.metrics.collect(metric_names=list(metrics.keys()))
 
         if collected:
             for backend in self.backends:
-                backend.log_metrics(collected, step, epoch)
+                backend.log_metrics(collected, step, epoch, effective_total_steps)
 
     def destroy(self) -> None:
         """Call `destroy()` on all registered backends and clear the global instance."""
