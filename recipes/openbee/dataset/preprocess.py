@@ -10,6 +10,8 @@ import torchvision.transforms.v2.functional as tvF
 from PIL import Image
 from torchvision.transforms import InterpolationMode
 
+from mvp_engine.utils.log import simple_info
+
 from ..guards.data import build_empty_sample
 
 IMAGE_PLACEHOLDER = "<image>"
@@ -677,5 +679,5 @@ def process_sample(
         return sample
 
     except Exception as exc:
-        print(exc)
+        simple_info(exc, level="debug")
         return build_empty_sample()

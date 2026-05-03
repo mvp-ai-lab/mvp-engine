@@ -53,7 +53,7 @@ class OpenbeeEngine(Engine):
         disable_progress_bar()
         self.metric_accumulator = DistributedMetricAccumulator(device=self.device)
         self.metric_accumulator.register("total_token_count", accumulate="sum", reduce="sum")
-        self.metric_accumulator.register("loss_token_count", accumulate="sum", reduce="sum")
+        self.metric_accumulator.register("effective_token_count", accumulate="sum", reduce="sum")
         self.metric_accumulator.register("loss_sum", accumulate="sum", reduce="sum")
         self.metric_accumulator.register("model_flops", accumulate="sum", reduce="none")
 
@@ -411,7 +411,7 @@ class OpenbeeEngine(Engine):
 
         # 1. Read this micro-step's local token/loss/flops.
         local_micro_loss_sum = outputs["loss"].sum()
-        micro_loss_token_count = int(outputs["effective_tokens"])
+        micro_effective_token_count = int(outputs["effective_tokens"])
         micro_total_token_count = int(outputs["total_tokens"])
 
         # 2. Backward immediately so the dataloader can prepare later micro-batches
@@ -426,7 +426,7 @@ class OpenbeeEngine(Engine):
 
         if self.loss_guard.check(
             local_micro_loss_sum,
-            micro_loss_token_count,
+            micro_effective_token_count,
             step=int(self.step),
             device=self.device,
         ):
@@ -435,7 +435,7 @@ class OpenbeeEngine(Engine):
 
         self.metric_accumulator.update(
             total_token_count=micro_total_token_count,
-            loss_token_count=micro_loss_token_count,
+            effective_token_count=micro_effective_token_count,
             loss_sum=local_micro_loss_sum.detach(),
             model_flops=float(outputs["model_flops"]),
         )
@@ -452,15 +452,15 @@ class OpenbeeEngine(Engine):
 
         self.metric_accumulator.reduce_all()
         global_total_token_count = int(self.metric_accumulator.total_token_count.global_value)
-        global_loss_token_count = int(self.metric_accumulator.loss_token_count.global_value)
-        if global_loss_token_count <= 0:
+        global_effective_token_count = int(self.metric_accumulator.effective_token_count.global_value)
+        if global_effective_token_count <= 0:
             raise ValueError("Accumulation window must contain at least one supervised token.")
 
         self.scaler.unscale_(self.optimizer)
         outputs = ctx.outputs
         assert outputs is not None, "The forward step must populate ctx.outputs."
         backward_loss_divisor = int(outputs["backward_loss_divisor"])
-        gradient_scale = float(backward_loss_divisor) * float(self.dp_world_size) / float(global_loss_token_count)
+        gradient_scale = float(backward_loss_divisor) * float(self.dp_world_size) / float(global_effective_token_count)
         with torch.no_grad():
             for parameter in self.model.parameters():
                 if parameter.grad is not None:
@@ -479,7 +479,7 @@ class OpenbeeEngine(Engine):
         self.optimizer.zero_grad(set_to_none=True)
 
         ctx.outputs["global_total_token_count"] = global_total_token_count
-        ctx.outputs["global_loss_token_count"] = global_loss_token_count
+        ctx.outputs["global_effective_token_count"] = global_effective_token_count
         ctx.outputs["global_loss_sum"] = self.metric_accumulator.loss_sum.global_value
         ctx.outputs["model_flops_per_step"] = self.metric_accumulator.model_flops.local_value
         ctx.outputs["step_lrs"] = step_lrs
@@ -497,19 +497,19 @@ class OpenbeeEngine(Engine):
         self.timer.tick()
         step_time_seconds = float(self.timer.progress_time_latest)
         global_total_token_count = int(outputs["global_total_token_count"])
-        global_loss_token_count = int(outputs["global_loss_token_count"])
+        global_effective_token_count = int(outputs["global_effective_token_count"])
         global_loss_sum = outputs["global_loss_sum"]
 
-        outputs["logs"]["train/loss"] = float(global_loss_sum / int(global_loss_token_count))
+        outputs["logs"]["train/loss"] = float(global_loss_sum / int(global_effective_token_count))
         outputs["logs"].update(
             {
                 "eta": self.timer.eta_string,
                 "perf/batch_time": step_time_seconds,
                 "perf/data_time": self.timer.get_scope_time("data_time"),
                 "perf/exec_time": self.timer.get_scope_time("exec_time"),
-                "perf/toks_per_sec": global_loss_token_count / step_time_seconds if step_time_seconds > 0 else 0.0,
-                "tokens/global_total": global_total_token_count,
-                "tokens/global_loss": global_loss_token_count,
+                "perf/toks_per_sec": global_total_token_count / step_time_seconds if step_time_seconds > 0 else 1e-8,
+                "tokens/total": global_total_token_count,
+                "tokens/effective": global_effective_token_count,
             }
         )
         outputs["logs"].update(
