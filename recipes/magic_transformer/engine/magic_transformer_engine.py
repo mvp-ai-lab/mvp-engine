@@ -10,10 +10,9 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader, DistributedSampler
 
 from mvp_engine.distributed.parallelize import parallelize_model
-from mvp_engine.distributed.utils import get_rank, get_world_size, is_main_process
-from mvp_engine.engine import ENGINE_REGISTRY, Engine
+from mvp_engine.distributed.utils import get_rank, get_world_size
+from mvp_engine.engine import ENGINE_REGISTRY, Engine, TrainStepContext
 from mvp_engine.utils.log import logger
-from mvp_engine.utils.misc import calculate_model_size
 
 from ..configs.schema import MagicTransformerConfig
 from ..dataset import InfiniteDistributedSampler, build_dataset
@@ -25,13 +24,6 @@ class TrainBatch(TypedDict):
 
     input_ids: torch.Tensor
     labels: torch.Tensor
-
-
-class TrainStepOutput(TypedDict):
-    """Outputs returned by one training step."""
-
-    loss: torch.Tensor
-    logs: dict[str, float]
 
 
 @ENGINE_REGISTRY.register()
@@ -83,11 +75,6 @@ class MagicTransformerEngine(Engine):
             backend_kwargs=self.config.parallel.backend_kwargs.model_dump(),
         )
 
-        if is_main_process():
-            model_size, trainable_size = calculate_model_size(parallelized_model)
-            logger.info(f" - Model size: {model_size / 1e9:.4f} B")
-            logger.info(f" - Trainable model size: {trainable_size / 1e9:.4f} B")
-
         return parallelized_model
 
     def prepare_optimizer(self) -> torch.optim.Optimizer:
@@ -117,15 +104,18 @@ class MagicTransformerEngine(Engine):
         )
         return SequentialLR(self.optimizer, [scheduler_warmup, scheduler_main], milestones=[warmup_steps])
 
-    def train_pre_step(self, data: dict[str, torch.Tensor]) -> TrainBatch:
+    def train_pre_step(self, ctx: TrainStepContext) -> TrainStepContext:
         """Move the fake token batch to the active device."""
-        return {
+        data: dict[str, torch.Tensor] = ctx.data
+        ctx.data = {
             "input_ids": data["input_ids"].to(self.device, non_blocking=True),
             "labels": data["labels"].to(self.device, non_blocking=True),
         }
+        return ctx
 
-    def train_one_step(self, data: TrainBatch) -> TrainStepOutput:
+    def forward_step(self, ctx: TrainStepContext) -> None:
         """Run one next-token prediction step and collect metrics."""
+        data: TrainBatch = ctx.data
         self._last_batch_size = int(data["input_ids"].shape[0])
         self._last_seq_len = int(data["input_ids"].shape[1])
 
@@ -143,7 +133,7 @@ class MagicTransformerEngine(Engine):
         predictions = logits.argmax(dim=-1)
         token_accuracy = (predictions == data["labels"]).float().mean()
 
-        return {
+        ctx.outputs = {
             "loss": loss,
             "logs": {
                 "train/loss": float(loss.item()),
