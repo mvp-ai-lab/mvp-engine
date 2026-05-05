@@ -6,13 +6,13 @@ import shutil
 import socket
 import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from os import PathLike
 from pathlib import Path
 from typing import Any, ClassVar, Type, Union
 
 import torch
 from accelerate.utils import set_seed
-from addict import Dict
 from omegaconf import DictConfig, OmegaConf
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.fsdp import FSDPModule
@@ -33,8 +33,10 @@ from mvp_engine.utils.checkpointing.parallel_sl_util import (
 )
 from mvp_engine.utils.log import init_logger, logger
 from mvp_engine.utils.log.backend import FileBackend, TerminalBackend, WandbBackend
-from mvp_engine.utils.misc import Timer, get_device, get_git_info
+from mvp_engine.utils.log.timer import Timer
+from mvp_engine.utils.misc import calculate_model_size, get_device, get_git_info
 from mvp_engine.utils.training import (
+    GradientAccumulationState,
     GradientScaler,
     accumulate_gradients,
     clip_grad_norm_,
@@ -42,6 +44,20 @@ from mvp_engine.utils.training import (
 
 logging.captureWarnings(True)
 logging.basicConfig(level=os.environ.get("LOGLEVEL", "ERROR").upper())
+
+
+@dataclass
+class TrainStepContext:
+    """Mutable state for one training micro-batch."""
+
+    data: Any
+    step: int
+    epoch: int
+    micro_step: int
+    outputs: dict[str, Any] | None = None
+    loss: torch.Tensor | None = None
+    should_sync: bool = False
+    optimizer_step_completed: bool = False
 
 
 class Engine(ABC):
@@ -89,8 +105,8 @@ class Engine(ABC):
     scaler: GradientScaler
 
     epoch: int = 0  # current epoch
-    step: int = 0  # current optimization step = (epoch * len(train_loader) + iter) / gradient_accumulation_steps
-    _accumulate_step: int = 0  # internal counter for gradient accumulation
+    step: int = 0  # current optimization step = (epoch * len(train_loader) + micro_step) / gradient_accumulation_steps
+    ga_state: GradientAccumulationState
 
     timer: Timer  # timer for tracking per-batch time and ETA
 
@@ -136,15 +152,10 @@ class Engine(ABC):
     @property
     def total_steps(self) -> int:
         """Total number of optimization steps for the training run."""
-        if self.config.loop.policy == "iter":
+        if self.loop_policy == "iter":
             return self.config.loop.total_steps
         else:
-            raise NotImplementedError(f"Unsupported loop policy: {self.config.loop.policy}")
-
-    @property
-    def max_grad_norm(self) -> float | None:
-        """Maximum gradient norm for clipping, or None to disable."""
-        return self.config.optim.clip_grad_norm
+            raise NotImplementedError(f"Unsupported loop policy: {self.loop_policy}")
 
     @property
     def project_dir(self) -> Path:
@@ -160,6 +171,23 @@ class Engine(ABC):
     def loop_policy(self) -> str:
         """Training loop policy: 'iter' or 'epoch'."""
         return self.config.loop.policy
+
+    @property
+    def _accumulate_step(self) -> int:
+        """Backward-compatible view of the current accumulation micro-step."""
+        return self.ga_state.micro_step
+
+    @_accumulate_step.setter
+    def _accumulate_step(self, value: int) -> None:
+        self.ga_state.micro_step = int(value)
+
+    @property
+    def progress(self) -> float:
+        """Training progress as a float between 0 and 1."""
+        if self.loop_policy == "iter":
+            return self.step / self.total_steps
+        else:
+            raise ValueError(f"Unsupported loop policy: {self.loop_policy}")
 
     @property
     def unwrapped_model(self) -> torch.nn.Module:
@@ -235,6 +263,11 @@ class Engine(ABC):
         logger = init_logger(
             logger_backends,
             interval=self.config.log.interval,
+            accumulation_size=(
+                self.config.log.accumulation_size
+                if self.config.log.accumulation_size is not None
+                else self.config.log.interval
+            ),
         )
 
     @abstractmethod
@@ -260,7 +293,7 @@ class Engine(ABC):
             force: If True, save regardless of save_interval.
         """
         save_interval = self.config.checkpoint.interval
-        if not force and ((self.step % save_interval != 0) or self.config.dev_mode):
+        if (not force and (self.step % save_interval != 0)) or self.config.dev_mode:
             return
         logger.info(f"Saving checkpoint for step {self.step}...")
 
@@ -270,7 +303,7 @@ class Engine(ABC):
         checkpoints_dir.mkdir(parents=True, exist_ok=True)
 
         cur_checkpoint_dir = checkpoints_dir / (
-            f"iter_{self.step}" if self.loop_policy == "iter" else f"epoch_{self.epoch}"
+            f"{self.loop_policy}_{self.epoch if self.loop_policy == 'epoch' else self.step}"
         )
 
         # Keep only last N checkpoints
@@ -289,7 +322,6 @@ class Engine(ABC):
         cur_checkpoint_dir.mkdir(parents=True, exist_ok=True)
         torch.distributed.barrier()
 
-        # TODO: fix this function
         save_checkpoint(
             self.device_mesh,
             cur_checkpoint_dir,
@@ -300,57 +332,64 @@ class Engine(ABC):
             step=self.step,
             epoch=self.epoch,
             _accumulate_step=self._accumulate_step,
+            hf_enable=self.config.checkpoint.hf_enable,
         )
 
         torch.distributed.barrier()
 
-    def load(self, ckpt_path: Union[str, PathLike]) -> None:
+    def load(
+        self,
+        ckpt_path: Union[str, PathLike],
+        restore_training_state: bool = True,
+        restore_rng_state: bool = True,
+    ) -> None:
         """Load training checkpoint from disk.
 
         Args:
             ckpt_path: Path to checkpoint directory.
+            restore_training_state: Whether to restore optimizer, scheduler,
+                scaler, and engine state in addition to model weights.
+            restore_rng_state: Whether to restore RNG state when loading a
+                training checkpoint.
         """
-        logger.info(f"Loading checkpoint from {ckpt_path}...")
+        action = "Loading checkpoint" if restore_training_state else "Initializing model from checkpoint"
+        logger.info(f"{action} {ckpt_path}...")
 
         engine_state = load_checkpoint(
             self.device_mesh,
             ckpt_path,
             self.model,
-            self.optimizer,
-            self.scheduler,
-            self.scaler,
+            self.optimizer if restore_training_state else None,
+            self.scheduler if restore_training_state else None,
+            self.scaler if restore_training_state else None,
+            restore_engine_state=restore_training_state,
+            restore_rng_state=restore_rng_state,
+            hf_enable=self.config.checkpoint.hf_enable,
         )
+        if engine_state is None:
+            return
+
         self.step = engine_state["step"]
         self.epoch = engine_state["epoch"]
         self._accumulate_step = engine_state["_accumulate_step"]
 
-    def accumulate_step(self, skip_increase: bool = False) -> bool:
-        """Check if the gradients should be synchronized this step."""
-        if not skip_increase:
-            self._accumulate_step += 1
-
-        gradient_accumulation_steps = self.config.optim.gradient_accumulation_steps
-
-        if self._accumulate_step % gradient_accumulation_steps == 0:
-            self._accumulate_step = 0
-            return True
-        else:
-            return False
+        if hasattr(self, "timer"):
+            self.timer.set_progress(self.step, self.total_steps)
 
     """
     Train workflow:
      |   1. before_train: Initialize components (model, optimizer, dataloaders)
-     |   2. run_train: Execute training loop
+     |   2. do_train: Execute training loop
      |       a. train_pre_step: Preprocess batch data
-     |       b. train_one_step: Forward pass and compute loss
-     |       c. train_after_step: Backward pass, optimizer step, logging
+     |       b. train_exec_step: Forward pass, backward pass, and optimizer step
+     |       c. train_post_step: Step-level logging and checkpointing
      v   3. after_train: Final checkpoint and evaluation
     """
 
     def train(self) -> None:
         """Execute complete training pipeline."""
         self.before_train()
-        self.run_train()
+        self.do_train()
         self.after_train()
 
     def before_train(self) -> None:
@@ -363,9 +402,13 @@ class Engine(ABC):
 
         logger.info("Building Model...")
         self.model = self.prepare_model()
+        model_size, trainable_size = calculate_model_size(self.model)
+        logger.info(f" - Model size: {model_size / 1e9:.4f} B")
+        logger.info(f" - Trainable model size: {trainable_size / 1e9:.4f} B")
 
         logger.info("Building Optimizer...")
         self.optimizer = self.prepare_optimizer()
+        self.ga_state = GradientAccumulationState(self.config.optim.gradient_accumulation_steps)
 
         logger.info("Building Scheduler...")
         self.scheduler = self.prepare_scheduler()
@@ -378,13 +421,22 @@ class Engine(ABC):
             device=self.device_type,
         )
 
+        resume_path = getattr(self.config, "resume", None)
+        if resume_path is not None:
+            self.load(
+                resume_path,
+                restore_training_state=True,
+                restore_rng_state=True,
+            )
+
         logger.info("Initializing Timer...")
+        # FIXME: use progress rather than total_steps.
         self.timer = Timer(
-            total_batches=self.total_steps,
+            total_progress=self.total_steps,
             window_size=self.config.log.timer_window_size,
         )
 
-    def run_train(self) -> None:
+    def do_train(self) -> None:
         """Execute the main training loop based on loop_policy."""
         logger.info(
             "Start training: "
@@ -399,7 +451,7 @@ class Engine(ABC):
                 else ""
             )
             + (
-                f"{self.scheduler.__class__.__name__} / "
+                f"{self.scheduler.__class__.__name__}"
                 if hasattr(self, "scheduler") and self.scheduler is not None
                 else ""
             )
@@ -408,142 +460,127 @@ class Engine(ABC):
 
         self.model.train()
         self.timer.start()
+        self.timer.set_progress(self.step)
 
-        if self.config.loop.policy == "iter":
-            self.run_iter_train()
-        elif self.config.loop.policy == "epoch":
-            self.run_epoch_train()
+        while self.progress < 1.0:
+            train_loader_iter = iter(self.train_loader)
+            try:
+                while True:
+                    if self.progress >= 1.0:
+                        break  # In case it's a infinity loader
 
-    def run_iter_train(self) -> None:
-        """Run iteration-based training loop until total_steps is reached."""
-        while self.step < self.total_steps:
-            for data in self.train_loader:
-                if self.step >= self.total_steps:
-                    # In case it's a infinity loader
-                    break
-                self.train_after_step(self.train_one_step(self.train_pre_step(data)))
+                    with self.timer.scope("data_time"):
+                        data = next(train_loader_iter)
+                        ctx = TrainStepContext(
+                            data=data,
+                            step=self.step,
+                            epoch=self.epoch,
+                            micro_step=self.ga_state.micro_step,
+                        )
+                        prepared = self.train_pre_step(ctx)
+                        if prepared is not None and prepared is not ctx:
+                            ctx.data = prepared
 
-    def run_epoch_train(self) -> None:
-        """Run epoch-based training loop (not yet implemented)."""
-        raise NotImplementedError("Epoch-based training is not implemented yet.")
+                    with self.timer.scope("exec_time"):
+                        self.train_exec_step(ctx)
 
-    def train_pre_step(self, data: Any) -> Any:
+                    self.train_post_step(ctx)
+            except StopIteration:
+                self.epoch += 1
+                logger.info(f"Starting epoch {self.epoch}...")
+                continue
+
+    def train_pre_step(self, ctx: TrainStepContext) -> TrainStepContext:
         """Preprocess the input data before training step."""
-        return data
+        pass
 
-    def train_one_step(self, data: Any) -> Dict:
-        """Execute the model forward to get outputs.
+    def train_exec_step(self, ctx: TrainStepContext) -> None:
+        """Execute forward, backward, and optimizer phases for one micro-batch."""
+        self.forward_step(ctx)
+        self.backward_step(ctx)
+        self.optimizer_step(ctx)
 
-        Args:
-            data: Preprocessed input batch.
-
-        Returns:
-            Dict containing 'loss' and 'logs' keys from model forward.
-        """
-
+    def forward_step(self, ctx: TrainStepContext) -> None:
+        """Run the model forward pass and store outputs in the step context."""
         # Forward pass with mixed precision autocast
         with torch.autocast(
             device_type=self.device_type,
             dtype=self.dtype,
             enabled=self.dtype != torch.float32,
         ):
-            outputs = self.model(data)
+            outputs = self.model(ctx.data)
+        ctx.outputs = outputs
 
-        return outputs
+    def backward_step(self, ctx: TrainStepContext) -> None:
+        """Scale loss, advance accumulation state, and run backward."""
+        assert ctx.outputs is not None, "The forward step must populate ctx.outputs."
+        assert "loss" in ctx.outputs, "The model output must contain 'loss' key."
+        assert "logs" in ctx.outputs, "The model output must contain 'logs' key."
 
-    def train_after_step(self, outputs: Dict) -> Dict:
-        """Execute backward pass, optimizer step, and logging.
+        ctx.should_sync = self.ga_state.advance()
 
-        Handles:
-        - Gradient accumulation
-        - Mixed precision scaling
-        - Gradient clipping
-        - Optimizer and scheduler stepping
-        - Metric logging
-        - Checkpoint saving
+        ctx.loss = ctx.outputs["loss"] / self.config.optim.gradient_accumulation_steps
 
-        Args:
-            outputs: Model outputs containing 'loss' and 'logs'.
+        with accumulate_gradients(self.model, sync=ctx.should_sync):
+            self.scaler.scale(ctx.loss).backward()
 
-        Returns:
-            The same outputs dict.
-        """
-        assert "loss" in outputs, "The model output must contain 'loss' key."
-        assert "logs" in outputs, "The model output must contain 'logs' key."
+    def optimizer_step(self, ctx: TrainStepContext) -> None:
+        """Apply optimizer, scaler, scheduler, and timer updates at sync steps."""
+        if not ctx.should_sync:
+            return
 
-        # Determine if we should sync gradients this step
-        is_sync = self.accumulate_step()
+        self.scaler.unscale_(self.optimizer)
 
-        # Scale loss for gradient accumulation
-        gradient_accumulation_steps = self.config.optim.gradient_accumulation_steps
-        loss = outputs["loss"] / gradient_accumulation_steps
+        max_grad_norm = self.config.optim.clip_grad_norm
+        if max_grad_norm is not None:
+            clip_grad_norm_(self.model, max_grad_norm)
 
-        # Backward pass with optional DDP no_sync for accumulation
-        with accumulate_gradients(self.model, sync=is_sync):
-            self.scaler.scale(loss).backward()
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        self.scheduler.step()
+        self.optimizer.zero_grad(set_to_none=True)
 
-        # Only step optimizer when gradients are synchronized
-        if is_sync:
-            # Unscale gradients before clipping (required for GradScaler)
-            self.scaler.unscale_(self.optimizer)
+        ctx.optimizer_step_completed = True
 
-            # Gradient clipping
-            max_grad_norm = self.config.optim.clip_grad_norm
-            if max_grad_norm is not None:
-                clip_grad_norm_(self.model, max_grad_norm)
+    def train_post_step(self, ctx: TrainStepContext) -> None:
+        """Log optimizer-step metrics and save checkpoints."""
+        if not ctx.optimizer_step_completed:
+            return
 
-            # Optimizer step (skipped if inf/nan gradients detected by scaler)
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+        assert ctx.outputs is not None, "The forward step must populate ctx.outputs."
 
-            # Scheduler step (after optimizer step)
-            self.scheduler.step()
+        self.step += 1
+        self.timer.tick()
 
-            # Zero gradients for next accumulation cycle
-            self.optimizer.zero_grad(set_to_none=True)
+        other_logs = {
+            "eta": self.timer.eta_string,
+            "perf/data_time": self.timer.get_scope_time("data_time"),
+            "perf/exec_time": self.timer.get_scope_time("exec_time"),
+        }
 
-            # Increment global step counter
-            self.step += 1
+        current_lrs = self.scheduler.get_last_lr()
+        for i, lr in enumerate(current_lrs):
+            other_logs[f"lr/group_{i}"] = lr
 
-            # Record batch time and update timer
-            self.timer.tick()
+        logger.log_metrics(
+            {**ctx.outputs["logs"], **other_logs},
+            step=self.step,
+            total_steps=self.total_steps,
+        )
 
-            # Log training metrics with timing info
-            other_logs = {
-                "eta": self.timer.eta_string,
-                "time/batch": self.timer.batch_time,
-                "time/throughput": self.timer.throughput,
-            }
-
-            # Log LR
-            current_lrs = self.scheduler.get_last_lr()
-            for i, lr in enumerate(current_lrs):
-                other_logs[f"lr/group_{i}"] = lr
-
-            logger.log_metrics(
-                {**outputs["logs"], **other_logs},
-                step=self.step,
-            )
-
-            # Save checkpoint if needed
-            self.save()
-
-        return outputs
+        self.save()
 
     def after_train(self) -> None:
         """Finalize training with checkpoint save, evaluation, and cleanup."""
-        self.save(force=True)
+        self.save(force=True and not self.config.dev_mode)
         logger.info("Training finished!")
         logger.destroy()
 
     """
-    evaluate:
-     |   1. before_evaluate:
-     |   2. run_evaluate:
-     |       a. evaluate_pre_step:
-     |       b. evaluate_run_step:
-     |       c. evaluate_after_step: Optinal
-     v   3. after_evaluate: Optional
+    Evaluate workflow:
+     |   1. before_evaluate
+     |   2. do_evaluate
+     v   3. after_evaluate
     """
 
     @torch.no_grad()

@@ -17,6 +17,11 @@ parallel:
     replicate: -1
     shard: 1
     tensor: 1
+  backend_kwargs:
+    ddp:
+      # MoD routing and odd-layer KV reuse intentionally leave some trainable
+      # parameters unused in a given backward pass, so DDP must track them.
+      find_unused_parameters: true
 
 data:
   fake_train_size: 128

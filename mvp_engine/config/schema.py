@@ -10,6 +10,7 @@ class BaseLogConfig(BaseModel):
 
     interval: int = Field(20, ge=1)
     backends: list[Literal["terminal", "file", "wandb"]] = ["terminal", "file"]
+    accumulation_size: int | None = Field(None, ge=1)
     timer_window_size: int = Field(100, ge=1)
 
 
@@ -100,6 +101,7 @@ class BaseCheckpointConfig(BaseModel):
 
     keep_n: int = Field(5, ge=1)
     interval: int = Field(5000, ge=1)
+    hf_enable: bool = False
 
 
 class BaseLoopConfig(BaseModel):

@@ -126,6 +126,7 @@ class MetricAggregator:
         self,
         dist_group: Optional[dist.ProcessGroup] = None,
         default_interval: int = 20,
+        default_accumulation_size: int = 20,
     ) -> None:
         """Create a metric registry.
 
@@ -136,11 +137,12 @@ class MetricAggregator:
         self._metrics: Dict[str, MetricEntry] = {}
         self._dist_group = dist_group
         self._default_interval = default_interval
+        self._default_accumulation_size = default_accumulation_size
 
     def add(
         self,
         name: str,
-        accumulation_size: int = 20,
+        accumulation_size: Optional[int] = None,
         interval: Optional[int] = None,
         distributed: Optional[bool] = None,
         support_nan: bool = True,
@@ -159,7 +161,7 @@ class MetricAggregator:
 
         self._metrics[name] = {
             "metric": Metric(
-                accumulation_size=accumulation_size,
+                accumulation_size=(self._default_accumulation_size if accumulation_size is None else accumulation_size),
                 distributed=dist.is_initialized() if distributed is None else distributed,
                 support_nan=support_nan,
                 dist_group=self._dist_group,

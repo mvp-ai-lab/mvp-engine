@@ -9,10 +9,8 @@ from mvp_dataset import TorchLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
 from mvp_engine.distributed.parallelize import parallelize_model
-from mvp_engine.distributed.utils import is_main_process
-from mvp_engine.engine import ENGINE_REGISTRY, Engine
+from mvp_engine.engine import ENGINE_REGISTRY, Engine, TrainStepContext
 from mvp_engine.utils.log import logger
-from mvp_engine.utils.misc import calculate_model_size
 
 from ..configs.schema import MinimalVLMConfig
 from ..dataset import (
@@ -43,7 +41,9 @@ class MinimalVLMEngine(Engine):
         Returns:
             A ``TorchLoader`` pipeline that yields padded multimodal batches.
         """
-        del workflow  # The shared engine still passes this, but the recipe only supports training.
+        if workflow != "train":
+            logger.warning(f"Minimal VLM engine does not support workflow '{workflow}'.")
+            return
 
         if self.processor is None:
             self.processor = build_qwen3_vl_processor(self.config.model)
@@ -82,11 +82,6 @@ class MinimalVLMEngine(Engine):
             device_mesh=self.device_mesh,
             backend_kwargs=self.config.parallel.backend_kwargs.model_dump(),
         )
-
-        if is_main_process():
-            model_size, trainable_size = calculate_model_size(parallelized_model)
-            logger.info(f" - Model size: {model_size / 1e9:.4f} B")
-            logger.info(f" - Trainable model size: {trainable_size / 1e9:.4f} B")
 
         return parallelized_model
 
@@ -138,29 +133,30 @@ class MinimalVLMEngine(Engine):
             milestones=[warmup_steps],
         )
 
-    def train_pre_step(self, data: ModelInputs) -> ModelInputs:
+    def train_pre_step(self, ctx: TrainStepContext) -> TrainStepContext:
         """Move the collated batch to the local device and normalize keys.
 
         Args:
-            data: Raw batch emitted by the dataloader.
+            ctx: Current training step context.
 
         Returns:
-            A normalized batch dictionary ready for the model forward pass.
+            The context with a normalized batch dictionary ready for the model
+            forward pass.
         """
+        data: ModelInputs = ctx.data
         for key, value in data.items():
             if isinstance(value, torch.Tensor):
                 data[key] = value.to(self.device, non_blocking=True)
-        return data
+        ctx.data = data
+        return ctx
 
-    def train_one_step(self, data: ModelInputs) -> dict[str, Any]:
+    def forward_step(self, ctx: TrainStepContext) -> None:
         """Run one forward pass and collect training metrics.
 
         Args:
-            data: Normalized multimodal batch on the local device.
-
-        Returns:
-            A dictionary containing the loss tensor and logging scalars.
+            ctx: Current training step context.
         """
+        data: ModelInputs = ctx.data
         with torch.autocast(
             device_type=self.device_type,
             dtype=self.dtype,
@@ -168,7 +164,7 @@ class MinimalVLMEngine(Engine):
         ):
             outputs = self.model(**data)
 
-        return {
+        ctx.outputs = {
             "loss": outputs.loss,
             "logs": {
                 "train/loss": outputs.loss.item(),

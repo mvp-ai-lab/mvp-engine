@@ -75,7 +75,7 @@ def _filter_gitignored_paths(paths: list[Path]) -> list[Path]:
         return paths
 
     result = subprocess.run(
-        ["git", "check-ignore", "--stdin"],
+        ["git", "check-ignore", "--no-index", "--stdin"],
         input="\n".join(relative_paths),
         capture_output=True,
         cwd=project_root,
