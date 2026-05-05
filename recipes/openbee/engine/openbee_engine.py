@@ -20,6 +20,7 @@ from mvp_engine.distributed.parallelize import parallelize_model
 from mvp_engine.distributed.utils import get_data_parallel_world_size, is_main_process
 from mvp_engine.engine import ENGINE_REGISTRY, Engine, TrainStepContext
 from mvp_engine.utils.log import logger
+from mvp_engine.utils.metrics import DistributedMetricAccumulator
 from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
 from ..configs.schema import OpenbeeConfig
@@ -31,13 +32,12 @@ from ..guards.loss import PerTokenLossGuard
 from ..model import build_qwen3_vl_model
 from ..model.packing import apply_packed_fa2_patch, prepare_packed_model_inputs
 from ..utils.log.mfu import build_mfu_log
-from ..utils.metrics import DistributedMetricAccumulator
 from ..utils.misc import infer_total_steps, resolve_batching_config
 
 
 @ENGINE_REGISTRY.register()
 class OpenbeeEngine(Engine):
-    """Recipe-local engine for the OpenBee alignment stage."""
+    """Recipe-local engine for the OpenBee."""
 
     ConfigClass = OpenbeeConfig
     config: OpenbeeConfig

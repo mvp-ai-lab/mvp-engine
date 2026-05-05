@@ -96,8 +96,6 @@ def build_dataset(
                 defer_finalize=True,
             )
         )
-        if config.data.shuffle_on_packs:
-            dataset = dataset.shuffle(buffer_size=int(config.data.shuffle_on_packs_buffer))
 
     # 6. Optional post-pack resume skip boundary. The recorder path returns here
     # so the lightweight resume pass never resolves image references.
