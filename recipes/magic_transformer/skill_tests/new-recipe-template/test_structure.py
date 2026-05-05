@@ -7,28 +7,15 @@ from pathlib import Path
 from omegaconf import OmegaConf
 
 from mvp_engine.engine import ENGINE_REGISTRY
-from mvp_engine.utils import skill_testing_util
+from mvp_engine.test.recipe_probe import import_modules, load_config
 from recipes.magic_transformer.configs.schema import MagicTransformerConfig
 from recipes.magic_transformer.model import MagicTransformer, TransformerConfig
 
-repo_root = skill_testing_util.find_repo_root(Path(__file__))
-
-
-def recipe_dir() -> Path:
-    """Return the recipe directory under test."""
-    return repo_root / "recipes" / "magic_transformer"
-
-
-def import_recipe_modules() -> None:
-    """Import recipe modules so the engine registry is populated."""
-    import recipes.magic_transformer.configs.schema  # noqa: F401
-    import recipes.magic_transformer.dataset  # noqa: F401
-    import recipes.magic_transformer.engine  # noqa: F401
-    import recipes.magic_transformer.model  # noqa: F401
+RECIPE_PATH = Path("recipes/magic_transformer")
 
 
 def test_new_recipe_structure_matches_magic_transformer_scaffold() -> None:
-    root = recipe_dir()
+    root = RECIPE_PATH
 
     expected_files = [
         "README.md",
@@ -46,7 +33,6 @@ def test_new_recipe_structure_matches_magic_transformer_scaffold() -> None:
         "model/magic_transformer.py",
         "model/source_model.py",
         "skill_tests/skill_manifest.yaml",
-        "skill_tests/new-recipe-template/test_spec.yaml",
         "skill_tests/new-recipe-template/test_structure.py",
         "skill_tests/new-recipe-template/test_runtime.py",
         "skill_tests/new-recipe-template/test_smoke.py",
@@ -60,14 +46,14 @@ def test_new_recipe_structure_matches_magic_transformer_scaffold() -> None:
     assert "fake autoregressive token dataset" in readme_text
     assert "TODO" not in readme_text
 
-    raw_config = OmegaConf.load(root / "configs" / "train.yaml")
+    raw_config = load_config(RECIPE_PATH)
     config = MagicTransformerConfig.model_validate(OmegaConf.to_container(raw_config, resolve=True))
     assert config.project.name == "magic_transformer"
     assert config.engine == "MagicTransformerEngine"
     assert config.checkpoint.interval >= 1
     assert config.log.backends
 
-    import_recipe_modules()
+    import_modules(RECIPE_PATH)
     engine_cls = ENGINE_REGISTRY.get("MagicTransformerEngine")
     assert engine_cls.__name__ == "MagicTransformerEngine"
     assert hasattr(engine_cls, "prepare_logger")

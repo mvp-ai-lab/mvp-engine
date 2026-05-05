@@ -151,21 +151,11 @@ parallel:
 
 Add recipe-local tests under `recipes/<recipe>/skill_tests/tensor-parallel/`:
 
-- `test_spec.yaml`: declare the required test layers for this applied skill,
-  including `requires.effectiveness: true`.
-- `test_structure.py`: at least verify recipe import, registry wiring, config
-  schema validation, required slots, and logger/checkpoint hooks; it must also
-  verify TP class attributes and config wiring exist on the user's top-level
-  model class.
-- `test_runtime.py`: at least build dataset, collator, model, optimizer,
-  scheduler, and engine successfully without starting training; it must also
-  verify runtime resolves `TP_MODULE_CONFIG` and runs required postprocessors.
-- `test_smoke.py`: cover one real recipe-owned single step: forward, loss,
-  backward, optimizer step, logger write, and checkpoint noop or temporary
-  save; it must also verify the user's own recipe/model completes that step with
-  tensor parallel enabled.
-- `test_effectiveness.py`: create the recipe-local `test_effectiveness.py` from
-  `tests/test_smoke_template.py`, then add a method such as
+- `test_structure.py`: verify recipe structure and core wiring.
+- `test_runtime.py`: build recipe runtime objects through recipe entrypoints.
+- `test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
+- `test_effectiveness.py`: create a recipe-local test that uses
+  `mvp_engine.test.recipe_probe` helpers, then add a method such as
   `assert_tp_tensor_dims_match_mesh(model, reference_shapes, tp_config, mesh)`.
   Compare each TP-covered parameter's local shape against its pre-parallel
   reference shape. Use mesh `tensor` size as `tp_size`. For `"col"`, check the
@@ -174,42 +164,6 @@ Add recipe-local tests under `recipes/<recipe>/skill_tests/tensor-parallel/`:
   sharding is also enabled. Compare DTensor parameters with `param.to_local().shape`; otherwise use `param.shape`.
   When every TP-plan-covered parameter's local shape matches the expected shape,
   the effectiveness test can be treated as passing.
-- Prefer copying `tests/test_structure_template.py`,
-  `tests/test_runtime_template.py`, and `tests/test_smoke_template.py` into the
-  recipe-local skill directory first, then only edit the import block and the
-  TP-specific assertions or launcher path that this skill needs.
-- Because this skill typically needs distributed smoke execution, the copied
-  `test_smoke.py` should use `multi_rank_distributed_env(...)` from
-  `tests/test_smoke_template.py` and configure the run for tensor parallel,
-  optionally combined with DDP or FSDP2 sharding if the skill path requires it
-  or the user explicitly prefers that layout.
-- `test_smoke.py` must use the full real capability path for this skill: real
-  engine, real recipe entrypoints, real TP / launcher / logger / checkpoint
-  wiring. Do not short-circuit the path with monkeypatch-based fake wrappers,
-  fake `parallelize_model`, fake process groups, fake device meshes, or similar
-  test-only stand-ins.
-- If the recipe's full-capability single step only makes sense on multi-GPU or
-  distributed hardware, write the smoke test as a real launcher-driven smoke
-  test and set `gpu_preferred: true` in `test_spec.yaml`; do not degrade it
-  into fake logic just to make it run on CPU or single-process setups.
-
-Do not swap in an unrelated tiny model for this skill. The smoke test should use
-the user's real recipe/model entrypoint with the smallest recipe-owned config that
-still exercises the TP landing points.
-
-When executing this skill for a user recipe, add these tests automatically. Do not
-require the user to spell out the test file list. Run validation only in fresh
-subagents with `fork_context=false`. Do not run these `python -m tests.test_skills`
-commands from the main agent's local terminal, background terminal sessions, or
-any other non-subagent shell fallback. First run
-`python -m tests.test_skills --recipe <recipe> --skill tensor-parallel --layer structure`,
-then a new subagent for `--layer runtime` only after structure passes, then a
-new subagent for `--layer smoke` only after runtime passes, and finally a new
-subagent for `--layer effectiveness` only after smoke passes. The main agent should
-summarize all four layer results. If `test_smoke.py` or `test_effectiveness.py` is blocked by GPU
-availability, distributed-launch constraints, or permissions, the main agent
-should return the exact `python -m tests.test_skills` command and any required
-launcher command for the user.
 
 ## Output
 

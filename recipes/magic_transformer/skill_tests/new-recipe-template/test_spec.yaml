@@ -1,7 +1,0 @@
-skill_id: new-recipe-template
-requires:
-  structure: true
-  runtime: true
-  smoke: true
-  effectiveness: false
-  gpu_preferred: false
