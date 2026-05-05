@@ -61,6 +61,9 @@ recipes/<recipe>/
 - The skill test runner discovers layers from files that exist in the skill
   directory: `test_structure.py`, `test_runtime.py`, `test_smoke.py`, and
   optional `test_effectiveness.py`.
+- A skill application is incomplete until every required layer passes through
+  the skill test runner, or the exact environment limitation and command to run
+  in a real environment are reported.
 - Tests must exercise the user's real recipe/model entrypoints with a minimal
   recipe-owned config or batch, not a separate toy model unrelated to that
   recipe.
@@ -74,7 +77,7 @@ recipes/<recipe>/
   recipe-local code focused on the small config override and skill-specific
   assertions.
 
-Standard test layers:
+### Standard Test Layers
 
 - `test_structure.py`: verify recipe import, registry wiring, config schema
   validation, required slots, and logger/checkpoint hooks.
@@ -83,7 +86,7 @@ Standard test layers:
 - `test_smoke.py`: cover one real recipe-owned step: forward, loss, backward,
   optimizer step, logger write, and checkpoint noop or temporary save.
 
-Distributed and real-path requirements:
+### Distributed and Real-path Requirements
 
 - If a skill needs distributed execution, use
   `mvp_engine.test.recipe_probe.multi_rank_distributed_env(...)` and configure
@@ -105,23 +108,31 @@ Distributed and real-path requirements:
   recipe/model entrypoints with the smallest recipe-owned config or batch that
   still exercises the skill landing points.
 
-Execution workflow:
+### Execution Workflow
 
+- Before any skill validation, read `skills/README.md`, this section, and the
+  target `SKILL.md`; then follow the stricter requirement when they differ.
 - Run tests with
   `python -m tests.test_skills --recipe <recipe> --skill <skill-id>`.
 - Recipe-local skill validation must run only in fresh subagents with
   `fork_context=false`. Do not run `python -m tests.test_skills ...` from the
   main agent's local terminal, background terminal sessions, or any other
   non-subagent shell fallback.
+- Do not run a full local dry run of `structure`, `runtime`, `smoke`, or
+  `effectiveness` before the subagent workflow. A local preflight is allowed
+  only for the smallest syntax/import check needed to unblock validation.
 - Run `--layer structure` in one fresh subagent, wait for it to pass, then run
-  `--layer runtime` in a new fresh subagent, then `--layer smoke`, and finally
-  `--layer effectiveness` when that layer exists.
+  `--layer runtime` in a new fresh subagent, then run `--layer smoke` in a new
+  fresh subagent, and finally run `--layer effectiveness` in a new fresh
+  subagent when that layer exists.
 - The user should not need to ask for these tests explicitly. When an agent
   applies a skill to a user recipe, it should add the matching recipe-local
   tests and try to run them by default.
 - The agent should update `skill_tests/skill_manifest.yaml` automatically after
   all required recipe-local layers succeed. If a skill declares effectiveness
   checks, all four layers must pass before the skill name is recorded.
+- If any required layer fails, do not mark the work complete and do not update
+  `skill_tests/skill_manifest.yaml` as passing.
 - The main agent should summarize the `structure` / `runtime` / `smoke` /
   `effectiveness` outcomes after those subagents finish, omitting
   effectiveness for skills that do not define it.

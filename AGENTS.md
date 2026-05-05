@@ -83,9 +83,11 @@ This repository contains the core engine, shared utilities, and experiment-speci
 
 Recipe-local test rules:
 
-- Put recipe-specific tests inside the corresponding recipe directory
-- If a recipe-local test imports `recipes.*`, add a local `conftest.py` under that recipe’s `tests/`
-- Do not rely on the top-level `tests/conftest.py` for recipe test discovery
+When a skill changes a recipe, validation is part of applying the skill. Read
+`skills/AGENTS.md` and the target `SKILL.md`, add the recipe-local
+`skill_tests/` artifacts required by that skill, and validate through
+`python -m tests.test_skills --recipe <recipe> --skill <skill-id>` using the
+repository workflow.
 
 ## Git Rules
 
