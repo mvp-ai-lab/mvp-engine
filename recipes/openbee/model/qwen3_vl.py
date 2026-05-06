@@ -10,16 +10,6 @@ import torch.nn.functional as F
 from transformers import AutoModelForImageTextToText
 from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLCausalLMOutputWithPast
 
-try:
-    from liger_kernel.transformers import (
-        LigerCrossEntropyLoss as _LigerCrossEntropyLoss,
-    )
-
-    _HAS_LIGER_CE = True
-except Exception:
-    _LigerCrossEntropyLoss = None
-    _HAS_LIGER_CE = False
-
 # ---------------------------------------------------------------------------
 # Parameter-name prefixes for each logical sub-module
 # ---------------------------------------------------------------------------
@@ -60,19 +50,6 @@ def _shift_labels(labels: torch.Tensor, ignore_index: int = -100) -> torch.Tenso
     """Pad-right by one token then shift left for causal LM loss."""
     labels = F.pad(labels, (0, 1), value=ignore_index)
     return labels[..., 1:].contiguous()
-
-
-def _get_per_token_ce(ignore_index: int):
-    """Return a per-token CE callable selected from the top-level liger flag."""
-    if _HAS_LIGER_CE:
-        return _LigerCrossEntropyLoss(reduction="none", ignore_index=ignore_index)
-
-    return lambda logits, labels: F.cross_entropy(
-        logits,
-        labels,
-        ignore_index=ignore_index,
-        reduction="none",
-    )
 
 
 def apply_freeze_policy(
@@ -131,7 +108,7 @@ def apply_model_gradient_checkpointing(
 
 
 def upcast_trainable_params_to_fp32(model):
-    """Match LF-private by storing trainable weights in fp32 master precision."""
+    """Storing trainable weights in fp32 master precision."""
     for _, parameter in model.named_parameters():
         if parameter.requires_grad and parameter.dtype != torch.float32:
             parameter.data = parameter.data.to(dtype=torch.float32)
@@ -360,13 +337,19 @@ def inject_sum_loss_forward(model, *, chunk_size: int = 4096):
             flat_hs = hs.reshape(-1, hs.size(-1))
             flat_labels = shift_labels.reshape(-1)
             lm_head_bias = getattr(self.lm_head, "bias", None)
-            ce_fn = _get_per_token_ce(ignore_index=-100)
 
             loss_chunks: list[torch.Tensor] = []
             for start in range(0, flat_hs.size(0), chunk_size):
                 end = min(start + chunk_size, flat_hs.size(0))
                 chunk_logits = F.linear(flat_hs[start:end], self.lm_head.weight, lm_head_bias)
-                loss_chunks.append(ce_fn(chunk_logits, flat_labels[start:end]))
+                loss_chunks.append(
+                    F.cross_entropy(
+                        chunk_logits,
+                        flat_labels[start:end],
+                        ignore_index=-100,
+                        reduction="none",
+                    )
+                )
                 del chunk_logits
             loss = torch.cat(loss_chunks, dim=0)
         else:

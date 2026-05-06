@@ -8,13 +8,18 @@ project:
   name: "minimal-vlm"
   dir: "./outputs"
 
+log:
+  interval: 1
+  accumulation_size: 1
+  timer_window_size: 10
+
 parallel:
   mesh:
     replicate: -1
     shard: 1
     tensor: 1
 data:
-  train_path: "./data/minimal_vlm/demo.jsonl"
+  train_path: "./data/minimal_vlm/demo.parquet"
   max_seq_len: 2048
   batch_size: 1
 model:

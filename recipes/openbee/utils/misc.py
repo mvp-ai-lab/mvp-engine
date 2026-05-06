@@ -97,12 +97,11 @@ def infer_total_steps(
 
     local_packed_samples = 0
     local_batches = 0
-    progress_log_interval = int(inference_config.data.step_inference_log_interval)
 
     for batch in inference_loader:
         local_packed_samples += int(batch["input_ids"].shape[0])
         local_batches += 1
-        if local_batches % progress_log_interval == 0:
+        if local_batches % 100 == 0:
             logger.info(f"Step inference progress: {local_batches} local batches...")
 
     global_packed_samples_tensor = torch.tensor(local_packed_samples, device=device, dtype=torch.long)

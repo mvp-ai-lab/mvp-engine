@@ -10,7 +10,7 @@ from mvp_engine.config.schema import BaseEngineConfig
 class MinimalVLMDataConfig(BaseModel):
     model_config = ConfigDict(frozen=False, extra="forbid")
 
-    train_path: Optional[str] = "./data/minimal_vlm/demo.jsonl"
+    train_path: Optional[str] = "./data/minimal_vlm/demo.parquet"
     max_seq_len: int = Field(2048, ge=1)
     batch_size: int = Field(1, ge=1)
     num_workers: int = Field(0, ge=0)

@@ -14,7 +14,6 @@ from mvp_engine.utils.log import simple_info
 
 from ..guards.data import build_empty_sample
 
-IMAGE_PLACEHOLDER = "<image>"
 ROLE_MAP = {
     "assistant": "assistant",
     "gpt": "assistant",
@@ -28,12 +27,14 @@ THOUGHT_PREFIX = "<think>\n"
 THOUGHT_SUFFIX = "\n</think>\n\n"
 THOUGHT_PATTERN = re.compile(f"{re.escape(THOUGHT_PREFIX)}(.*?){re.escape(THOUGHT_SUFFIX)}", re.DOTALL)
 THOUGHT_MARKERS = (THOUGHT_PREFIX.strip(), THOUGHT_SUFFIX.strip())
+IMAGE_PLACEHOLDER = "<image>"
 MULTIMODAL_PLACEHOLDER = "<|mvp_multimodal_placeholder|>"
 IMAGE_TOKEN_PLACEHOLDER = "<|mvp_image_placeholder|>"
 VISION_START_TOKEN = "<|vision_start|>"
 VISION_END_TOKEN = "<|vision_end|>"
 DEFAULT_IMAGE_TOKEN = "<|image_pad|>"
-_VISION_TOKEN_ID_CACHE: dict[tuple[int, str], tuple[set[int], torch.Tensor]] = {}
+_VISION_TOKEN_IDS: set[int] = set()
+_VISION_TOKEN_ID_TENSOR: torch.Tensor | None = None
 
 
 def process_image(
@@ -452,20 +453,6 @@ def _infer_seqlen(source_len: int, target_len: int, cutoff_len: int) -> tuple[in
     return min(max_source_len, source_len), new_target_len
 
 
-def _get_vision_token_ids(tokenizer: Any, image_token: str) -> tuple[set[int], torch.Tensor]:
-    """Return cached tokenizer ids for tokens that must never contribute loss."""
-    cache_key = (id(tokenizer), image_token)
-    if cache_key not in _VISION_TOKEN_ID_CACHE:
-        token_ids: set[int] = set()
-        for token in (VISION_START_TOKEN, VISION_END_TOKEN, image_token):
-            token_ids.update(tokenizer(token, add_special_tokens=False)["input_ids"])
-        _VISION_TOKEN_ID_CACHE[cache_key] = (
-            token_ids,
-            torch.tensor(sorted(token_ids), dtype=torch.long),
-        )
-    return _VISION_TOKEN_ID_CACHE[cache_key]
-
-
 def process_sample(
     sample: dict[str, Any],
     *,
@@ -478,9 +465,9 @@ def process_sample(
     """Convert one dataset row into training inputs.
 
     Args:
-        sample: One raw row emitted by ``mvp_dataset``.
+        sample: One raw row emitted by the raw dataset.
         processor: Hugging Face processor (or compatible object with
-                   ``apply_chat_template`` and ``__fingerprint__``).
+                   ``apply_chat_template``).
         max_length: Maximum tokenized sequence length. Any input longer than this will be truncated.
         image_placeholder: Placeholder token that marks image positions in text.
         ignore_index: Label value used to mask tokens out of the loss.
@@ -491,7 +478,7 @@ def process_sample(
     """
     try:
         messages = sample.get("messages") or sample.get("conversations")
-        images = list(sample["images"])
+        images = list(sample.get("images", []))
         raw_image_sizes = sample.get("img_size", []) or sample.get("image_size", [])
         image_sizes = [_normalize_image_size(size) for size in raw_image_sizes]
 
@@ -553,7 +540,7 @@ def process_sample(
 
         sample["adjusted_image_size"] = adjusted_image_sizes
 
-        # 4. Build LF-style multiturn source/target pairs through the processor chat template.
+        # 4. Build multiturn source/target pairs through the processor chat template.
         image_token = getattr(processor, "image_token", DEFAULT_IMAGE_TOKEN)
         if not isinstance(image_token, str) or not image_token:
             raise ValueError("Processor must expose a valid image token.")
@@ -634,11 +621,15 @@ def process_sample(
         sample["adjusted_image_size"] = adjusted_image_sizes[:used_image_count]
 
         # 5. Tokenize and truncate each turn independently under a shared max-length budget.
-        vision_token_ids, vision_token_id_tensor = _get_vision_token_ids(tokenizer, image_token)
+        global _VISION_TOKEN_ID_TENSOR
+        if not _VISION_TOKEN_IDS:
+            for token in (VISION_START_TOKEN, VISION_END_TOKEN, image_token):
+                _VISION_TOKEN_IDS.update(tokenizer(token, add_special_tokens=False)["input_ids"])
+            _VISION_TOKEN_ID_TENSOR = torch.tensor(sorted(_VISION_TOKEN_IDS), dtype=torch.long)
 
         def _will_cut_vision_tokens(token_ids: list[int], keep_len: int) -> bool:
             """Return whether truncation would cut away any vision special tokens."""
-            return any(token_id in vision_token_ids for token_id in token_ids[keep_len:])
+            return any(token_id in _VISION_TOKEN_IDS for token_id in token_ids[keep_len:])
 
         input_ids_list: list[int] = []
         labels_list: list[int] = []
@@ -663,7 +654,7 @@ def process_sample(
 
         input_ids = torch.tensor(input_ids_list, dtype=torch.long)
         labels = torch.tensor(labels_list, dtype=torch.long)
-        labels[torch.isin(input_ids, vision_token_id_tensor)] = ignore_index
+        labels[torch.isin(input_ids, _VISION_TOKEN_ID_TENSOR)] = ignore_index
         if not torch.any(labels != ignore_index):
             raise ValueError("has no supervised assistant tokens after tokenization/truncation.")
 

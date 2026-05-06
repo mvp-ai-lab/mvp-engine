@@ -51,11 +51,3 @@ Run the default demo config:
 ```bash
 torchrun --nproc_per_node=8 -m mvp_engine.launch --config ./recipes/minimal_vlm/configs/train.yaml
 ```
-
-Point the recipe at a custom dataset:
-
-```bash
-torchrun --nproc_per_node=8 -m mvp_engine.launch \
-  --config ./recipes/minimal_vlm/configs/train.yaml \
-  data.train_path=/path/to/train.jsonl
-```

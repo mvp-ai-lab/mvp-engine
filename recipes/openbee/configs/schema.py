@@ -12,20 +12,16 @@ class OpenbeeDataConfig(BaseModel):
 
     model_config = ConfigDict(frozen=False, extra="forbid")
 
-    train_path: Optional[str] = "./data/openbee/alignment_demo.jsonl"
+    train_path: Optional[str] = "./data/openbee/stage1.lance"
     ref_columns: list[str] = Field(default_factory=lambda: ["images"])
     thinking_mode: bool | None | Literal["non-empty"] = "non-empty"
-    shuffle_buffer: int = Field(1000, ge=1)
     packing: bool = False
-    shuffle_on_packs: bool = False
-    shuffle_on_packs_buffer: int = Field(256, ge=1)
     packing_selection_strategy: Literal["random", "best_fit"] = "best_fit"
     packing_open_pack_limit: int = Field(8, ge=1)
     packing_buffer_size: int = Field(64, ge=0)
     max_seq_len: int = Field(2048, ge=1)
     batch_size: int = 1
     num_workers: int = Field(0, ge=0)
-    step_inference_log_interval: int = Field(100, ge=1)
 
     @field_validator("train_path", mode="before")
     @classmethod
