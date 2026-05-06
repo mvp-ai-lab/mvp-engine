@@ -1,0 +1,1005 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>10min快速上手MVP-engine</title>
+  <style>
+    :root {
+      --ink: #1e2633;
+      --muted: #667085;
+      --sun: #ffca64;
+      --rose: #ff7c9c;
+      --mint: #58d6b1;
+      --navy: #27324a;
+      --white: #ffffff;
+      --shadow: 0 18px 45px rgba(80, 65, 42, 0.14);
+      --radius: 8px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, rgba(255, 202, 100, 0.10) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(98, 183, 255, 0.10) 1px, transparent 1px),
+        linear-gradient(180deg, #fffaf2 0%, #fff4e7 48%, #eef8ff 100%);
+      background-size: 34px 34px, 34px 34px, auto;
+      font-family: "Inter", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+    a { color: inherit; }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px clamp(16px, 3vw, 36px);
+      border-bottom: 2px solid rgba(39, 50, 74, 0.08);
+      background: rgba(255, 250, 242, 0.9);
+      backdrop-filter: blur(14px);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 38px;
+      height: 38px;
+      border: 2px solid var(--navy);
+      border-radius: var(--radius);
+      background: linear-gradient(135deg, var(--sun), var(--rose));
+      color: var(--navy);
+      font-weight: 900;
+      box-shadow: 4px 4px 0 rgba(39, 50, 74, 0.16);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 1rem;
+      line-height: 1.2;
+    }
+
+    .brand span {
+      display: block;
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 500;
+    }
+
+    .nav {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .nav a, .ghost-button {
+      border: 2px solid rgba(39, 50, 74, 0.12);
+      border-radius: var(--radius);
+      background: var(--white);
+      color: var(--navy);
+      padding: 8px 10px;
+      text-decoration: none;
+      font-size: 0.86rem;
+      font-weight: 800;
+      box-shadow: 3px 3px 0 rgba(39, 50, 74, 0.08);
+    }
+
+    main {
+      display: grid;
+      gap: 22px;
+      width: min(1180px, calc(100% - 28px));
+      margin: 0 auto;
+      padding: 18px 0 38px;
+    }
+
+    .hero {
+      position: relative;
+      aspect-ratio: 1672 / 941;
+      min-height: 0;
+      border: 3px solid var(--navy);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: var(--white);
+      box-shadow: 10px 10px 0 rgba(39, 50, 74, 0.13);
+    }
+
+    .hero-copy {
+      position: absolute;
+      top: 50%;
+      right: clamp(18px, 2.6vw, 34px);
+      transform: translateY(-50%);
+      z-index: 2;
+      display: grid;
+      gap: clamp(10px, 1.4vw, 16px);
+      align-content: center;
+      width: min(350px, 30%);
+      margin-left: auto;
+      padding: 0;
+      border-radius: var(--radius);
+    }
+
+    .tag {
+      width: fit-content;
+      padding: 7px 10px;
+      border: 2px solid var(--navy);
+      border-radius: var(--radius);
+      background: var(--mint);
+      color: var(--navy);
+      font-size: 0.78rem;
+      font-weight: 900;
+      box-shadow: 4px 4px 0 rgba(39, 50, 74, 0.16);
+    }
+
+    .hero h2 {
+      margin: 0;
+      max-width: 800px;
+      color: var(--navy);
+      font-size: clamp(1.75rem, 3vw, 3.35rem);
+      line-height: 0.98;
+      letter-spacing: 0;
+    }
+
+    .hero p {
+      margin: 0;
+      max-width: 680px;
+      color: #4b5565;
+      font-size: clamp(0.9rem, 1vw, 1rem);
+      line-height: 1.62;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .primary-button, .secondary-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 40px;
+      border: 2px solid var(--navy);
+      border-radius: var(--radius);
+      padding: 8px 12px;
+      color: var(--navy);
+      text-decoration: none;
+      font-weight: 900;
+      box-shadow: 5px 5px 0 rgba(39, 50, 74, 0.18);
+      transition: transform 160ms ease, box-shadow 160ms ease;
+    }
+
+    .primary-button { background: var(--sun); }
+    .secondary-button { background: var(--white); }
+
+    .primary-button:hover,
+    .secondary-button:hover,
+    .ghost-button:hover,
+    .nav a:hover {
+      transform: translate(-2px, -2px);
+      box-shadow: 7px 7px 0 rgba(39, 50, 74, 0.16);
+    }
+
+    .hero-art {
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+    }
+
+    .hero-art img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      object-position: center;
+      display: block;
+    }
+
+    .hero-note {
+      position: absolute;
+      left: 18px;
+      bottom: 18px;
+      width: min(290px, calc(100% - 28px));
+      padding: 12px;
+      border: 2px solid var(--navy);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.92);
+      box-shadow: 5px 5px 0 rgba(39, 50, 74, 0.14);
+      font-weight: 800;
+      line-height: 1.55;
+    }
+
+    .section {
+      border: 3px solid var(--navy);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.82);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 18px;
+      border-bottom: 2px solid rgba(39, 50, 74, 0.10);
+      background: linear-gradient(90deg, rgba(255, 202, 100, 0.35), rgba(98, 183, 255, 0.24));
+    }
+
+    .section-head h3 {
+      margin: 0;
+      color: var(--navy);
+      font-size: clamp(1.3rem, 3vw, 2rem);
+      line-height: 1.2;
+    }
+
+    .section-head p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .section-body { padding: 18px; }
+
+    .recipe-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .recipe-card {
+      min-height: 132px;
+      display: grid;
+      align-content: center;
+      gap: 10px;
+      padding: 14px;
+      border: 2px solid rgba(39, 50, 74, 0.18);
+      border-radius: var(--radius);
+      background: var(--white);
+      text-align: center;
+      color: var(--ink);
+      transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+    }
+
+    .recipe-card:hover,
+    .recipe-card.active {
+      transform: translateY(-3px);
+      border-color: var(--navy);
+      box-shadow: 6px 6px 0 rgba(39, 50, 74, 0.14);
+    }
+
+    .recipe-card.active { background: #fff7df; }
+
+    .recipe-icon {
+      display: grid;
+      place-items: center;
+      justify-self: center;
+      width: 44px;
+      height: 44px;
+      border: 2px solid var(--navy);
+      border-radius: var(--radius);
+      background: var(--sun);
+      font-size: 1.4rem;
+      font-weight: 900;
+    }
+
+    .recipe-card h4 {
+      margin: 0;
+      color: var(--navy);
+      font-size: 1.02rem;
+    }
+
+    .recipe-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 40;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(31, 42, 68, 0.52);
+    }
+
+    .recipe-modal.open {
+      display: flex;
+    }
+
+    .recipe-modal-card {
+      width: min(620px, 100%);
+      display: grid;
+      gap: 14px;
+      padding: 20px;
+      border: 3px solid var(--navy);
+      border-radius: var(--radius);
+      background: #fffaf2;
+      box-shadow: 12px 12px 0 rgba(39, 50, 74, 0.18);
+    }
+
+    .recipe-modal-head {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .recipe-modal-head h4 {
+      margin: 0;
+      color: var(--navy);
+      font-size: clamp(1.35rem, 4vw, 2rem);
+      line-height: 1.2;
+    }
+
+    .recipe-modal-close {
+      width: 38px;
+      height: 38px;
+      border: 2px solid var(--navy);
+      border-radius: var(--radius);
+      background: var(--white);
+      color: var(--navy);
+      font-weight: 900;
+      box-shadow: 3px 3px 0 rgba(39, 50, 74, 0.12);
+    }
+
+    .recipe-modal-body {
+      display: grid;
+      gap: 10px;
+    }
+
+    .recipe-modal-body p {
+      margin: 0;
+      color: #4b5565;
+      line-height: 1.7;
+    }
+
+    .recipe-modal-body strong {
+      color: var(--navy);
+    }
+
+    code, pre {
+      font-family: "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+    }
+
+    .command-box {
+      display: grid;
+      gap: 12px;
+      padding: 16px;
+      border: 3px solid var(--navy);
+      border-radius: var(--radius);
+      background: #1f2a44;
+      color: #eef6ff;
+      box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.04);
+    }
+
+    .command-controls {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      color: #d8e6ff;
+      font-size: 0.82rem;
+      font-weight: 800;
+    }
+
+    select, input {
+      width: 100%;
+      min-height: 42px;
+      border: 2px solid rgba(255, 255, 255, 0.18);
+      border-radius: var(--radius);
+      background: #111a2f;
+      color: #ffffff;
+      padding: 8px 10px;
+    }
+
+    pre {
+      overflow: auto;
+      margin: 0;
+      padding: 14px;
+      border-radius: var(--radius);
+      background: #101828;
+      color: #d6f5ff;
+      line-height: 1.6;
+      font-size: 0.92rem;
+      white-space: pre-wrap;
+    }
+
+    .copy-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .copy-status {
+      color: #b8c7de;
+      font-size: 0.86rem;
+      font-weight: 700;
+    }
+
+    .map {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      align-items: stretch;
+    }
+
+    .map-node {
+      display: grid;
+      place-items: center;
+      min-height: 135px;
+      padding: 14px;
+      border: 3px solid var(--navy);
+      border-radius: var(--radius);
+      background: var(--white);
+      text-align: center;
+      font-weight: 900;
+      line-height: 1.45;
+      box-shadow: 5px 5px 0 rgba(39, 50, 74, 0.10);
+    }
+
+    .map-node a {
+      display: inline-block;
+      margin-top: 8px;
+      color: var(--navy);
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .map-node small {
+      display: block;
+      margin-top: 6px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .map-node.core { background: #eaf7ff; }
+    .map-node.recipe { background: #fff3c6; }
+    .map-node.skill { background: #efffea; }
+
+    .hotspot-grid {
+      display: grid;
+      grid-template-columns: 300px minmax(0, 1fr);
+      gap: 14px;
+    }
+
+    .config-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .config-button {
+      padding: 12px;
+      border: 2px solid rgba(39, 50, 74, 0.14);
+      border-radius: var(--radius);
+      background: var(--white);
+      color: var(--ink);
+      text-align: left;
+      font-weight: 800;
+    }
+
+    .config-button.active {
+      border-color: var(--navy);
+      background: #f1fff9;
+      box-shadow: 4px 4px 0 rgba(39, 50, 74, 0.12);
+    }
+
+    .config-detail {
+      display: grid;
+      gap: 12px;
+      padding: 16px;
+      border: 2px solid rgba(39, 50, 74, 0.15);
+      border-radius: var(--radius);
+      background: #ffffff;
+    }
+
+    .config-detail h4 {
+      width: fit-content;
+      margin: 0;
+      min-width: 0;
+      min-height: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4px 10px;
+      border: 2px solid var(--navy);
+      border-radius: var(--radius);
+      background: var(--mint);
+      color: var(--navy);
+      font-size: 0.95rem;
+      font-weight: 900;
+      box-shadow: 3px 3px 0 rgba(39, 50, 74, 0.12);
+    }
+
+    .config-detail p {
+      margin: 0;
+      color: #4b5565;
+      line-height: 1.7;
+    }
+
+    .quiz {
+      display: grid;
+      gap: 14px;
+    }
+
+    .quiz h4 { margin: 0; color: var(--navy); }
+
+    .quiz-options {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .quiz-option {
+      min-height: 80px;
+      padding: 12px;
+      border: 2px solid rgba(39, 50, 74, 0.16);
+      border-radius: var(--radius);
+      background: var(--white);
+      color: var(--ink);
+      text-align: left;
+      font-weight: 800;
+      line-height: 1.45;
+    }
+
+    .quiz-option.correct {
+      border-color: var(--navy);
+      background: #efffea;
+    }
+
+    .quiz-option.wrong {
+      border-color: var(--rose);
+      background: #fff0f4;
+    }
+
+    .quiz-result {
+      min-height: 48px;
+      padding: 12px;
+      border: 2px dashed rgba(39, 50, 74, 0.20);
+      border-radius: var(--radius);
+      background: #fffaf2;
+      color: #4b5565;
+      line-height: 1.55;
+      font-weight: 700;
+    }
+
+    @media (max-width: 1100px) {
+      .hero {
+        display: grid;
+        aspect-ratio: auto;
+        min-height: auto;
+        padding: 0;
+      }
+      .hero-copy {
+        position: relative;
+        top: auto;
+        right: auto;
+        transform: none;
+        width: 100%;
+        padding: 18px;
+        background: rgba(255, 250, 242, 0.94);
+        border-top: 2px solid rgba(39, 50, 74, 0.12);
+      }
+      .hero-art {
+        position: relative;
+        aspect-ratio: 1672 / 941;
+        min-height: 0;
+        order: -1;
+      }
+    }
+
+    @media (max-width: 980px) {
+      .hotspot-grid, .map { grid-template-columns: 1fr; }
+      .recipe-grid, .quiz-options, .command-controls { grid-template-columns: 1fr 1fr; }
+    }
+
+    @media (max-width: 640px) {
+      .topbar {
+        position: static;
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      main {
+        width: min(100% - 18px, 1180px);
+        padding-top: 10px;
+      }
+
+      .recipe-grid, .quiz-options, .command-controls { grid-template-columns: 1fr; }
+      .section-head { display: block; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand" aria-label="MVP-Engine Cookbook">
+      <div class="brand-mark">M</div>
+      <div>
+        <h1>10min快速上手MVP-engine</h1>
+        <span>从 task 找 recipe，再把训练跑起来</span>
+      </div>
+    </div>
+    <nav class="nav" aria-label="页面导航">
+      <a href="#recipes">明确任务</a>
+      <a href="#map">了解仓库</a>
+      <a href="#command">命令生成</a>
+      <a href="#config">训练配置</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero" id="top">
+      <div class="hero-copy">
+        <div class="tag">Quickstart</div>
+        <h2>10min 新手教程</h2>
+        <p>
+          这个页面把 <strong>QUICKSTART.md</strong> 的核心内容做成可点击的入门流程：
+          先选任务，再理解 recipe、mvp_engine 和 skills 的分工，最后生成第一条训练命令。
+        </p>
+        <div class="hero-actions">
+          <a class="primary-button" href="#recipes">开始选择任务</a>
+          <a class="secondary-button" href="QUICKSTART.md">查看 Quickstart.md </a>
+          <!-- <a class="secondary-button" href="COOKBOOK.md"> 高阶教程/代码流程 </a> -->
+        </div>
+      </div>
+      <div class="hero-art" aria-label="Quickstart 动漫风引导图">
+        <img src="assets/quickstart-anime-hero.png" alt="Quickstart 动漫风引导图">
+        <!-- <div class="hero-note">记住一句话：你要训练什么 task，就先找最接近的 recipe。</div> -->
+      </div>
+    </section>
+
+    <section class="section" id="recipes">
+      <div class="section-head">
+        <div>
+          <h3>第一关：你要训练什么？</h3>
+          <p>点击卡片，页面会告诉你应该先看哪个 recipe，以及为什么从它开始。</p>
+        </div>
+      </div>
+      <div class="section-body">
+        <div class="recipe-grid" id="recipe-grid"></div>
+      </div>
+    </section>
+
+    <section class="section" id="map">
+      <div class="section-head">
+        <div>
+          <h3>第二关：了解仓库</h3>
+          <p>把仓库看成三层，第一次读代码就不会迷路。</p>
+        </div>
+      </div>
+      <div class="section-body">
+        <div class="map">
+          <div class="map-node core">mvp_engine/<small>稳定训练底座：launch、loop、日志、checkpoint、分布式</small></div>
+          <div class="map-node skill">skills/<small>可插入的能力指南：gradient checkpointing、tensor parallel、compile、MFU</small></div>
+          <div class="map-node recipe">
+            recipes/
+            <small>your recipe = core (mvp_engine) + skills。新任务在这里组合底座和能力，放 config、dataset、model、engine。</small>
+            <a href="skills/recipe/new-recipe-template/SKILL.md">猜你想找：创建 recipe skill</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="command">
+      <div class="section-head">
+        <div>
+          <h3>第三关：生成第一条命令</h3>
+          <p>尝试run一下吧！</p>
+        </div>
+      </div>
+      <div class="section-body">
+        <div class="command-box">
+          <div class="command-controls">
+            <label>Recipe<select id="command-recipe"></select></label>
+            <label>GPU 进程数<input id="gpu-count" type="number" min="1" max="128" value="8"></label>
+            <label>配置文件<select id="config-path"></select></label>
+          </div>
+          <pre id="command-output"></pre>
+          <div class="copy-row">
+            <button class="primary-button" id="copy-command" type="button">复制命令</button>
+            <span class="copy-status" id="copy-status"></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="config">
+      <div class="section-head">
+        <div>
+          <h3>第四关：配置训练config</h3>
+          <p>大多数训练改动都在 recipe 的 <code>configs/train.yaml</code>。</p>
+        </div>
+      </div>
+      <div class="section-body">
+        <div class="hotspot-grid">
+          <div class="config-list" id="config-list"></div>
+          <article class="config-detail" id="config-detail" aria-live="polite"></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="quiz">
+      <div class="section-head">
+        <div>
+          <h3>最后一关：Quick Quiz</h3>
+          <p>点一个答案，快速确认你是否抓住了仓库的核心使用方式。</p>
+        </div>
+      </div>
+      <div class="section-body">
+        <div class="quiz">
+          <h4>如果你要做一个新训练任务，第一反应应该是什么？</h4>
+          <div class="quiz-options" id="quiz-options"></div>
+          <div class="quiz-result" id="quiz-result">请选择一个答案。</div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="recipe-modal" id="recipe-modal" aria-hidden="true">
+    <article class="recipe-modal-card" role="dialog" aria-modal="true" aria-labelledby="recipe-modal-title">
+      <div class="recipe-modal-head">
+        <h4 id="recipe-modal-title"></h4>
+        <button class="recipe-modal-close" id="recipe-modal-close" type="button" aria-label="关闭 recipe 详情">X</button>
+      </div>
+      <div class="recipe-modal-body" id="recipe-modal-body"></div>
+    </article>
+  </div>
+
+  <script>
+    const recipes = [
+      {
+        key: "vit",
+        icon: "V",
+        title: "基于 ViT 的图像分类",
+        path: "recipes/vit_classification/",
+        config: "recipes/vit_classification/configs/train.yaml",
+        intro: "第一个模板：默认 fake data，可直接跑通，最适合用来理解 mvp-engine 的工作方式。"
+      },
+      {
+        key: "lm",
+        icon: "L",
+        title: "训练最小语言模型",
+        path: "recipes/magic_transformer/",
+        config: "recipes/magic_transformer/configs/train.yaml",
+        intro: "纯文本模板：用 fake token data 做 next-token prediction，适合看语言模型 recipe 的最小结构。"
+      },
+      {
+        key: "vlm",
+        icon: "M",
+        title: "微调 VLM",
+        path: "recipes/minimal_vlm/",
+        config: "recipes/minimal_vlm/configs/train.yaml",
+        intro: "多模态 SFT 模板：展示 JSONL + 图片路径的数据格式，以及 VLM 微调怎么接入训练流程。"
+      },
+      {
+        key: "openbee",
+        icon: "O",
+        title: "复杂多阶段 VLM",
+        path: "recipes/openbee/",
+        config: "recipes/openbee/configs/stage*.yaml",
+        intro: "进阶参考：alignment、pretrain、SFT 多阶段配置拆在 stage1、stage2、stage3。"
+      }
+    ];
+
+    const configHotspots = [
+      {
+        label: "训练框架",
+        title: "训练框架",
+        body: "Engine 用来定义 dataloader、model、optimizer、scheduler 如何接入训练。参考 ViT 分类 recipe 中:",
+        snippet: "engine: ViTClassificationEngine"
+      },
+      {
+        label: "数据",
+        title: "数据",
+        body: "mvp-engine 支持 ImageFolder、JSONL + 图片路径、parquet/staged VLM data、WebDataset，也可以在 recipe 内使用 fake dataset 做 smoke run。",
+        snippet: "data:\n  use_fake_data: true\n  train_path: ./data/imagenet/train\n  val_path: ./data/imagenet/val\n  batch_size: 64"
+      },
+      {
+        label: "模型",
+        title: "模型",
+        body: "mvp-engine 支持本地模型/本地 checkpoint 和 Hugging Face 两类来源。",
+        snippet: "model:\n  # HF model id: google/vit-base-patch16-224\n  # local path: /path/to/local/model-or-checkpoint\n  pretrained_model_name_or_path: google/vit-base-patch16-224\n  load_pretrained_weights: false\n  num_classes: 1000"
+      },
+      {
+        label: "分布式策略",
+        title: "分布式策略",
+        body: "mvp-engine 支持 DDP、FSDP2 和 Tensor Parallel。DDP：replicate: -1、shard: 1、tensor: 1；FSDP2：shard > 1；TP：tensor > 1。",
+        snippet: "parallel:\n  mesh:\n    replicate: -1\n    shard: 8\n    tensor: 1"
+      },
+      {
+        label: "其他训练参数",
+        title: "其他训练参数",
+        body: "还可以设置学习率、weight decay、混合精度、梯度累积、训练步数和 checkpoint 间隔。",
+        snippet: "optim:\n  lr: 0.0001\n  mixed_precision: bf16\nloop:\n  total_steps: 1000\ncheckpoint:\n  interval: 500"
+      }
+    ];
+
+    const quiz = [
+      { text: "直接重写 mvp_engine/engine/engine.py", correct: false, feedback: "不建议。mvp_engine 是通用底座，recipe-local 需求优先在 recipes/<experiment>/ 里做。" },
+      { text: "先找最接近的 recipe，复制或改它", correct: true, feedback: "对。这个仓库最核心的使用方式就是从 task 找 recipe。" },
+      { text: "先安装所有高级 skill", correct: false, feedback: "skill 是按需使用的操作指南，不是第一步。先跑通一个最小 recipe。" }
+    ];
+
+    const recipeGrid = document.getElementById("recipe-grid");
+    const recipeModal = document.getElementById("recipe-modal");
+    const recipeModalTitle = document.getElementById("recipe-modal-title");
+    const recipeModalBody = document.getElementById("recipe-modal-body");
+    const recipeModalClose = document.getElementById("recipe-modal-close");
+    const commandRecipe = document.getElementById("command-recipe");
+    const configPath = document.getElementById("config-path");
+    const gpuCount = document.getElementById("gpu-count");
+    const commandOutput = document.getElementById("command-output");
+    const copyCommand = document.getElementById("copy-command");
+    const copyStatus = document.getElementById("copy-status");
+    const configList = document.getElementById("config-list");
+    const configDetail = document.getElementById("config-detail");
+    const quizOptions = document.getElementById("quiz-options");
+    const quizResult = document.getElementById("quiz-result");
+
+    let selectedRecipe = recipes[0];
+    let selectedConfig = 0;
+
+    function renderRecipes() {
+      recipeGrid.innerHTML = "";
+      recipes.forEach((recipe) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `recipe-card${recipe.key === selectedRecipe.key ? " active" : ""}`;
+        button.innerHTML = `
+          <span class="recipe-icon">${recipe.icon}</span>
+          <h4>${recipe.title}</h4>
+        `;
+        button.addEventListener("click", () => {
+          selectedRecipe = recipe;
+          commandRecipe.value = recipe.key;
+          syncConfigOptions();
+          renderRecipes();
+          updateCommand();
+          openRecipeModal(recipe);
+        });
+        recipeGrid.appendChild(button);
+      });
+    }
+
+    function openRecipeModal(recipe) {
+      recipeModalTitle.textContent = recipe.title;
+      recipeModalBody.innerHTML = `
+        <p><strong>相关 recipe:</strong> ${recipe.path}</p>
+        <p><strong>config:</strong> ${recipe.config}</p>
+        <p><strong>简介:</strong> ${recipe.intro}</p>
+      `;
+      recipeModal.classList.add("open");
+      recipeModal.setAttribute("aria-hidden", "false");
+      recipeModalClose.focus();
+    }
+
+    function closeRecipeModal() {
+      recipeModal.classList.remove("open");
+      recipeModal.setAttribute("aria-hidden", "true");
+    }
+
+    function syncCommandRecipeOptions() {
+      commandRecipe.innerHTML = recipes.map((recipe) => `<option value="${recipe.key}">${recipe.title}</option>`).join("");
+      commandRecipe.value = selectedRecipe.key;
+      syncConfigOptions();
+    }
+
+    function syncConfigOptions() {
+      const recipe = recipes.find((item) => item.key === commandRecipe.value) || recipes[0];
+      selectedRecipe = recipe;
+      const options = recipe.key === "openbee"
+        ? ["recipes/openbee/configs/stage1.yaml", "recipes/openbee/configs/stage2.yaml", "recipes/openbee/configs/stage3.yaml"]
+        : [recipe.config];
+      configPath.innerHTML = options.map((path) => `<option value="${path}">${path}</option>`).join("");
+    }
+
+    function updateCommand() {
+      const gpu = Math.max(1, Number(gpuCount.value || 1));
+      const config = configPath.value || selectedRecipe.config;
+      commandOutput.textContent = [
+        "uv venv --python=3.12",
+        "source .venv/bin/activate",
+        "uv sync",
+        `torchrun --nproc_per_node=${gpu} -m mvp_engine.launch --config ./${config}`
+      ].join("\n");
+    }
+
+    function renderConfigHotspots() {
+      configList.innerHTML = "";
+      configHotspots.forEach((item, index) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `config-button${index === selectedConfig ? " active" : ""}`;
+        button.textContent = item.label;
+        button.addEventListener("click", () => {
+          selectedConfig = index;
+          renderConfigHotspots();
+          renderConfigDetail();
+        });
+        configList.appendChild(button);
+      });
+    }
+
+    function renderConfigDetail() {
+      const item = configHotspots[selectedConfig];
+      configDetail.innerHTML = `
+        <h4>${item.title}</h4>
+        <p>${item.body}</p>
+        <pre>${item.snippet}</pre>
+      `;
+    }
+
+    function renderQuiz() {
+      quizOptions.innerHTML = "";
+      quiz.forEach((item) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "quiz-option";
+        button.textContent = item.text;
+        button.addEventListener("click", () => {
+          Array.from(quizOptions.children).forEach((child) => child.classList.remove("correct", "wrong"));
+          button.classList.add(item.correct ? "correct" : "wrong");
+          quizResult.textContent = item.feedback;
+        });
+        quizOptions.appendChild(button);
+      });
+    }
+
+    recipeModalClose.addEventListener("click", closeRecipeModal);
+    recipeModal.addEventListener("click", (event) => {
+      if (event.target === recipeModal) {
+        closeRecipeModal();
+      }
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && recipeModal.classList.contains("open")) {
+        closeRecipeModal();
+      }
+    });
+
+    commandRecipe.addEventListener("change", () => {
+      syncConfigOptions();
+      renderRecipes();
+      updateCommand();
+    });
+    configPath.addEventListener("change", updateCommand);
+    gpuCount.addEventListener("input", updateCommand);
+    copyCommand.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(commandOutput.textContent);
+        copyStatus.textContent = "已复制到剪贴板";
+      } catch (error) {
+        copyStatus.textContent = "当前浏览器不允许自动复制，请手动选中命令";
+      }
+    });
+
+    renderRecipes();
+    syncCommandRecipeOptions();
+    updateCommand();
+    renderConfigHotspots();
+    renderConfigDetail();
+    renderQuiz();
+  </script>
+</body>
+</html>
