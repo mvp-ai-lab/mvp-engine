@@ -83,11 +83,24 @@ This repository contains the core engine, shared utilities, and experiment-speci
 
 Recipe-local test rules:
 
-When a skill changes a recipe, validation is part of applying the skill. Read
-`skills/AGENTS.md` and the target `SKILL.md`, add the recipe-local
-`skill_tests/` artifacts required by that skill, and validate through
-`python -m tests.test_skills --recipe <recipe> --skill <skill-id>` using the
-repository workflow.
+- When a user asks to execute, apply, validate, test, or run a skill for a recipe,
+treat that request as an explicit request to use the fresh subagents required by
+the repository skill-validation workflow.
+
+- Validation is part of applying the skill and is a mandatory completion criterion,
+not optional guidance. Before validation, read `skills/AGENTS.md` and the target
+`SKILL.md`, add the recipe-local `skill_tests/` artifacts required by that skill,
+and validate through:
+  - `python -m tests.test_skills --recipe <recipe> --skill <skill-id>`
+
+- Run these validation commands only in fresh subagents with `fork_context=false`.
+Do not run them from the main agent's local terminal, background terminal
+sessions, or any other non-subagent shell fallback.
+
+- If `skills/AGENTS.md`, the target `SKILL.md`, or recipe-local test artifacts
+define layers such as `structure`, `runtime`, `smoke`, or `effectiveness`, run
+each required layer in a separate fresh subagent, in order, stopping on first
+failure.
 
 ## Git Rules
 
