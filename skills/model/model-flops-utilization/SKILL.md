@@ -162,19 +162,6 @@ Use warmup steps before trusting stability. Suspicious MFU values, especially ne
 
 ## Validation
 
-<<<<<<< Updated upstream
-- The current model instance has `calculate_model_flops(...)`, and the method was added by injection instead of by replacing the model class.
-- The method signature keeps only parameters required by the actual architecture.
-- The engine has a real MFU integration point using runtime step time, device peak FLOPs, precision, and `world_size`.
-- The logged MFU value is a `float` under `perf/mfu`.
-- The MFU value passes a sanity check: it is not negative, it is not implausibly larger than `1`, and suspicious values were traced back through FLOPs estimation, hardware lookup, precision mapping, timing, and `world_size`.
-
-Add recipe-local tests under `recipes/<recipe>/skill_tests/model-flops-utilization/`:
-
-- `test_structure.py`: verify recipe structure and core wiring.
-- `test_runtime.py`: build recipe runtime objects through recipe entrypoints.
-- `test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
-=======
 Required checks:
 
 - injected `calculate_model_flops(...)` exists on the runtime path
@@ -209,10 +196,9 @@ Minimum expectations:
 - runtime: dataset, model, optimizer, scheduler, engine, and MFU helper build
 - smoke: real CUDA GPU recipe step records `perf/mfu` without fake timers, fake loggers, or unrelated toy models
 - effectiveness: real CUDA GPU logs contain finite `perf/mfu` and required `perf/*` metrics
-- `test_effectiveness.py` must parse real GPU logs and verify TFLOPs, MFU, and tokens/sec formulas.
+- `test_effectiveness.py` should parse logs with a helper that returns `perf/mfu`; assert it is a finite `float`, enforce `perf/mfu in [0, 1]`, require finite `perf/*` metrics, and verify TFLOPs, MFU, and tokens/sec formulas.
 
-Run GPU validation with `loop.total_steps=1000`, `log.interval=10`, and `checkpoint.interval=10000`.
->>>>>>> Stashed changes
+Run skill validation through `python -m tests.test_skills --recipe <recipe> --skill model-flops-utilization`, following the repository fresh-subagent layer workflow. Run GPU validation with `loop.total_steps=1000`, `log.interval=10`, and `checkpoint.interval=10000`.
 
 ## Output
 
