@@ -34,7 +34,6 @@ def test_new_recipe_structure_matches_magic_transformer_scaffold() -> None:
         "model/source_model.py",
         "skill_tests/skill_manifest.yaml",
         "skill_tests/new-recipe-template/test_structure.py",
-        "skill_tests/new-recipe-template/test_runtime.py",
         "skill_tests/new-recipe-template/test_smoke.py",
     ]
 

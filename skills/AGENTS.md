@@ -50,7 +50,6 @@ recipes/<recipe>/
     ├── skill_manifest.yaml
     └── <skill-id>/
         ├── test_structure.py
-        ├── test_runtime.py
         ├── test_smoke.py
         └── test_effectiveness.py  # optional, only when the skill declares effectiveness checks
 ```
@@ -59,8 +58,10 @@ recipes/<recipe>/
   `skills` list. A skill name is written only after all required recipe-local
   test layers pass in a full skill-test run.
 - The skill test runner discovers layers from files that exist in the skill
-  directory: `test_structure.py`, `test_runtime.py`, `test_smoke.py`, and
-  optional `test_effectiveness.py`.
+  directory: `test_structure.py`, `test_smoke.py`, and optional
+  `test_effectiveness.py`.
+- The standard flow has two layers: `structure` and `smoke`. Skills that
+  declare effectiveness checks add `effectiveness` as the third layer.
 - A skill application is incomplete until every required layer passes through
   the skill test runner, or the exact environment limitation and command to run
   in a real environment are reported.
@@ -81,8 +82,6 @@ recipes/<recipe>/
 
 - `test_structure.py`: verify recipe import, registry wiring, config schema
   validation, required slots, and logger/checkpoint hooks.
-- `test_runtime.py`: build dataset, collator, model, optimizer, scheduler, and
-  engine successfully without starting training.
 - `test_smoke.py`: cover one real recipe-owned step: forward, loss, backward,
   optimizer step, logger write, and checkpoint noop or temporary save.
 
@@ -118,21 +117,20 @@ recipes/<recipe>/
   `fork_context=false`. Do not run `python -m tests.test_skills ...` from the
   main agent's local terminal, background terminal sessions, or any other
   non-subagent shell fallback.
-- Do not run a full local dry run of `structure`, `runtime`, `smoke`, or
-  `effectiveness` before the subagent workflow. A local preflight is allowed
-  only for the smallest syntax/import check needed to unblock validation.
+- Do not run a full local dry run of `structure`, `smoke`, or `effectiveness`
+  before the subagent workflow. A local preflight is allowed only for the
+  smallest syntax/import check needed to unblock validation.
 - Run `--layer structure` in one fresh subagent, wait for it to pass, then run
-  `--layer runtime` in a new fresh subagent, then run `--layer smoke` in a new
-  fresh subagent, and finally run `--layer effectiveness` in a new fresh
-  subagent when that layer exists.
+  `--layer smoke` in a new fresh subagent, and finally run `--layer effectiveness`
+  in a new fresh subagent when that layer exists.
 - The user should not need to ask for these tests explicitly. When an agent
   applies a skill to a user recipe, it should add the matching recipe-local
   tests and try to run them by default.
 - The agent should update `skill_tests/skill_manifest.yaml` automatically after
   all required recipe-local layers succeed. If a skill declares effectiveness
-  checks, all four layers must pass before the skill name is recorded.
+  checks, all three layers must pass before the skill name is recorded.
 - If any required layer fails, do not mark the work complete and do not update
   `skill_tests/skill_manifest.yaml` as passing.
-- The main agent should summarize the `structure` / `runtime` / `smoke` /
-  `effectiveness` outcomes after those subagents finish, omitting
-  effectiveness for skills that do not define it.
+- The main agent should summarize the `structure` / `smoke` / `effectiveness`
+  outcomes after those subagents finish, omitting effectiveness for skills that
+  do not define it.

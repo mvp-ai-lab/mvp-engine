@@ -152,7 +152,6 @@ parallel:
 Add recipe-local tests under `recipes/<recipe>/skill_tests/tensor-parallel/`:
 
 - `test_structure.py`: verify recipe structure and core wiring.
-- `test_runtime.py`: build recipe runtime objects through recipe entrypoints.
 - `test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
 - `test_effectiveness.py`: create a recipe-local test that uses
   `mvp_engine.test.recipe_probe` helpers, then add a method such as

@@ -10,10 +10,9 @@ import yaml
 
 SKILL_TESTS_DIRNAME = "skill_tests"
 MANIFEST_FILENAME = "skill_manifest.yaml"
-LAYER_ORDER = ("structure", "runtime", "smoke", "effectiveness")
+LAYER_ORDER = ("structure", "smoke", "effectiveness")
 DEFAULT_LAYER_FILES = {
     "structure": ("test_structure.py",),
-    "runtime": ("test_runtime.py",),
     "smoke": ("test_smoke.py",),
     "effectiveness": ("test_effectiveness.py",),
 }
