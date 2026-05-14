@@ -1,0 +1,64 @@
+dev_mode: false
+engine: BasicVLMEngine
+
+seed: 219
+deterministic: false
+
+project:
+  name: "basic_vlm"
+  dir: "./outputs"
+
+log:
+  interval: 1
+  backends: ["terminal", "file", "wandb"]
+  accumulation_size: 1
+  timer_window_size: 10
+
+parallel:
+  mesh:
+    replicate: -1
+    shard: 8
+    tensor: 1
+data:
+  train_path: "./data/Open-Bee-Lance/stage2/meta.json"
+  ref_columns: ["images"]
+  thinking_mode: "non-empty"
+  packing: true
+  packing_selection_strategy: "best_fit"
+  packing_open_pack_limit: 8
+  packing_buffer_size: 64
+  max_seq_len: 16384
+  batch_size: 1
+  num_workers: 4
+model:
+  pretrained_model_name_or_path: "./pretrained/Qwen3-VL-8B-Base-woDS-stage1"
+  attn_implementation: "flash_attention_2"
+  image_max_pixels: 1280000
+  gradient_checkpointing:
+    enabled: true
+    use_reentrant: false
+  # Freeze flags — set true to stop gradient for the corresponding sub-module.
+  # Defaults follow the alignment-stage convention: train merger only.
+  freeze_vit: false
+  freeze_merger: false
+  freeze_llm: false
+  compile: false
+  compile_backend: "inductor"
+  compile_mode: "default"
+optim:
+  lr: 4.0e-5
+  weight_decay: 0.0
+  global_batch_size: 256
+  gradient_accumulation_steps: -1
+  mixed_precision: "bf16"
+  warmup_ratio: 0.002
+  clip_grad_norm: 1.0
+
+loop:
+  policy: "iter"
+  total_steps: -1
+
+checkpoint:
+  interval: 200
+  keep_n: 2
+  hf_enable: true

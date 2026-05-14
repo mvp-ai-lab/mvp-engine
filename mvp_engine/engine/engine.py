@@ -430,7 +430,6 @@ class Engine(ABC):
             )
 
         logger.info("Initializing Timer...")
-        # FIXME: use progress rather than total_steps.
         self.timer = Timer(
             total_progress=self.total_steps,
             window_size=self.config.log.timer_window_size,
