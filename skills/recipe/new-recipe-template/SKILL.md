@@ -85,13 +85,11 @@ uv run --with ruff ruff check recipes/<recipe_name>
 
 ## Validation
 
-Create the recipe-level tests and initial skill assertions:
+Add recipe-local assertions under `recipes/<recipe>/skill_tests/model-migration/asserts.py`,
+using the standard `assert_structure(...)` and `assert_smoke(...)` hooks:
 
 - `skill_tests/test_structure.py`: verify recipe structure and core wiring.
 - `skill_tests/test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
-- `skill_tests/new-recipe-template/asserts.py`: keep the new-recipe-template
-  assertions in the standard `assert_structure(...)` and `assert_smoke(...)`
-  hooks.
 
 ## Output
 

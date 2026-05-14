@@ -48,25 +48,13 @@ diff -u SOURCE_MODEL.py CHECKPOINT_DIR/modeling_*.py
 - Prefer a `torch_npu` import with fallback and use NPU fused ops only when tensors are actually on NPU.
 - Keep an exact non-NPU fallback math path.
 
-### 4. Add recipe-local parity tests
-
-Create recipe-local assertions in:
-- `recipes/<recipe>/skill_tests/model-migration/asserts.py`
-
-Add:
-- `skill_tests/test_structure.py`: verify recipe structure and model-migration wiring.
-- `skill_tests/test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
-- `asserts.py`: expose the standard `assert_structure(...)` and `assert_smoke(...)` hooks.
-
-If the environment allows, run tests on both CPU/GPU and NPU devices to validate parity across implementations.
-
-### 5. Validate checkpoint compatibility
+### 4. Validate checkpoint compatibility
 
 - Run strict `load_state_dict(..., strict=True)` checks on every migrated class.
 - Run a `from_pretrained(...)` smoke test against the checkpoint directory.
 - If strict load fails, diff the model's `state_dict().keys()` against checkpoint keys and fix naming or structure mismatches in the migrated model before considering checkpoint rewrites.
 
-### 6. Stop only after the acceptance bar is met
+### 5. Stop only after the acceptance bar is met
 
 - Do not stop at a compiling port.
 - Ship only after behavior parity, checkpoint compatibility, and recipe-local validation all pass or any remaining gap is clearly documented.
@@ -78,6 +66,12 @@ If the environment allows, run tests on both CPU/GPU and NPU devices to validate
 - Strict checkpoint load passes with zero missing or unexpected keys.
 - `from_pretrained(...)` succeeds for the migrated class.
 - Lint or targeted checks covering the migrated files were run.
+
+Add recipe-local assertions under `recipes/<recipe>/skill_tests/model-migration/asserts.py`,
+using the standard `assert_structure(...)` and `assert_smoke(...)` hooks:
+
+- `skill_tests/test_structure.py`: verify recipe structure and model-migration wiring.
+- `skill_tests/test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
 
 ## Output
 
