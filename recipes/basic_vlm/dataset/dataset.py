@@ -31,8 +31,7 @@ def build_dataset(
         resample: Whether to loop dataset shards indefinitely across rounds.
         resolve_refs: Whether to resolve references in the dataset.
     Returns:
-        An ``mvp_dataset.Dataset`` pipeline with parquet loading, processing, and
-        sample-level shuffling.
+        An ``mvp_dataset.Dataset`` Lance pipeline with processing and sample-level shuffling.
     """
     dataset_path = config.data.train_path
     if dataset_path is None:

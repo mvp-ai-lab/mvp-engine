@@ -20,7 +20,7 @@ parallel:
     shard: 8
     tensor: 1
 data:
-  train_path: "/mnt/data-alpha-sg-01/team-camera/shared/mvp-engine/data/Open-Bee-Lance/stage3/meta.json"
+  train_path: "./data/Open-Bee-Lance/stage3/meta.json"
   ref_columns: ["images"]
   thinking_mode: "non-empty"
   packing: true

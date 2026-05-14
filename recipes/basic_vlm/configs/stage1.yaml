@@ -20,9 +20,9 @@ parallel:
     shard: 1
     tensor: 1
 data:
-  train_path: "./data/openbee/stage1/train/**/*.parquet"
+  train_path: "./data/Open-Bee-Lance/stage1/meta.json"
+  ref_columns: ["images"]
   thinking_mode: "non-empty"
-  shuffle_buffer: 1000
   packing: true
   packing_selection_strategy: "best_fit"
   packing_open_pack_limit: 8
