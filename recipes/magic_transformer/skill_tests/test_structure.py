@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import runpy
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ from omegaconf import OmegaConf
 from mvp_engine.engine import ENGINE_REGISTRY
 from mvp_engine.test.recipe_probe import import_modules, load_config
 from mvp_engine.utils import skill_testing_util
+from mvp_engine.utils.skill_testing_util import CURRENT_SKILL_ENV
 from recipes.magic_transformer.configs.schema import MagicTransformerConfig
 
 RECIPE_PATH = Path("recipes/magic_transformer")
@@ -33,5 +35,8 @@ def test_recipe_structure_matches_installed_skill_assertions() -> None:
 def _load_skill_asserts() -> tuple[tuple[str, dict[str, Any]], ...]:
     return tuple(
         (skill_id, runpy.run_path(str(asserts_path)))
-        for skill_id, asserts_path in skill_testing_util.get_ordered_skill_asserts(RECIPE_PATH)
+        for skill_id, asserts_path in skill_testing_util.get_ordered_skill_asserts(
+            RECIPE_PATH,
+            current_skill_id=os.environ.get(CURRENT_SKILL_ENV),
+        )
     )

@@ -104,6 +104,26 @@ recipes/<recipe>/
   backward, optimizer step, logger write, checkpoint noop or temporary save,
   and all accumulated skill smoke assertions.
 
+### Cumulative Smoke Config Pattern
+
+- `test_smoke.py` should keep one standard recipe-owned smoke config override.
+  This config is the shared validation target for all installed skills.
+- When applying a new skill, update that standard config minimally so it
+  satisfies both previously installed skills and the new skill. In most cases
+  this means changing only `parallel.mesh`, backend kwargs, precision, or small
+  model dimension values required by the capability.
+- Do not add a separate per-skill smoke test that builds another engine just for
+  that skill. Build one engine and one step context per rank from the shared
+  config, then run every installed/current skill's `assert_smoke(...)` against
+  that same engine, context, batch, log path, and checkpoint path.
+- `test_smoke.py` should expose clear single-GPU and multi-GPU execution paths.
+  Choose between them from the resolved config mesh world size, not from
+  hardcoded skill names. Use `single_rank_distributed_env(...)` when the shared
+  config resolves to one rank, and `multi_rank_distributed_env(...)` when it
+  resolves to multiple ranks.
+- If two skills require incompatible smoke configs, stop and explain the
+  conflict instead of adding parallel smoke paths that hide the incompatibility.
+
 ### Distributed and Real-path Requirements
 
 - If a skill needs distributed execution, use
@@ -115,6 +135,13 @@ recipes/<recipe>/
   Do not short-circuit it with monkeypatch-based fake engines, fake wrappers,
   fake process groups, fake device meshes, fake loggers, fake training steps, or
   similar test-only stand-ins.
+- Skill-related validation should prefer the real GPU execution path whenever the
+  skill or recipe meaningfully depends on accelerator, distributed, launcher,
+  logger, checkpoint, or parallel behavior; do not default to CPU-only or
+  single-process `gloo` as a convenience fallback. Do not silently replace a
+  GPU-expected `runtime` or `smoke` test with a weaker CPU variant just to get a
+  local pass. Only use a CPU fallback when the skill documentation explicitly
+  allows it and the CPU path still validates the same required capability.
 - If a recipe-local test really requires a real GPU, NPU, distributed launcher,
   or extra execution permission, it should fail with an actionable command for
   the user to run in that environment, not `skip`.
