@@ -137,7 +137,7 @@ def convert_images_to_pixel_values(
         sample["image_grid_thw"] = image_inputs["image_grid_thw"]
         return sample
     except Exception as exc:
-        print(exc)
+        simple_info(exc, level="debug")
         return build_empty_sample()
 
 

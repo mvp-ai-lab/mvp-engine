@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="./assets/banner.png">
-    <source media="(prefers-color-scheme: light)" srcset="./assets/banner.png">
+    <source media="(prefers-color-scheme: light)" srcset="./assets/banner-light.png">
     <img alt="MVP Engine" src="./assets/banner.png">
   </picture>
 </p>
