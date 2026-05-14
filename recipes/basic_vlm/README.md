@@ -1,118 +1,45 @@
-# basic_vlm
+# Basic VLM
 
-https://arxiv.org/html/2510.13795v4
+`basic_vlm` is the Basic VLM recipe for Qwen3-VL 8B training on Open-Bee style
+multimodal data. The recipe is implemented locally under `recipes/basic_vlm/`
+and uses the shared `mvp_engine` launch, logging, checkpoint, and distributed
+training infrastructure.
 
-`basic_vlm` is a standard three-stage VLM training workflow:
+## Stages
 
-- alignment
-- pretrain
-- SFT
+- `configs/stage1.yaml`: alignment stage.
+- `configs/stage2.yaml`: pretraining stage.
+- `configs/stage3.yaml`: SFT stage.
 
-This initial recipe implements the alignment stage only. It is based on the
-current `minimal_vlm` recipe shape and fine-tunes a local
-`Qwen3-VL-8B-Instruct` checkpoint rebuilt for Basic VLM on Open-Bee data.
+Each stage expects a Lance dataset `meta.json` from `mvp_dataset` and a local
+checkpoint path. Override `data.train_path` and
+`model.pretrained_model_name_or_path` when using different data or checkpoints.
 
-The default placeholder dataset path is `data/openbee/alignment_demo.jsonl`.
+## Data
 
-`mvp_dataset` must be importable in the runtime environment. The recipe uses it
-to shard local JSONL files under `.jsonl_shards/` next to the source dataset and
-to build the training dataset.
+The dataset rows should provide:
 
-## What it does
+- `messages` or `conversations`: user/assistant chat turns.
+- `images`: image references consumed by `<image>` placeholders.
+- `image_size` or `img_size`: image size metadata matching `images`.
 
-- Focuses on the alignment stage of the Basic VLM training plan.
-- Loads multimodal chat data from JSONL.
-- Rewrites `<image>` placeholders into the Hugging Face chat format expected by Qwen3-VL.
-- Supervises all assistant turns in the conversation.
-- Freezes the visual stack by default and trains the language model plus `lm_head`.
-- Uses a custom Qwen3-VL-8B checkpoint whose visual tower comes from
-  `Qwen/Qwen3-VL-8B-Instruct`, language model and `lm_head` come from
-  `Qwen/Qwen3-8B-Base`, and `visual.merger` is re-initialized randomly.
-- Runs through the shared distributed wrapper with a DDP-safe default mesh for `torchrun`.
+The loader validates the raw rows, tokenizes conversations with the Qwen3-VL
+processor, optionally packs samples, resolves image references, and materializes
+pixel tensors for training.
 
-## Dataset format
-
-Each JSONL row must contain:
-
-- `messages`: a non-empty list of chat messages with `role` and string `content`
-- `images`: a list of image paths relative to the JSONL file, or a list of
-  `mvp_dataset` tar references such as `images/train-00000.tar#sample_0.jpg`
-
-The total number of image paths must exactly match the total number of `<image>`
-placeholders across the conversation.
-
-Example:
-
-```json
-{
-  "messages": [
-    {"role": "user", "content": "<image>Who is this?"},
-    {"role": "assistant", "content": "This is an example response."}
-  ],
-  "images": ["images/1.jpg"]
-}
-```
-
-## Build Alignment Data
-
-This recipe includes a converter that rebuilds the alignment corpus in the
-recommended `mvp_dataset` JSONL + TAR-reference format from the downloaded
-Open-Bee parquet releases:
-
-```bash
-python3 recipes/basic_vlm/tools/build_alignment_data.py \
-  --input-root /mnt/data-alpha-sg-01/team-camera/shared/mvp-engine/data/Open-Bee \
-  --output-dir data/openbee/openbee_stage1_stage2_mm_only
-```
-
-It writes:
-
-- `data/openbee/openbee_stage1_stage2_mm_only/train.jsonl`
-- `data/openbee/openbee_stage1_stage2_mm_only/images/train-*.tar`
-
-The current loader resolves those tar references automatically.
-
-## Build The Basic VLM 8B Checkpoint
-
-Build the local checkpoint once before training:
-
-```bash
-.venv/bin/python recipes/basic_vlm/tools/build_qwen3_vl_checkpoint.py \
-  --output-dir recipes/basic_vlm/pretrained/Qwen3-VL-8B-Instruct
-```
-
-The builder keeps the `Qwen/Qwen3-VL-8B-Instruct` model structure and visual
-tower weights, swaps in `Qwen/Qwen3-8B-Base` for `language_model.*` and
-`lm_head.*`, and randomly initializes `model.visual.merger.*`.
-
-## Shuffle Stage2 Parquet Shards
-
-This recipe also includes a stage2 parquet reshuffler that mixes samples from
-different source folders into new flat parquet shards:
-
-```bash
-python3 recipes/basic_vlm/tools/shuffle_stage2_parquet.py \
-  --input-root data/openbee/stage2 \
-  --output-dir data/openbee/stage2_shuffled \
-  --num-workers 8
-```
-
-The tool plans work on parquet row groups, assigns mixed-source shard plans to
-multiple worker processes, and renders one global progress bar plus one bar per
-worker.
-
-## Quick Start
-
-Run the alignment-stage config:
+## Run
 
 ```bash
 torchrun --nproc_per_node=8 -m mvp_engine.launch --config ./recipes/basic_vlm/configs/stage1.yaml
+torchrun --nproc_per_node=8 -m mvp_engine.launch --config ./recipes/basic_vlm/configs/stage2.yaml
+torchrun --nproc_per_node=8 -m mvp_engine.launch --config ./recipes/basic_vlm/configs/stage3.yaml
 ```
 
-Point the recipe at your alignment dataset:
+Example override:
 
 ```bash
 torchrun --nproc_per_node=8 -m mvp_engine.launch \
-  --config ./recipes/basic_vlm/configs/stage1.yaml \
-  data.train_path=/path/to/train.jsonl
+  --config ./recipes/basic_vlm/configs/stage2.yaml \
+  data.train_path=./data/Open-Bee-Lance/stage2/meta.json \
+  model.pretrained_model_name_or_path=./pretrained/Qwen3-VL-8B-Base-woDS-stage1
 ```

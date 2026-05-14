@@ -92,8 +92,6 @@ def build_dataset(
 
     # 6. Resolve references after packing so invalid/short samples avoid image IO.
     if resolve_refs:
-        # TODO: add error handeling inside the mvp-dataset
-        # TODO: what about pure text data?
         dataset = dataset.resolve_ref(ref_names=config.data.ref_columns).map(
             partial(convert_images_to_pixel_values, processor=processor)
         )
