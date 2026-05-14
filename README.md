@@ -2,7 +2,7 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="./assets/banner_2.png">
     <source media="(prefers-color-scheme: light)" srcset="./assets/banner_2.png">
-    <img alt="MVP Engine" src="./assets/banner_2.png">
+    <img alt="MVP Engine" src="./assets/banner.png">
   </picture>
 </p>
 
