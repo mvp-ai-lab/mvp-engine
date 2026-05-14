@@ -73,10 +73,11 @@ if self.config.model.compile:
   - a compile-on vs compile-off comparison for loss and logs
 - Record first-step compile latency, whether steady state is reached, throughput changes, and memory changes when those measurements are available.
 
-Add recipe-local tests under `recipes/<recipe>/skill_tests/model-compile/`:
+Add recipe-local assertions under `recipes/<recipe>/skill_tests/model-compile/asserts.py`,
+using the standard `assert_structure(...)` and `assert_smoke(...)` hooks:
 
-- `test_structure.py`: verify recipe structure and core wiring.
-- `test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
+- `skill_tests/test_structure.py`: verify recipe structure and model-compile wiring.
+- `skill_tests/test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
 
 ## Validation
 

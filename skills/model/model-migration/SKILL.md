@@ -50,12 +50,13 @@ diff -u SOURCE_MODEL.py CHECKPOINT_DIR/modeling_*.py
 
 ### 4. Add recipe-local parity tests
 
-Create tests in:
-- `recipes/<recipe>/skill_tests/model-migration/`
+Create recipe-local assertions in:
+- `recipes/<recipe>/skill_tests/model-migration/asserts.py`
 
 Add:
-- `test_structure.py`: verify recipe structure and core wiring.
-- `test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
+- `skill_tests/test_structure.py`: verify recipe structure and model-migration wiring.
+- `skill_tests/test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
+- `asserts.py`: expose the standard `assert_structure(...)` and `assert_smoke(...)` hooks.
 
 If the environment allows, run tests on both CPU/GPU and NPU devices to validate parity across implementations.
 

@@ -272,10 +272,11 @@ logger.log(log_dict, step=step)
 - The logged MFU value is a `float` under `perf/mfu`.
 - The MFU value passes a sanity check: it is not negative, it is not implausibly larger than `1`, and suspicious values were traced back through FLOPs estimation, hardware lookup, precision mapping, timing, and `world_size`.
 
-Add recipe-local tests under `recipes/<recipe>/skill_tests/model-flops-utilization/`:
+Add recipe-local assertions under `recipes/<recipe>/skill_tests/model-flops-utilization/asserts.py`,
+using the standard `assert_structure(...)` and `assert_smoke(...)` hooks:
 
-- `test_structure.py`: verify recipe structure and core wiring.
-- `test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
+- `skill_tests/test_structure.py`: verify recipe structure and MFU wiring.
+- `skill_tests/test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
 
 ## Output
 

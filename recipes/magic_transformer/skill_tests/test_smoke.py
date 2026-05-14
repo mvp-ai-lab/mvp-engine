@@ -1,8 +1,10 @@
-"""Recipe-local smoke tests for the new-recipe-template skill."""
+"""Recipe-level cumulative smoke tests for installed skills."""
 
 from __future__ import annotations
 
+import runpy
 from pathlib import Path
+from typing import Any
 
 from mvp_engine.engine import TrainStepContext
 from mvp_engine.test.recipe_probe import (
@@ -10,6 +12,7 @@ from mvp_engine.test.recipe_probe import (
     load_config,
     single_rank_distributed_env,
 )
+from mvp_engine.utils import skill_testing_util
 from mvp_engine.utils.log import get_logger
 from recipes.magic_transformer.configs.schema import MagicTransformerConfig
 
@@ -35,7 +38,45 @@ SMALL_MAGIC_TRANSFORMER_OVERRIDE = {
 }
 
 
-def build_magic_transformer_engine(*, output_dir: Path, run_id: str, total_steps: int):
+def test_recipe_smoke_matches_installed_skill_assertions(tmp_path: Path) -> None:
+    output_dir = tmp_path / "smoke_outputs"
+
+    with single_rank_distributed_env():
+        engine = _build_magic_transformer_engine(output_dir=output_dir, run_id="smoke", total_steps=1)
+        try:
+            engine.before_train()
+            batch = next(iter(engine.train_loader))
+            skill_asserts = _load_skill_asserts()
+
+            ctx = TrainStepContext(
+                data=batch,
+                step=engine.step,
+                epoch=engine.epoch,
+                micro_step=engine.ga_state.micro_step,
+            )
+            prepared = engine.train_pre_step(ctx)
+            if prepared is not None and prepared is not ctx:
+                ctx.data = prepared
+
+            engine.train_exec_step(ctx)
+            engine.train_post_step(ctx)
+            engine.after_train()
+
+            run_dir = Path(engine.project_dir)
+            log_file = run_dir / f"log_{engine.run_id}.log"
+            checkpoint_dir = run_dir / "checkpoints" / "iter_1"
+            for skill_id, asserts in skill_asserts:
+                assert_smoke = asserts.get("assert_smoke")
+                if assert_smoke is None:
+                    raise AssertionError(f"{skill_id} asserts.py must define assert_smoke.")
+                assert_smoke(engine=engine, ctx=ctx, batch=batch, log_file=log_file, checkpoint_dir=checkpoint_dir)
+        finally:
+            logger_instance = get_logger()
+            if logger_instance is not None:
+                logger_instance.destroy()
+
+
+def _build_magic_transformer_engine(*, output_dir: Path, run_id: str, total_steps: int):
     config = load_config(
         RECIPE_PATH,
         output_dir=output_dir,
@@ -46,46 +87,8 @@ def build_magic_transformer_engine(*, output_dir: Path, run_id: str, total_steps
     return build_engine(RECIPE_PATH, config, config_class=MagicTransformerConfig)
 
 
-def test_new_recipe_smoke_runs_one_real_training_step_and_checkpoint(tmp_path: Path) -> None:
-    output_dir = tmp_path / "smoke_outputs"
-
-    with single_rank_distributed_env():
-        engine = build_magic_transformer_engine(output_dir=output_dir, run_id="smoke", total_steps=1)
-        try:
-            engine.before_train()
-
-            ctx = TrainStepContext(
-                data=next(iter(engine.train_loader)),
-                step=engine.step,
-                epoch=engine.epoch,
-                micro_step=engine.ga_state.micro_step,
-            )
-            prepared = engine.train_pre_step(ctx)
-            if prepared is not None and prepared is not ctx:
-                ctx.data = prepared
-
-            engine.train_exec_step(ctx)
-
-            assert ctx.loss is not None
-            assert ctx.loss.requires_grad
-            assert ctx.loss.item() > 0
-
-            engine.train_post_step(ctx)
-            assert engine.step == 1
-
-            engine.after_train()
-
-            run_dir = Path(engine.project_dir)
-            log_file = run_dir / f"log_{engine.run_id}.log"
-            checkpoint_dir = run_dir / "checkpoints" / "iter_1"
-
-            assert log_file.exists()
-            assert "train/loss" in log_file.read_text(encoding="utf-8")
-            assert checkpoint_dir.exists()
-            assert (checkpoint_dir / "model.pt").exists()
-            assert (checkpoint_dir / "optimizer.pt").exists()
-            assert (checkpoint_dir / "engine.pt").exists()
-        finally:
-            logger_instance = get_logger()
-            if logger_instance is not None:
-                logger_instance.destroy()
+def _load_skill_asserts() -> tuple[tuple[str, dict[str, Any]], ...]:
+    return tuple(
+        (skill_id, runpy.run_path(str(asserts_path)))
+        for skill_id, asserts_path in skill_testing_util.get_ordered_skill_asserts(RECIPE_PATH)
+    )

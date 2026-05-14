@@ -149,11 +149,12 @@ parallel:
   local runtime metadata.
 - The mesh config has compatible `replicate`, `shard`, and `tensor` values.
 
-Add recipe-local tests under `recipes/<recipe>/skill_tests/tensor-parallel/`:
+Add recipe-local assertions under `recipes/<recipe>/skill_tests/tensor-parallel/asserts.py`,
+using the standard `assert_structure(...)` and `assert_smoke(...)` hooks:
 
-- `test_structure.py`: verify recipe structure and core wiring.
-- `test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
-- `test_effectiveness.py`: create a recipe-local test that uses
+- `skill_tests/test_structure.py`: verify recipe structure and tensor-parallel wiring.
+- `skill_tests/test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
+- `skill_tests/tensor-parallel/test_effectiveness.py`: create a recipe-local test that uses
   `mvp_engine.test.recipe_probe` helpers, then add a method such as
   `assert_tp_tensor_dims_match_mesh(model, reference_shapes, tp_config, mesh)`.
   Compare each TP-covered parameter's local shape against its pre-parallel

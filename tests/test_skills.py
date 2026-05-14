@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -66,7 +67,7 @@ def run_one_skill(
         paths = skill_tests.pytest_paths_for_layer(requested_layer)
         relative_paths = ", ".join(_format_repo_relative_path(path) for path in paths)
         print(f"  - {requested_layer}: {relative_paths}")
-        returncode = _run_pytest(paths)
+        returncode = _run_pytest(paths, skill_tests.skill_id)
         if returncode != 0:
             result_name = f"{skill_tests.skill_id}:{requested_layer}" if layer is not None else skill_tests.skill_id
             return RunResult(name=result_name, passed=False, returncode=returncode)
@@ -85,10 +86,12 @@ def print_summary(results: list[RunResult]) -> None:
         print(f"  {status} {result.name}")
 
 
-def _run_pytest(paths: tuple[Path, ...]) -> int:
+def _run_pytest(paths: tuple[Path, ...], skill_id: str) -> int:
     """Run recipe-local skill validation as direct pytest file execution."""
     command = [sys.executable, "-m", "pytest", "-q", *[str(path) for path in paths]]
-    completed = subprocess.run(command, cwd=skill_testing_util.find_repo_root(paths[0]), check=False)
+    env = os.environ.copy()
+    env[skill_testing_util.CURRENT_SKILL_ENV] = skill_id
+    completed = subprocess.run(command, cwd=skill_testing_util.find_repo_root(paths[0]), env=env, check=False)
     return completed.returncode
 
 

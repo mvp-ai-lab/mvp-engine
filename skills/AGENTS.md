@@ -48,18 +48,30 @@ Use this layout:
 recipes/<recipe>/
 └── skill_tests/
     ├── skill_manifest.yaml
+    ├── test_structure.py
+    ├── test_smoke.py
     └── <skill-id>/
-        ├── test_structure.py
-        ├── test_smoke.py
+        ├── asserts.py
         └── test_effectiveness.py  # optional, only when the skill declares effectiveness checks
 ```
 
 - `skill_tests/skill_manifest.yaml` tracks installed recipe skills as a simple
   `skills` list. A skill name is written only after all required recipe-local
   test layers pass in a full skill-test run.
-- The skill test runner discovers layers from files that exist in the skill
-  directory: `test_structure.py`, `test_smoke.py`, and optional
-  `test_effectiveness.py`.
+- `skill_tests/test_structure.py` and `skill_tests/test_smoke.py` are
+  recipe-level cumulative tests. They should be created when the recipe is
+  created and extended when new skills are applied.
+- Each skill directory must contain `asserts.py` with `assert_structure(...)`
+  and `assert_smoke(...)` hooks. Keep skill-specific structure and smoke
+  assertions there.
+- Recipe-level `test_structure.py` and `test_smoke.py` must load asserts in
+  `skill_manifest.yaml` order, then run the current `--skill` asserts last so a
+  skill being installed is validated before it is recorded in the manifest.
+- A skill directory may also contain `test_effectiveness.py` when the skill
+  declares effectiveness checks.
+- The skill test runner discovers `structure` and `smoke` from the recipe-level
+  files, and discovers optional `effectiveness` from the selected skill
+  directory.
 - The standard flow has two layers: `structure` and `smoke`. Skills that
   declare effectiveness checks add `effectiveness` as the third layer.
 - A skill application is incomplete until every required layer passes through
@@ -77,13 +89,20 @@ recipes/<recipe>/
 - Pass the recipe path to `import_modules` / `load_config`, then keep
   recipe-local code focused on the small config override and skill-specific
   assertions.
+- When applying a new skill, preserve the recipe-level assert loader so
+  validation for the new skill also covers previously installed skills.
+- If a new skill conflicts with an existing assertion, the agent may update the
+  assertion, but it must keep the smallest correct change and explain the
+  conflict and resolution to the user.
 
 ### Standard Test Layers
 
-- `test_structure.py`: verify recipe import, registry wiring, config schema
-  validation, required slots, and logger/checkpoint hooks.
-- `test_smoke.py`: cover one real recipe-owned step: forward, loss, backward,
-  optimizer step, logger write, and checkpoint noop or temporary save.
+- `skill_tests/test_structure.py`: verify recipe import, registry wiring,
+  config schema validation, required slots, logger/checkpoint hooks, and all
+  accumulated skill structure assertions.
+- `skill_tests/test_smoke.py`: cover one real recipe-owned step: forward, loss,
+  backward, optimizer step, logger write, checkpoint noop or temporary save,
+  and all accumulated skill smoke assertions.
 
 ### Distributed and Real-path Requirements
 
