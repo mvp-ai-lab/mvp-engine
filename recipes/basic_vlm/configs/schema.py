@@ -151,22 +151,7 @@ class BasicVLMConfig(BaseEngineConfig):
 
     model_config = ConfigDict(frozen=False, extra="allow")
 
-    resume: str | None = None
     data: BasicVLMDataConfig = Field(default_factory=BasicVLMDataConfig)
     model: BasicVLMModelConfig = Field(default_factory=BasicVLMModelConfig)
     optim: BasicVLMOptimConfig = Field(default_factory=BasicVLMOptimConfig)
     loop: BasicVLMLoopConfig = Field(default_factory=BasicVLMLoopConfig)
-
-    @field_validator("resume", mode="before")
-    @classmethod
-    def validate_resume(cls, value: str | None) -> str | None:
-        """Normalize the optional checkpoint resume path."""
-        if value is None:
-            return None
-        if not isinstance(value, str):
-            raise TypeError("`resume` must be a string or null.")
-
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("`resume` must not be empty.")
-        return normalized

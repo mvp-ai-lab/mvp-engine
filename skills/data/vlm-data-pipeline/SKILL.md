@@ -27,7 +27,7 @@ Keep implementation recipe-local unless the user explicitly asks for shared engi
 
 - A documented raw-to-batch data path.
 - A normalized sample contract with token tensors, labels, optional multimodal tensors, and optional packed metadata.
-- Clear invalid-sample, late-materialization, resume, and accounting behavior.
+- Clear invalid-sample, late-materialization, and accounting behavior.
 - Validation notes for the changed or ported pipeline.
 
 ### Failure Modes
@@ -50,6 +50,7 @@ Keep implementation recipe-local unless the user explicitly asks for shared engi
 Reference in `basic_vlm`:
 
 - `recipes/basic_vlm/dataset/dataset.py`: runtime dataset chain, transform order, reference resolution, and skip boundary.
+- `recipes/basic_vlm/dataset/dataset.py`: runtime dataset chain, transform order, reference resolution, and materialization boundary.
 - `recipes/basic_vlm/dataset/preprocess.py`: raw schema normalization, image handling, chat rendering, tokenization, and label construction.
 - `recipes/basic_vlm/dataset/processor.py`: Qwen3-VL processor loading, tokenizer padding, image pixel limits, and processor fingerprint.
 - `recipes/basic_vlm/dataset/collator.py`: token padding, multimodal tensor concatenation, text-only dummy image fallback, and packed metadata padding.
@@ -87,7 +88,7 @@ rg -n "mvp_dataset|Dataset\\.from_source|Dataset\\.assemble|RuntimeContext|resol
 For `mvp_dataset` pipelines, `basic_vlm` uses this shape:
 
 ```text
-source -> guard -> preprocess/tokenize -> guard -> optional pack/skip marker
+source -> guard -> preprocess/tokenize -> guard -> optional pack
        -> resolve refs -> image tensor materialization -> guard -> optional finalize -> collate
 ```
 
@@ -100,7 +101,6 @@ For non-`mvp_dataset` pipelines, re-decide these behaviors instead of copying `b
 
 - iterable lifecycle and where transforms run;
 - worker/rank/epoch seed derivation;
-- resume and skip boundary;
 - image or media reference materialization point;
 - whether accounting is based on raw rows, processed samples, packed samples, or batches;
 - how errors are filtered, surfaced, or converted to sentinels.
@@ -195,7 +195,7 @@ Guidelines:
 - Pad `labels` with the ignore index.
 - Keep text-only and multimodal samples compatible with the target model's forward path.
 - If adding a dummy media payload, ensure its labels are ignored and any packed metadata remains isolated.
-- Do not put packing into the collator unless the recipe intentionally makes the collated batch the packing boundary; if so, recheck resume and accounting.
+- Do not put packing into the collator unless the recipe intentionally makes the collated batch the packing boundary; if so, recheck accounting.
 
 ### 8. Optional Data Preparation
 

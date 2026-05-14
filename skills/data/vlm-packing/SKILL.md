@@ -22,12 +22,11 @@ The canonical implementation is in `recipes/basic_vlm`:
 
 - `configs/schema.py`: packing config knobs.
 - `configs/stage*.yaml`: active packing settings.
-- `dataset/dataset.py`: dataset transform order and skip modes.
+- `dataset/dataset.py`: dataset transform order and materialization placement.
 - `dataset/packing.py`: grouping, finalization, segment metadata.
 - `dataset/collator.py`: padding and mixed packed/unpacked handling.
-- `dataset/skip.py`: post-pack fast-resume helpers.
 - `model/packing/`: packed model-input preparation and attention backend patches.
-- `engine/basic_vlm_engine.py`: step inference, fast resume, packed input preparation, token accounting.
+- `engine/basic_vlm_engine.py`: step inference, packed input preparation, token accounting.
 
 When changing a packing detail in `basic_vlm`, first identify which of these files owns that behavior. Avoid broad edits across all layers unless the requested behavior crosses layer boundaries.
 
@@ -40,12 +39,12 @@ Packing combines multiple already-tokenized samples into one longer model input 
 - merge multimodal payloads in placeholder order;
 - carry boundary metadata, such as `position_ids` inputs or segment ids;
 - prevent cross-source attention or position leakage;
-- keep resume, step inference, token counts, and logging aligned with the packed output unit.
+- keep step inference, token counts, and logging aligned with the packed output unit.
 
 The design has five layers:
 
 1. Config exposes only the knobs the recipe needs.
-2. Dataset pipeline chooses where grouping, skip markers, payload materialization, and finalization happen.
+2. Dataset pipeline chooses where grouping, payload materialization, and finalization happen.
 3. Packer/finalizer owns sample grouping, concatenation, and boundary metadata.
 4. Collator pads packed metadata and rejects unsupported mixed batches.
 5. Model preparation converts boundary metadata into model-specific masks, positions, or backend metadata.
@@ -57,7 +56,7 @@ The design has five layers:
 Search the target recipe before editing:
 
 ```bash
-rg -n "pack|packing|segment|position_ids|attention_mask|skip_mode|source_count" recipes/<recipe> mvp_engine
+rg -n "pack|packing|segment|position_ids|attention_mask|source_count" recipes/<recipe> mvp_engine
 ```
 
 Then choose the mode:
@@ -82,9 +81,8 @@ Reference in `basic_vlm`:
 - `recipes/basic_vlm/dataset/dataset.py` uses `mvp_dataset.Dataset`, `Dataset.assemble`, `RuntimeContext`, `resolve_ref`, and deferred finalization.
 - `recipes/basic_vlm/engine/basic_vlm_engine.py` wraps the dataset with `mvp_dataset.TorchLoader`.
 - `recipes/basic_vlm/dataset/packing.py` relies on the `Assembler.push/finish` lifecycle and `RuntimeContext.sample_shuffle_seed`.
-- `recipes/basic_vlm/dataset/skip.py` relies on `RuntimeContext.slot` for post-pack fast-resume markers.
 
-If the target recipe does not use `mvp_dataset`, do not assume `Assembler`, `RuntimeContext`, `resolve_ref`, worker slots, or `TorchLoader` exist. Re-decide packing lifecycle, worker-local seeding, resume boundaries, materialization points, and step inference for that backend.
+If the target recipe does not use `mvp_dataset`, do not assume `Assembler`, `RuntimeContext`, `resolve_ref`, worker slots, or `TorchLoader` exist. Re-decide packing lifecycle, worker-local seeding, materialization points, and step inference for that backend.
 
 ### 3. Config Layer
 
@@ -117,10 +115,10 @@ For `mvp_dataset` pipelines, prefer this delayed-materialization shape:
 Reference in `basic_vlm`:
 
 - `recipes/basic_vlm/dataset/dataset.py` owns the transform order, skip modes, and pack/finalize placement.
-- `recipes/basic_vlm/engine/basic_vlm_engine.py` calls the dataset builder differently for normal training, step inference, and fast resume.
+- `recipes/basic_vlm/engine/basic_vlm_engine.py` calls the dataset builder differently for normal training and step inference.
 
 ```text
-raw row -> guard -> tokenize -> guard -> pack/group -> post-pack skip marker
+raw row -> guard -> tokenize -> guard -> pack/group
         -> resolve refs/materialize payloads -> guard -> finalize pack -> collate
 ```
 
@@ -129,7 +127,6 @@ Guidelines:
 - Pack after tokenization, when `input_ids` length and labels are known.
 - If multimodal payload loading is expensive, group before loading and finalize after loading.
 - If all payloads are already cheap tensors, finalization can happen immediately.
-- Keep skip markers at the same output boundary consumed by training.
 - Preserve the recipe's existing policy for invalid, empty, overlength, or unsupervised samples.
 
 For non-`mvp_dataset` pipelines, explicitly choose the placement instead of copying the `basic_vlm` chain:
@@ -137,7 +134,6 @@ For non-`mvp_dataset` pipelines, explicitly choose the placement instead of copy
 - Put the packer in an iterable dataset wrapper, dataset `__iter__`, a precompute/materialization step, or a pre-collator transform; avoid putting packing inside the collator unless the recipe deliberately treats one collated batch as the packing boundary.
 - Define flush, finish, and `drop_last` behavior yourself; there may be no `Assembler.finish(drop_last=...)` callback.
 - Derive deterministic worker-local seeds from `torch.utils.data.get_worker_info()`, data-parallel rank, epoch, and the recipe seed.
-- Redesign fast resume; do not assume a stable `worker_slot` marker pass exists.
 - Re-decide when image/audio/video references are resolved or tensors are materialized; do not assume `resolve_ref`.
 - Ensure sharding, shuffle, and `drop_last` happen at the intended raw-sample or packed-sample boundary.
 
@@ -186,7 +182,7 @@ if any("boundary_ids" in sample for sample in batch):
         raise ValueError("Packed and unpacked samples cannot be mixed in one batch.")
 ```
 
-If a non-`mvp_dataset` recipe packs inside the collator, explicitly document that the collator is now both packer and batcher, then recheck token accounting, step inference, and resume because the packed-sample boundary is no longer independent of the batch boundary.
+If a non-`mvp_dataset` recipe packs inside the collator, explicitly document that the collator is now both packer and batcher, then recheck token accounting and step inference because the packed-sample boundary is no longer independent of the batch boundary.
 
 ### 7. Model Preparation Layer
 
@@ -218,27 +214,23 @@ Packing changes the unit consumed by training. Keep all training accounting on t
 Reference in `basic_vlm`:
 
 - `recipes/basic_vlm/utils/misc.py` owns packed total-step inference and batch-size/gradient-accumulation resolution.
-- `recipes/basic_vlm/dataset/skip.py` owns post-pack skip marker helpers.
-- `recipes/basic_vlm/engine/basic_vlm_engine.py` owns fast-resume marker passes, token accounting, loss normalization, and logging.
+- `recipes/basic_vlm/engine/basic_vlm_engine.py` owns token accounting, loss normalization, and logging.
 
 Check:
 
 - total-step inference counts packed outputs, not raw rows;
-- fast resume skips post-pack micro-batches consistently;
 - token counts, loss normalization, gradient accumulation, throughput logging, and MFU logging still use the intended token totals;
-- lightweight marker passes do not repeat expensive payload IO;
 - late materialization failures cannot silently change the number of consumed packed outputs.
-- for non-`mvp_dataset` backends, document whether resume and step inference are based on raw row offsets, shard offsets, global packed-sample indices, or unsupported.
+- for non-`mvp_dataset` backends, document whether step inference is based on raw row offsets, shard offsets, global packed-sample indices, or unsupported.
 
 ### 9. Common Change Patterns
 
 - **Change packing efficiency:** edit `dataset/packing.py` and relevant config knobs.
 - **Change padding or batch validation:** edit `dataset/collator.py`.
 - **Change packed attention or positions:** edit `model/packing/` and verify the engine still calls preparation before forward.
-- **Change resume behavior:** inspect `dataset/skip.py`, `dataset/dataset.py`, and `engine/basic_vlm_engine.py` together.
 - **Adapt to a new model:** start from `model/packing/`, then adjust finalizer metadata only if the model needs different inputs.
 - **Adapt to a new data schema:** start from preprocessors and `dataset/packing.py`, then verify collator and model preparation still receive aligned payloads.
-- **Adapt to a new dataset backend:** start from dataset construction and loader code, then decide packing lifecycle, seed source, materialization point, resume boundary, and packed-output counting before touching model code.
+- **Adapt to a new dataset backend:** start from dataset construction and loader code, then decide packing lifecycle, seed source, materialization point, and packed-output counting before touching model code.
 
 ## Validation
 
@@ -251,8 +243,8 @@ For behavior changes, validate the affected layer:
 - Labels, masks, payloads, and boundary metadata stay aligned with `input_ids`.
 - Collator pads metadata correctly and handles text-only/multimodal batches.
 - Model preparation blocks cross-source attention and preserves VLM-specific position rules.
-- Step inference and fast resume count packed outputs consistently.
-- For non-`mvp_dataset` backends, lifecycle, seeding, materialization, resume, and accounting decisions are documented in the change summary.
+- Step inference counts packed outputs consistently.
+- For non-`mvp_dataset` backends, lifecycle, seeding, materialization, and accounting decisions are documented in the change summary.
 
 Do not add tests unless the user asks or the repository rules require them.
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from functools import partial
 from typing import Any
 
@@ -13,7 +12,6 @@ from ..configs.schema import BasicVLMConfig
 from ..guards.data import build_dataguard
 from .packing import build_packed_sample_assembler, finalize_packed_sample_group
 from .preprocess import convert_images_to_pixel_values, process_sample
-from .skip import SkipMode, build_skip_by_worker, build_skip_recorder
 
 
 def build_dataset(
@@ -23,8 +21,6 @@ def build_dataset(
     process_fn: Any = process_sample,
     resample: bool = True,
     resolve_refs: bool = True,
-    skip_mode: SkipMode = "off",
-    skip_counts: Mapping[int, int] | None = None,
 ) -> Dataset:
     """Build the training dataset pipeline for the recipe.
 
@@ -34,8 +30,6 @@ def build_dataset(
         process_fn: Function to process individual samples.
         resample: Whether to loop dataset shards indefinitely across rounds.
         resolve_refs: Whether to resolve references in the dataset.
-        skip_mode: Optional post-pack fast-resume mode.
-        skip_counts: Worker-slot skip counts used by ``skip_mode="perform"``.
     Returns:
         An ``mvp_dataset.Dataset`` pipeline with parquet loading, processing, and
         sample-level shuffling.
@@ -97,20 +91,7 @@ def build_dataset(
             )
         )
 
-    # 6. Optional post-pack resume skip boundary. The recorder path returns here
-    # so the lightweight resume pass never resolves image references.
-    if skip_mode == "pre_calculate":
-        return dataset.assemble(build_skip_recorder)
-    elif skip_mode == "perform":
-        dataset = dataset.assemble(
-            partial(
-                build_skip_by_worker, skip_counts={str(slot): int(count) for slot, count in (skip_counts or {}).items()}
-            )
-        )
-    elif skip_mode != "off":
-        raise ValueError(f"Invalid skip_mode: {skip_mode}. Must be one of 'off', 'pre_calculate', or 'perform'.")
-
-    # 7. Resolve references after packing so invalid/short samples avoid image IO.
+    # 6. Resolve references after packing so invalid/short samples avoid image IO.
     if resolve_refs:
         # TODO: add error handeling inside the mvp-dataset
         # TODO: what about pure text data?
@@ -118,7 +99,7 @@ def build_dataset(
             partial(convert_images_to_pixel_values, processor=processor)
         )
 
-    # 8. Drop sentinels created by late image decode/materialization failures.
+    # 7. Drop sentinels created by late image decode/materialization failures.
     # In packed mode this also drops empty packed groups before finalization.
     dataset = dataset.assemble(
         partial(
@@ -130,7 +111,7 @@ def build_dataset(
         )
     )
 
-    # 9. Materialize deferred packs after references have been resolved.
+    # 8. Materialize deferred packs after references have been resolved.
     if config.data.packing:
         dataset = dataset.map(finalize_packed_sample_group)
 
