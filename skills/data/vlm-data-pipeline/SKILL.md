@@ -49,7 +49,6 @@ Keep implementation recipe-local unless the user explicitly asks for shared engi
 
 Reference in `basic_vlm`:
 
-- `recipes/basic_vlm/dataset/dataset.py`: runtime dataset chain, transform order, reference resolution, and skip boundary.
 - `recipes/basic_vlm/dataset/dataset.py`: runtime dataset chain, transform order, reference resolution, and materialization boundary.
 - `recipes/basic_vlm/dataset/preprocess.py`: raw schema normalization, image handling, chat rendering, tokenization, and label construction.
 - `recipes/basic_vlm/dataset/processor.py`: Qwen3-VL processor loading, tokenizer padding, image pixel limits, and processor fingerprint.
