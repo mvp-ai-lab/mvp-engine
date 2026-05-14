@@ -1,107 +1,104 @@
 ---
 name: token-normalized-loss
-description: Add token-normalized training loss to a recipe. Use when a recipe should accumulate unreduced per-token loss across micro-batches and data-parallel ranks, normalize gradients by the global supervised token count, and log token-level loss/throughput without moving the pattern into mvp_engine core.
+description: Understand, modify, or port token-normalized training loss for recipes that accumulate unreduced per-token loss across micro-batches and data-parallel ranks, normalize gradients by global supervised token count, and log token-level loss and throughput.
 ---
 
 # Token-Normalized Loss
 
 ## Goal
 
-- Replace batch-mean loss scaling with supervised-token normalization for a recipe-local training loop.
-- Keep the implementation recipe-local and preserve unrelated existing recipe behavior.
-- Make gradients equivalent to optimizing `sum(per_token_loss) / global_supervised_tokens` over each accumulation window.
+This skill covers recipe-local token-normalized loss for any token training recipe, not only VLMs. Use it in two modes:
 
-## Required Inputs
+- **Basic VLM mode:** If the target recipe is `basic_vlm` or derived from it, do not reimplement token-normalized loss. Treat this skill as a design map for the existing implementation and modify only the requested layer.
+- **Porting mode:** If another recipe still uses batch-mean loss scaling, use this skill to add unreduced per-token loss, global supervised-token normalization, and token-level logging.
 
-- The target recipe path under `recipes/<recipe>/`.
-- The recipe engine file that implements `train_pre_step`, `forward_step`, `backward_step`, `optimizer_step`, and `train_post_step`.
-- The model builder or model wrapper that controls whether forward returns a mean loss or unreduced per-token loss.
-- The batch schema, especially `input_ids`, `attention_mask`, `labels`, optional packed-attention fields, and any existing metric fields.
-- The data-parallel world size source, usually `get_data_parallel_world_size(self.device_mesh)`.
+The target gradient objective is `sum(per_token_loss) / global_supervised_tokens` over each accumulation window. Keep the implementation recipe-local unless the user explicitly asks for shared engine behavior.
+
+## Existing Reference Implementation
+
+Reference in `basic_vlm`:
+
+- `recipes/basic_vlm/model/qwen3_vl.py` patches Qwen3-VL forward to return unreduced per-token CE loss.
+- `recipes/basic_vlm/engine/basic_vlm_engine.py` counts shifted supervised tokens, accumulates loss sums, rescales gradients, and logs token metrics.
+- `mvp_engine/utils/metrics.py` provides `DistributedMetricAccumulator` for accumulation-window reductions.
+- `recipes/basic_vlm/model/packing/` matters when token-normalized loss interacts with packed attention metadata.
 
 ## Workflow
 
-### 1. Gather Context
+### 1. Identify The Starting Point
 
-- Read the recipe engine, model builder, config schema, and collator before editing.
-- Search for existing token-normalized or unreduced-loss support:
+Search the target recipe:
 
 ```bash
-rg -n "reduction=\"none\"|DistributedMetricAccumulator|effective_token|loss_sum|backward_loss_divisor|gradient_scale" recipes/<recipe> mvp_engine
+rg -n "reduction=\"none\"|DistributedMetricAccumulator|effective_token|loss_sum|backward_loss_divisor|gradient_scale|tokens/effective" recipes/<recipe> mvp_engine
 ```
 
-- Reuse `mvp_engine.utils.metrics.DistributedMetricAccumulator` if available.
-- Do not change `mvp_engine/` unless the user explicitly asks; this pattern belongs in the recipe.
+- If the recipe already follows `basic_vlm`, read the relevant existing layer and make a local change.
+- If the recipe has no token-normalized loss, use `basic_vlm` as a concrete implementation reference while keeping the target recipe's model and batch schema.
+- For non-VLM recipes, keep the same training-accounting pattern but ignore VLM-specific fields such as packed attention or image grids.
 
-### 2. Make Model Forward Return Per-Token Loss
+### 2. Model Loss Shape
 
-- If the model already returns unreduced per-token loss, keep it and document the expected shape.
-- If the model returns a scalar mean loss, first check whether the model exposes a loss hook such as
-  `model.loss_function` or requires a recipe-local forward override.
-- Ask the user whether memory-saving loss computation is needed:
-  - If no, prefer the minimal hook approach, such as assigning `model.loss_function` to an unreduced CE callable when
-    the upstream forward already calls that hook.
-  - If yes, inject or wrap the recipe-local forward so training computes `lm_head` logits only for loss chunks and
-    avoids materializing full `[batch, sequence, vocab]` logits.
-- For causal language models:
-  - shift labels by padding one ignored token on the right and taking `[..., 1:]`
-  - compute logits only for the hidden states needed by the loss
-  - use `F.cross_entropy(..., ignore_index=-100, reduction="none")`
-  - chunk logits if the full vocabulary projection is memory-heavy
-- Keep generation/inference behavior valid when `labels is None`; forward injection must return normal logits for
-  inference/generation paths.
+The model must return unreduced per-token loss when labels are present.
 
-### 3. Count Tokens Before Device Transfer
+Guidelines:
 
-- In `train_pre_step`, compute:
-  - `total_token_num` from `attention_mask.sum()`
-  - `effective_token_num` from shifted labels where `label != -100`
-- Count shifted labels, not raw labels, so the denominator matches causal LM loss positions.
-- Move the new counts through `ctx.data` as Python integers or scalar-safe values.
-- Preserve existing batch preparation logic.
+- If the model already returns unreduced loss, keep it and document the expected shape.
+- If the model returns scalar mean loss, first check whether it exposes a loss hook such as `model.loss_function`.
+- If a hook is not enough, add a recipe-local forward wrapper or injection.
+- For causal language models, shift labels by padding one ignored token on the right and taking `[..., 1:]`.
+- Use `F.cross_entropy(..., ignore_index=-100, reduction="none")`.
+- Chunk logits when full `[batch, sequence, vocab]` projection is too memory-heavy.
+- Preserve inference/generation behavior when `labels is None`.
 
-Example:
+Reference in `basic_vlm`:
 
-```python
-data["total_token_num"] = int(data["attention_mask"].sum().item())
-shifted_labels = F.pad(data["labels"], (0, 1), value=-100)[..., 1:]
-data["effective_token_num"] = int((shifted_labels != -100).sum().item())
-```
+- `recipes/basic_vlm/model/qwen3_vl.py` owns `_shift_labels` and `inject_sum_loss_forward`.
 
-### 4. Accumulate Local Metrics
+### 3. Token Counting
 
-- In the engine constructor, register distributed metrics for at least:
-  - `total_token_count`: accumulate `sum`, reduce `sum`
-  - `effective_token_count`: accumulate `sum`, reduce `sum`
-  - `loss_sum`: accumulate `sum`, reduce `sum`
-- Reset the metric accumulator after each completed optimizer step.
+Count tokens before device transfer in `train_pre_step`.
 
-### 5. Backward With A Provisional Divisor
+Required counts:
 
-- In `backward_step`, advance gradient accumulation before backward and set `ctx.should_sync`.
-- Sum the per-token loss for the micro-batch.
-- Divide by a fixed provisional denominator before backward so dataloading can overlap with GPU work. Use a denominator that is stable within the accumulation window, such as:
+- `total_token_num`: valid tokens from `attention_mask.sum()`;
+- `effective_token_num`: shifted-label supervised positions where label is not `-100`.
 
-```python
-backward_loss_divisor = (
-    int(self.config.data.batch_size)
-    * int(self.config.data.max_seq_len)
-    * int(self.config.optim.gradient_accumulation_steps)
-)
-loss = local_micro_loss_sum / float(backward_loss_divisor)
-```
+Reference in `basic_vlm`:
 
-- Store `backward_loss_divisor` in `ctx.outputs` for the sync step.
-- Update accumulated metrics with total tokens, effective tokens, and detached loss sum.
+- `recipes/basic_vlm/engine/basic_vlm_engine.py` computes these counts at the start of `train_pre_step`, before moving tensors to device.
 
-### 6. Rescale Gradients At Sync
+### 4. Accumulation Metrics
 
-- In `optimizer_step`, return early until `ctx.should_sync` is true.
-- On sync:
-  - reduce the metric accumulator
-  - require `global_effective_token_count > 0`
-  - unscale the optimizer before gradient edits
-  - multiply every gradient by:
+Register and update accumulation-window metrics:
+
+- `total_token_count`: accumulate `sum`, reduce `sum`;
+- `effective_token_count`: accumulate `sum`, reduce `sum`;
+- `loss_sum`: accumulate `sum`, reduce `sum`.
+
+Reset the accumulator after each completed optimizer step.
+
+Reference in `basic_vlm`:
+
+- `recipes/basic_vlm/engine/basic_vlm_engine.py` initializes and updates `DistributedMetricAccumulator`.
+- `mvp_engine/utils/metrics.py` defines the reusable accumulator.
+
+### 5. Backward And Gradient Rescale
+
+In `backward_step`:
+
+- advance gradient accumulation and set `ctx.should_sync`;
+- sum the unreduced micro-batch loss;
+- divide by a fixed provisional denominator before backward;
+- store the denominator in `ctx.outputs`;
+- update local metrics with detached loss sum and token counts.
+
+At the sync optimizer step:
+
+- reduce accumulated metrics;
+- require `global_effective_token_count > 0`;
+- unscale the optimizer before editing gradients;
+- multiply each gradient by:
 
 ```python
 gradient_scale = (
@@ -111,42 +108,41 @@ gradient_scale = (
 )
 ```
 
-- Keep gradient clipping after this rescale and before `scaler.step(...)`.
-- Preserve existing optimizer, scaler, scheduler, zero-grad, and `ctx.optimizer_step_completed` behavior.
-- Attach global token counts, global loss sum, and learning rates to `ctx.outputs` for post-step logging.
+Keep gradient clipping after this rescale and before `scaler.step(...)`.
 
-### 7. Log Token-Normalized Metrics
+Reference in `basic_vlm`:
 
-- In `train_post_step`, log only after an optimizer step completes.
+- `recipes/basic_vlm/engine/basic_vlm_engine.py` owns `backward_step` and `optimizer_step`.
 
-```python
-train_loss = float(global_loss_sum / global_effective_token_count)
-```
+### 6. Logging
 
-- Add logs for:
-  - `train/loss`
-  - `tokens/total`
-  - `tokens/effective`
-  - `perf/toks_per_sec`
-  - learning rates, if the recipe already logs them here
-- Preserve existing recipe-specific metric logging when present.
+Log only after an optimizer step completes.
+
+Required logs:
+
+- `train/loss = global_loss_sum / global_effective_token_count`;
+- `tokens/total`;
+- `tokens/effective`;
+- `perf/toks_per_sec`.
+
+Preserve existing recipe-specific logs, learning-rate logs, checkpoint behavior, and MFU logging.
+
+Reference in `basic_vlm`:
+
+- `recipes/basic_vlm/engine/basic_vlm_engine.py` owns `train_post_step` token logs.
 
 ## Validation
 
-- Confirm the model returns unreduced per-token loss when `labels` is present and keeps inference behavior when `labels` is absent.
+- Confirm the model returns unreduced per-token loss when `labels` is present and keeps inference behavior when labels are absent.
 - Confirm `effective_token_num` matches shifted-label supervised positions.
 - Confirm one accumulation window logs `train/loss = global_loss_sum / global_effective_token_count`.
 - Confirm gradients are rescaled after distributed reduction and before clipping.
+- For packed recipes, confirm packed masks and labels do not create cross-source supervised targets.
 - Run the smallest available syntax or smoke validation for the changed recipe files.
 
 ## Output
 
-- State which model, engine, and optional config/test files were updated.
+- State whether you modified existing `basic_vlm` behavior or ported token-normalized loss into another recipe.
 - State whether the model already had unreduced loss support or needed a recipe-local forward patch.
 - Summarize how global token counts enter gradient scaling and logging.
 - State what validation ran and what remains unverified.
-
-## Read On Demand
-
-- For a concrete OpenBee/Qwen3-VL implementation example, read
-  `references/openbee-per-token-loss.patch`.

@@ -133,5 +133,6 @@ if self.loss_guard.check(
 
 ## Read On Demand
 
-- For a concrete OpenBee per-token implementation example, read
-  `references/openbee-loss-spike-guard.patch`.
+- For a current VLM per-token implementation example, inspect `recipes/basic_vlm/guards/loss.py`,
+  `recipes/basic_vlm/configs/schema.py`, `recipes/basic_vlm/configs/stage3.yaml`, and the
+  `PerTokenLossGuard` wiring in `recipes/basic_vlm/engine/basic_vlm_engine.py`.
