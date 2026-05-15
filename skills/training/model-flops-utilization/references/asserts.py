@@ -17,14 +17,12 @@ import textwrap
 from pathlib import Path
 from typing import Any
 
+from mvp_engine.testing.utils import read_recipe_source
+
 
 def test_file_structure(recipe_root: Path) -> None:
     """Verify the recipe contains MFU implementation wiring outside tests."""
-    source = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in sorted(recipe_root.rglob("*.py"))
-        if not any(part in {".git", ".venv", "__pycache__", "pretrained", "references", "tests"} for part in path.parts)
-    )
+    source = read_recipe_source(recipe_root)
 
     assert "calculate_model_flops" in source, (
         "MFU implementation must define or inject calculate_model_flops(...) outside recipe tests."

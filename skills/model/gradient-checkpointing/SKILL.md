@@ -1,51 +1,71 @@
 ---
 name: gradient-checkpointing
-description: Add gradient checkpointing to a recipe in this repo. Use when checking whether a model already supports checkpointing, wiring recipe config and engine toggles, or adding minimal model-side checkpoint logic and tests.
+description: Add, review, update, and validate gradient checkpointing for mvp-engine recipes. Use when wiring model.gradient_checkpointing config, enabling model-native checkpointing, or adding minimal manual activation checkpointing to repeated blocks.
 ---
 
 # Gradient Checkpointing
 
 ## Goal
 
-- Enable gradient checkpointing on the target recipe without changing model math.
-- Keep the implementation recipe-local instead of introducing a repo-wide wrapper.
-- Add config, engine wiring, and tests that prove the feature is actually active.
+Add recipe-local gradient checkpointing without changing model math:
+
+- keep checkpointing disabled by default and enabled explicitly through config;
+- prefer model-native support over manual wrapping;
+- enable checkpointing before FSDP, DDP, TP, or other distributed wrapping;
+- validate that the real training path can run with checkpointing enabled.
 
 ## Required Inputs
 
-- The target recipe path and the files that build the model and engine.
-- The top-level model class or the module that owns the repeated layer loop.
-- Whether the model already exposes built-in checkpointing support.
-- The target recipe's config or schema files.
-- A place to add recipe-local tests.
+Identify these before editing:
+
+- target recipe path;
+- config schema and YAML configs;
+- model builder and engine `prepare_model()` path;
+- top-level model class and repeated-block owner;
+- whether the model already supports `gradient_checkpointing_enable(...)`;
+- distributed wrapping entrypoint such as `parallelize_model(...)`;
+- recipe-local `tests/test_structure.py` and `tests/test_smoke.py`.
+
+Ask the user only if the model entrypoint, intended config, or validation
+environment cannot be derived from the recipe.
 
 ## Workflow
 
-### 1. Classify the model before editing
+### 1. Locate Runtime Integration Points
 
-- Prefer the existing-support path whenever the model already knows how to checkpoint its repeated blocks.
-- Use the manual-adaptation path only when checkpointing is not already wired into the model internals.
+Search the recipe first:
 
-The existing-support path applies when all of the following are true:
-- the top-level model exposes `gradient_checkpointing_enable()` and `gradient_checkpointing_disable()`
-- the model propagates `gradient_checkpointing` and `_gradient_checkpointing_func` to the modules that need them
-- the repeated blocks already route through `_gradient_checkpointing_func` when `self.gradient_checkpointing and self.training` is true
-
-### 2. Existing-support path: wire the recipe only
-
-- Do not rewrite model internals if the model already supports checkpointing.
-- In `prepare_model()`, enable checkpointing after building the model and before FSDP, DDP, or TP wrapping:
-
-```python
-gc_enabled = self.config.model.gradient_checkpointing.enabled
-gc_use_reentrant = self.config.model.gradient_checkpointing.use_reentrant
-if gc_enabled:
-    model.gradient_checkpointing_enable(
-        gradient_checkpointing_kwargs={"use_reentrant": gc_use_reentrant}
-    )
+```bash
+rg -n "gradient_checkpoint|checkpoint\\(|parallelize_model|prepare_model|use_cache|output_attentions" recipes/<recipe>
 ```
 
-- Add config:
+Find:
+
+- where the model is built;
+- where distributed wrapping happens;
+- where config is parsed;
+- which module owns the repeated layer/block loop;
+- whether the model already has checkpointing flags or methods.
+
+### 2. Choose The Implementation Path
+
+Use the native-support path when the model already routes repeated blocks
+through a checkpoint function. Typical signs:
+
+- `gradient_checkpointing_enable(...)` and `gradient_checkpointing_disable(...)`;
+- `supports_gradient_checkpointing = True`;
+- `self.gradient_checkpointing` gates layer execution;
+- `_gradient_checkpointing_func` or equivalent is already used in the layer loop.
+
+Use the manual path only when the real repeated-block loop has no checkpointing
+support. Keep manual changes inside the recipe model files.
+
+Read `references/patterns.md` before manual adaptation or when the native path is
+not obvious.
+
+### 3. Add Config
+
+Expose this shape under `model`:
 
 ```yaml
 model:
@@ -54,74 +74,93 @@ model:
     use_reentrant: false
 ```
 
-- Under the new config system, add `model.gradient_checkpointing` to the recipe schema or `ConfigClass` and read it through typed attribute access in the engine.
-- Prefer `use_reentrant: false` unless the target model specifically requires reentrant checkpointing.
+Add the matching typed schema or config class. Prefer `use_reentrant: false`
+unless the target model requires reentrant checkpointing.
 
-### 3. Manual-adaptation path: patch the module that owns the layer loop
+### 4. Wire Native Model Support
 
-- On the module that owns the repeated-layer loop, add:
-
-```python
-self.gradient_checkpointing = False
-self._gradient_checkpointing_func = torch.utils.checkpoint.checkpoint
-```
-
-- In the loop, call each layer through `_gradient_checkpointing_func` when training with checkpointing enabled.
-- Pass only gradient-carrying tensors as explicit checkpoint arguments. Capture masks, RoPE inputs, and other non-differentiable values in a closure.
-- If checkpointed layers cannot safely return auxiliary outputs such as attentions or caches, gate checkpointing on those flags or return a consistent reduced output.
-- For `PreTrainedModel` subclasses, set `supports_gradient_checkpointing = True`.
-- For plain `nn.Module`, implement `gradient_checkpointing_enable()` and `gradient_checkpointing_disable()` locally.
-
-Example:
+For models that already support checkpointing, enable it in `prepare_model()`
+after model construction and before distributed wrapping:
 
 ```python
-use_gc = self.gradient_checkpointing and self.training and not output_attentions
+gc_config = self.config.model.gradient_checkpointing
+if gc_config.enabled:
+    model.gradient_checkpointing_enable(
+        gradient_checkpointing_kwargs={"use_reentrant": gc_config.use_reentrant}
+    )
 
-for layer in self.layers:
-    if use_gc:
-        def custom_forward(hidden_states):
-            return layer(hidden_states, attention_mask=attention_mask, ...)[0]
-
-        hidden_states = self._gradient_checkpointing_func(custom_forward, hidden_states)
-    else:
-        hidden_states = layer(hidden_states, attention_mask=attention_mask, ...)[0]
+model = parallelize_model(...)
 ```
 
-### 4. Add recipe-local tests
+Do not rewrite model internals on this path.
 
-Add recipe-local tests that cover at least:
-- enable and disable toggles set the expected module state
-- the checkpoint function is actually invoked during training
-- gradients match with and without checkpointing
+### 5. Add Manual Model Support
 
-### 5. Validate the final integration
+When native support is absent:
 
-- Confirm checkpointing is enabled before distributed wrapping.
-- Confirm config, engine wiring, and tests all agree on the same feature shape.
-- If the model already inherits `GradientCheckpointingLayer` or an equivalent mechanism, do not manually rewrap those blocks.
+- add `gradient_checkpointing_enable(...)` and
+  `gradient_checkpointing_disable(...)` to the top-level recipe model or the
+  block-loop owner;
+- store `self.gradient_checkpointing` and `self._gradient_checkpointing_func`;
+- route repeated blocks through the checkpoint function only when
+  `self.training` and checkpointing are both true;
+- pass only gradient-carrying tensors as explicit checkpoint arguments;
+- capture masks, position ids, RoPE tensors, cache objects, and flags in a
+  closure;
+- gate or disable incompatible outputs such as KV cache and attentions.
+
+Keep parameter names, checkpoint keys, and forward math unchanged.
 
 ## Validation
 
-- The chosen path matches the real model capabilities.
-- The recipe config exposes `model.gradient_checkpointing.enabled` and `use_reentrant`.
-- Checkpointing is enabled before FSDP, DDP, or TP wrapping.
-- Recipe-local tests cover toggles, invocation, and gradient consistency.
-- The implementation does not introduce a repo-wide wrapper or pass non-differentiable inputs as explicit checkpoint arguments.
+### Soft Validation
 
-Add recipe-local assertions under `recipes/<recipe>/skill_tests/gradient-checkpointing/asserts.py`,
-using the standard `assert_structure(...)` and `assert_smoke(...)` hooks:
+Review the modified recipe without running tests:
 
-- `skill_tests/test_structure.py`: verify recipe structure and checkpointing wiring.
-- `skill_tests/test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
+- the chosen native/manual path matches the model's real capabilities;
+- config exposes `model.gradient_checkpointing.enabled` and `use_reentrant`;
+- config defaults keep checkpointing off and an explicit override can enable it;
+- engine wiring enables checkpointing before distributed wrapping;
+- optimizer construction still sees the same trainable parameters;
+- `use_cache` or auxiliary outputs do not conflict with checkpointing;
+- manual checkpointing, if added, is limited to repeated blocks and does not pass
+  non-differentiable objects as explicit checkpoint inputs;
+- checkpointing does not alter parameter names, checkpoint loading, forward
+  outputs, or loss math;
+- no repo-wide wrapper was added to `mvp_engine/`;
+- CPU-only or structure-only checks are not reported as completed runtime
+  checkpoint validation.
+
+### Hard Validation
+
+Copy and adapt `references/asserts.py` into:
+
+```text
+recipes/<recipe>/tests/skills/gradient-checkpointing/asserts.py
+```
+
+Ensure the recipe has `tests/test_structure.py` and `tests/test_smoke.py`; use
+`tests/templates/` if missing.
+
+Run in fresh subagents, in order, stopping on first failure:
+
+```bash
+pytest recipes/<recipe>/tests/test_structure.py -q
+pytest recipes/<recipe>/tests/test_smoke.py -q --config-override model.gradient_checkpointing.enabled=true
+```
+
+If the recipe smoke test does not expose `--config-override`, set the equivalent
+recipe-local smoke override before running it.
 
 ## Output
 
-- State which path was used: existing support or manual adaptation.
-- State which model, engine, config, and test files were updated.
-- Summarize how checkpointing is enabled at runtime.
-- Summarize what validation ran and what remains unverified.
+- State whether native support or manual adaptation was used.
+- State which config, engine, and model files changed.
+- State where checkpointing is enabled and where distributed wrapping happens.
+- Report soft validation and hard validation status.
+- Call out any remaining gap, such as no GPU/NPU environment for runtime smoke.
 
 ## Read On Demand
 
-- Read `references/vit_classification/` when you need the minimal recipe-local integration pattern for config, engine wiring, and tests.
-- Read `references/vit_classification/tests/test_vit_gradient_checkpointing.py` when you need a concrete test example.
+- `references/asserts.py`: recipe-local hard-validation assertion template.
+- `references/patterns.md`: native-support and manual-adaptation code patterns.

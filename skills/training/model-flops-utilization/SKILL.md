@@ -1,6 +1,6 @@
 ---
 name: model-flops-utilization
-description: Add, review, and validate model FLOPs utilization MFU support for
+description: Add, review, update, and validate model FLOPs utilization MFU support for
   mvp-engine recipes.
 ---
 

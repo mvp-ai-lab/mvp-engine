@@ -171,6 +171,16 @@ def load_recipe_skill_asserts(recipe_root: Path) -> list[ModuleType]:
     return skill_asserts
 
 
+def read_recipe_source(recipe_root: Path) -> str:
+    """Return recipe implementation source, excluding tests and generated/reference files."""
+    excluded_parts = {".git", ".venv", "__pycache__", "pretrained", "references", "tests"}
+    return "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(recipe_root.rglob("*.py"))
+        if not any(part in excluded_parts for part in path.parts)
+    )
+
+
 def inject_engine_assert_hooks(engine: object, skill_asserts: list[ModuleType]) -> None:
     """Inject skill assertion callbacks around standard engine phases.
 
