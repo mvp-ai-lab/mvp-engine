@@ -98,7 +98,7 @@ Do not run them from the main agent's local terminal, background terminal
 sessions, or any other non-subagent shell fallback.
 
 - If `skills/AGENTS.md`, the target `SKILL.md`, or recipe-local test artifacts
-define layers such as `structure`, `runtime`, `smoke`, or `effectiveness`, run
+define layers such as `structure`, `smoke`, or `effectiveness`, run
 each required layer in a separate fresh subagent, in order, stopping on first
 failure.
 
