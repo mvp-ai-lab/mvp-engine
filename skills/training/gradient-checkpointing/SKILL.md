@@ -108,11 +108,11 @@ Add recipe-local tests that cover at least:
 - Recipe-local tests cover toggles, invocation, and gradient consistency.
 - The implementation does not introduce a repo-wide wrapper or pass non-differentiable inputs as explicit checkpoint arguments.
 
-Add recipe-local tests under `recipes/<recipe>/skill_tests/gradient-checkpointing/`:
+Add recipe-local assertions under `recipes/<recipe>/skill_tests/gradient-checkpointing/asserts.py`,
+using the standard `assert_structure(...)` and `assert_smoke(...)` hooks:
 
-- `test_structure.py`: verify recipe structure and core wiring.
-- `test_runtime.py`: build recipe runtime objects through recipe entrypoints.
-- `test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
+- `skill_tests/test_structure.py`: verify recipe structure and checkpointing wiring.
+- `skill_tests/test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
 
 ## Output
 

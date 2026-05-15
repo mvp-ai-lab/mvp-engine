@@ -121,12 +121,12 @@ class <TopModelClass>(...):
 - Confirm the callable has an idempotence guard and can be called twice safely.
 - Confirm no generic prefetch DSL, graph helper, or YAML config field was introduced.
 
-Add recipe-local tests under `recipes/<recipe>/skill_tests/fsdp2-prefetching/`:
+Add recipe-local assertions under `recipes/<recipe>/skill_tests/fsdp2-prefetching/asserts.py`,
+using the standard `assert_structure(...)` and `assert_smoke(...)` hooks:
 
-- `test_structure.py`: verify recipe structure and core wiring.
-- `test_runtime.py`: build recipe runtime objects through recipe entrypoints.
-- `test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
-- `test_effectiveness.py`: create a recipe-local test that uses
+- `skill_tests/test_structure.py`: verify recipe structure and FSDP2 prefetch wiring.
+- `skill_tests/test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
+- `skill_tests/fsdp2-prefetching/test_effectiveness.py`: create a recipe-local test that uses
   `mvp_engine.test.recipe_probe` helpers, then verify the real FSDP2-wrapped
   modules hold the expected prefetch edges. Resolve each expected module path to
   the live module, read its FSDP2 state, and compare forward/backward prefetch

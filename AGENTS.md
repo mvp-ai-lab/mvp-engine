@@ -79,28 +79,9 @@ This repository contains the core engine, shared utilities, and experiment-speci
 - Name test files `test_<feature>.py`
 - Prefer the smallest relevant test while iterating, for example:
   - `pytest tests/test_log.py -q`
-- Consider broader test coverage before final submission
-
-Recipe-local test rules:
-
-- When a user asks to execute, apply, validate, test, or run a skill for a recipe,
-treat that request as an explicit request to use the fresh subagents required by
-the repository skill-validation workflow.
-
-- Validation is part of applying the skill and is a mandatory completion criterion,
-not optional guidance. Before validation, read `skills/AGENTS.md` and the target
-`SKILL.md`, add the recipe-local `skill_tests/` artifacts required by that skill,
-and validate through:
-  - `python -m tests.test_skills --recipe <recipe> --skill <skill-id>`
-
-- Run these validation commands only in fresh subagents with `fork_context=false`.
-Do not run them from the main agent's local terminal, background terminal
-sessions, or any other non-subagent shell fallback.
-
-- If `skills/AGENTS.md`, the target `SKILL.md`, or recipe-local test artifacts
-define layers such as `structure`, `runtime`, `smoke`, or `effectiveness`, run
-each required layer in a separate fresh subagent, in order, stopping on first
-failure.
+- There are two recipe-level
+  cumulative tests: `tests/test_structure.py` and `tests/test_smoke.py`. They should be created when the recipe is created and
+  extended only when the baseline recipe test surface must change. If they are missing, you should use the test template files under `tests/templates` to create them.
 
 ## Git Rules
 

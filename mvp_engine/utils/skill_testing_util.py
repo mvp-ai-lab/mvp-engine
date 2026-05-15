@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
@@ -10,13 +11,17 @@ import yaml
 
 SKILL_TESTS_DIRNAME = "skill_tests"
 MANIFEST_FILENAME = "skill_manifest.yaml"
-LAYER_ORDER = ("structure", "runtime", "smoke", "effectiveness")
-DEFAULT_LAYER_FILES = {
+ASSERTS_FILENAME = "asserts.py"
+CURRENT_SKILL_ENV = "MVP_ENGINE_CURRENT_SKILL"
+LAYER_ORDER = ("structure", "smoke", "effectiveness")
+RECIPE_LAYER_FILES = {
     "structure": ("test_structure.py",),
-    "runtime": ("test_runtime.py",),
     "smoke": ("test_smoke.py",),
+}
+SKILL_LAYER_FILES = {
     "effectiveness": ("test_effectiveness.py",),
 }
+DEFAULT_LAYER_FILES = {**RECIPE_LAYER_FILES, **SKILL_LAYER_FILES}
 
 
 class SkillTestSpecError(ValueError):
@@ -47,14 +52,15 @@ class RecipeSkillTests:
 
     def required_layers(self) -> tuple[str, ...]:
         """Return validation layers that have recipe-local test files."""
-        return tuple(layer for layer in LAYER_ORDER if self._layer_exists(layer))
+        return tuple(layer for layer in LAYER_ORDER if layer in RECIPE_LAYER_FILES or self._layer_exists(layer))
 
     def pytest_paths_for_layer(self, layer: str) -> tuple[Path, ...]:
         """Return pytest files for one validation layer."""
         if layer not in LAYER_ORDER:
             raise SkillTestSpecError(f"Unknown test layer '{layer}'.")
 
-        paths = tuple((self.skill_dir / relative_path).resolve() for relative_path in DEFAULT_LAYER_FILES[layer])
+        base_dir = self.recipe_dir / SKILL_TESTS_DIRNAME if layer in RECIPE_LAYER_FILES else self.skill_dir
+        paths = tuple((base_dir / relative_path).resolve() for relative_path in DEFAULT_LAYER_FILES[layer])
         missing = [str(path) for path in paths if not path.exists()]
         if missing:
             raise SkillTestSpecError(
@@ -63,7 +69,8 @@ class RecipeSkillTests:
         return paths
 
     def _layer_exists(self, layer: str) -> bool:
-        return all((self.skill_dir / relative_path).is_file() for relative_path in DEFAULT_LAYER_FILES[layer])
+        base_dir = self.recipe_dir / SKILL_TESTS_DIRNAME if layer in RECIPE_LAYER_FILES else self.skill_dir
+        return all((base_dir / relative_path).is_file() for relative_path in DEFAULT_LAYER_FILES[layer])
 
 
 def resolve_recipe_dir(recipe: str, repo_root: Path | None = None) -> Path:
@@ -91,7 +98,7 @@ def discover_recipe_skill_tests(recipe_dir: Path) -> list[RecipeSkillTests]:
     discovered = [
         _build_recipe_skill_tests(skill_dir)
         for skill_dir in sorted(path for path in skill_tests_dir.iterdir() if path.is_dir())
-        if any((skill_dir / file_name).is_file() for files in DEFAULT_LAYER_FILES.values() for file_name in files)
+        if (skill_dir / ASSERTS_FILENAME).is_file()
     ]
     return sorted(discovered, key=lambda skill_tests: skill_tests.skill_id)
 
@@ -103,6 +110,20 @@ def find_recipe_skill_tests(recipe_dir: Path, skill_id: str) -> RecipeSkillTests
         raise SkillTestSpecError(f"Recipe '{recipe_dir.name}' does not define skill tests for '{skill_id}'.")
     if not skill_dir.is_dir():
         raise SkillTestSpecError(f"Recipe '{recipe_dir.name}' skill tests path is not a directory: {skill_dir}")
+    legacy_files = [
+        str(skill_dir / file_name)
+        for files in RECIPE_LAYER_FILES.values()
+        for file_name in files
+        if (skill_dir / file_name).is_file()
+    ]
+    if legacy_files:
+        raise SkillTestSpecError(
+            f"Recipe '{recipe_dir.name}' skill '{skill_id}' has recipe-level tests in the skill directory. "
+            f"Move these files to '{recipe_dir / SKILL_TESTS_DIRNAME}': {legacy_files}"
+        )
+    asserts_path = skill_dir / ASSERTS_FILENAME
+    if not asserts_path.is_file():
+        raise SkillTestSpecError(f"Recipe '{recipe_dir.name}' skill '{skill_id}' is missing {asserts_path.name}.")
 
     skill_tests = _build_recipe_skill_tests(skill_dir)
     if not skill_tests.required_layers():
@@ -113,6 +134,35 @@ def find_recipe_skill_tests(recipe_dir: Path, skill_id: str) -> RecipeSkillTests
 def get_recipe_skill_manifest_path(recipe_dir: Path) -> Path:
     """Return the canonical manifest path for a recipe."""
     return (recipe_dir / SKILL_TESTS_DIRNAME / MANIFEST_FILENAME).resolve()
+
+
+def get_ordered_skill_asserts(
+    recipe_dir: Path,
+    *,
+    current_skill_id: str | None = None,
+) -> tuple[tuple[str, Path], ...]:
+    """Return installed skill asserts in manifest order, with the current skill last."""
+    current_skill_id = current_skill_id or os.environ.get(CURRENT_SKILL_ENV)
+    manifest_path = get_recipe_skill_manifest_path(recipe_dir)
+    if manifest_path.exists():
+        manifest = load_recipe_skill_manifest(recipe_dir, create_if_missing=False)
+        skill_ids = list(manifest["skills"])
+    else:
+        skill_ids = []
+
+    if current_skill_id:
+        skill_ids = [skill_id for skill_id in skill_ids if skill_id != current_skill_id]
+        skill_ids.append(current_skill_id)
+
+    return tuple((skill_id, get_skill_asserts_path(recipe_dir, skill_id)) for skill_id in skill_ids)
+
+
+def get_skill_asserts_path(recipe_dir: Path, skill_id: str) -> Path:
+    """Return and validate one skill's assertion module path."""
+    asserts_path = (recipe_dir / SKILL_TESTS_DIRNAME / skill_id / ASSERTS_FILENAME).resolve()
+    if not asserts_path.is_file():
+        raise SkillTestSpecError(f"Recipe '{recipe_dir.name}' skill '{skill_id}' is missing {ASSERTS_FILENAME}.")
+    return asserts_path
 
 
 def initialize_recipe_skill_manifest(recipe_dir: Path, repo_root: Path | None = None) -> dict:

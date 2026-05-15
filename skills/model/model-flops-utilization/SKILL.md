@@ -179,17 +179,11 @@ Required checks:
 
 ## Recipe-Local Tests
 
-Add recipe-local tests under `recipes/<recipe>/skill_tests/model-flops-utilization/`:
+Add recipe-local assertions under `recipes/<recipe>/skill_tests/model-flops-utilization/asserts.py`,
+using the standard `assert_structure(...)` and `assert_smoke(...)` hooks:
 
-- `test_structure.py`: verify recipe structure and core wiring.
-- `test_runtime.py`: build recipe runtime objects through recipe entrypoints.
-- `test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
-- `test_effectiveness.py`: create a recipe-local test that uses
-  `mvp_engine.test.recipe_probe` helpers, then add a method such as
-  `assert_mfu_metrics_match_formulas(log_text)`. 
-  Parse real CUDA GPU training logs, require finite numeric values for `perf/mfu` and required `perf/*` metrics, enforce `perf/mfu in [0, 1]`, and verify the TFLOPs, MFU, and tokens/sec formulas. When real GPU logs contain valid metrics with matching formulas, the effectiveness test can be treated as passing.
-
-Run skill validation through `python -m tests.test_skills --recipe <recipe> --skill model-flops-utilization`, following the repository fresh-subagent layer workflow. Run GPU validation with `loop.total_steps=1000`, `log.interval=10`, and `checkpoint.interval=10000`.
+- `skill_tests/test_structure.py`: verify recipe structure and MFU wiring.
+- `skill_tests/test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
 
 ## Output
 
