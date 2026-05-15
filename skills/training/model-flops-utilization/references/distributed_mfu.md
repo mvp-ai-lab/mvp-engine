@@ -24,19 +24,16 @@ optimizer step after all gradient accumulation micro-steps.
 
 - Tokens per optimizer step:
   `micro_batch_size * effective_sequence_length * grad_accum_steps * data_parallel_size`.
-- Use actual token counts when batches are packed, variable-length, or masked.
+  micro_batch_size means per data-parallel replica, per gradient-accumulation micro-step.
+effective_sequence_length means full logical sequence length, not TP/CP/SP-sharded local length.
+- Use actual computed token counts, not merely loss-supervised token counts.
+Loss-masked tokens still count if the model computes hidden states or logits for them.
+For attention, use actual attention-pair counts, not only token counts.
 - Do not use raw `world_size` as the data multiplier unless all ranks are data
   parallel ranks.
 - For asynchronous CUDA work, synchronize before and after the measured region.
 - Pipeline bubbles, collectives, and communication reduce MFU through wall-clock
   step time, not by increasing model FLOPs.
-
-## Effective Precision Rules
-
-- Hardware peak must match effective compute precision, not only declared config precision.
-- In `mvp_engine` FSDP2, check `parallel.backend_kwargs.fsdp2.mp_policy`.
-- If FSDP2 `param_dtype` or `output_dtype` is `bfloat16` or `float16`, use bf16 or fp16 peak.
-- Treat a run as pure fp32 only when wrapper policy is float32 and TF32 is disabled.
 
 ## Parallelism Rules
 
@@ -45,7 +42,6 @@ DDP:
 - Count logical full-model FLOPs over global data-parallel tokens.
 - Include all DDP ranks in total GPU peak FLOPs.
 - Treat gradient all-reduce as runtime overhead.
-- If DDP fails with unused parameters, set `ddp.find_unused_parameters=True` and rerun.
 
 FSDP:
 
@@ -63,6 +59,13 @@ Tensor parallel:
 - Do not multiply tokens by `tensor_parallel_size`.
 - Include tensor-parallel GPUs in total peak FLOPs.
 - Treat tensor-parallel collectives as runtime overhead.
+
+Context / sequence parallel:
+
+- Use full logical sequence length for global MFU, not local sequence shard length.
+- Do not multiply tokens by context_parallel_size or sequence_parallel shards.
+- Include CP/SP participating GPUs in total peak FLOPs.
+- Treat CP/SP collectives and P2P communication as runtime overhead.
 
 Pipeline parallel:
 
