@@ -9,12 +9,12 @@ import inspect
 import textwrap
 from pathlib import Path
 
-from mvp_engine.testing.utils import read_recipe_source_for_structure_tests
+from mvp_engine.testing.utils import read_recipe_source
 
 
 def test_file_structure(recipe_root: Path) -> None:
     """Verify the recipe contains gradient-checkpointing test artifacts and code."""
-    source = read_recipe_source_for_structure_tests(recipe_root)
+    source = read_recipe_source(recipe_root)
 
     assert "gradient_checkpointing_enable" in source or "_gradient_checkpointing_func" in source, (
         "Recipe code must enable native checkpointing or expose a model-side checkpoint function."
