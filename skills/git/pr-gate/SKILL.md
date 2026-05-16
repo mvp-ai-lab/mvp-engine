@@ -1,79 +1,78 @@
 ---
 name: pr-gate
-description: Use before pushing or opening or updating a PR. Inspect the branch diff, clean up docstrings and typing in touched APIs, run the agreed quality gates, and summarize residual risk.
+description: Run a pre-PR or pre-push quality gate by inspecting the branch diff,
+  tightening touched public API docstrings/types, running validation, and
+  summarizing residual risk.
 ---
 
-# Pre-PR Quality Gate
+# PR Gate
 
 ## Goal
 
-- Review the current branch before push or PR update.
-- Tighten docstrings and type hints in touched public APIs when behavior or signatures changed.
-- Run the agreed lint and test gates and report any residual risk.
+Prepare a branch for PR or push:
+
+- inspect the requested diff scope;
+- fix docstrings and type hints in touched public APIs when needed;
+- run agreed lint/test gates;
+- report findings, validation, and residual risk clearly.
 
 ## Required Inputs
 
-- The base branch, usually `main`.
-- The scope to review:
-  - full branch (`HEAD` vs `origin/<base>`)
-  - last N commits
-  - explicit commit list
-- Quality-gate commands. Default to `pre-commit run --all-files` and `pytest -q` unless the repo needs something narrower.
+Identify these before editing:
+
+- base branch or diff range;
+- scope: full branch, last N commits, explicit commits, or changed paths;
+- quality-gate commands;
+- whether the working tree has unrelated local edits.
+
+Default validation is `pre-commit run --all-files` and `pytest -q` only when the
+repo and environment make those reasonable. Otherwise use the strongest targeted
+checks and explain the scope.
 
 ## Workflow
 
-### 1. Sync the baseline
+### 1. Establish Diff Scope
 
-- Update the local baseline for the chosen base branch.
-- Return to the working branch and confirm the workspace state before reviewing diffs.
+Check branch and workspace state, then inspect the chosen range:
 
-### 2. Build change context
+```bash
+git branch --show-current
+git status --short
+git diff --name-status <base>...HEAD
+```
 
-- Inspect the commit graph for the scoped range.
-- Build a file-level change map.
-- Read the critical diffs instead of relying only on filenames.
+Do not overwrite unrelated dirty files.
 
-### 3. Clean up docstrings and typing in touched code
+### 2. Review Touched Code
 
-- Limit edits to functions, classes, and modules that the branch already touched.
-- Apply these rules:
-  - new public functions and classes need docstrings
-  - new or changed public functions should have explicit parameter and return type hints where the language supports them
-  - when signatures, returns, side effects, or behavior change, update docstrings and type hints together
-  - tighten stale or inaccurate types in touched code instead of leaving broad `Any` where a concrete type is available
-  - private trivial helpers may skip docstrings
-- Keep documentation aligned with actual behavior and avoid filler text.
+Read critical diffs, not only filenames. Focus on public API changes, runtime
+behavior, config contracts, tests, docs, and generated artifacts.
 
-### 4. Run the quality gates
+### 3. Tighten Docstrings And Types
 
-- Run formatting and lint checks first, then tests.
-- Fix failures related to the current change set before reporting out.
-- If the full gate is too expensive, run the strongest targeted checks you can justify and state the missing coverage.
+Read `references/docstring-and-typing.md` when touched APIs need cleanup.
 
-### 5. Prepare the PR-ready summary
+Only edit files already in scope. Keep docstrings and type hints aligned with
+actual behavior; avoid filler comments and broad `Any` unless justified.
 
-- Rank findings by severity.
-- Record the commands that ran and the outcome of each.
-- Suggest a short commit message if the user asked for one.
+### 4. Run Quality Gates
 
-## Validation
+Run formatting/lint first, then tests. Fix failures caused by the current change
+set. If a gate is blocked, record the blocker and residual risk.
 
-- The review scope matches the requested base branch and commit range.
-- Changed public APIs have docstrings and type hints aligned with their real behavior.
-- Quality-gate commands were run or explicitly deferred with a clear reason.
-- Residual risks are stated only for areas that were not fully validated.
+### 5. Prepare PR-Ready Summary
+
+List findings by severity, validation commands and outcomes, and any remaining
+unvalidated paths.
 
 ## Output
 
-- Findings:
-  - `severity | file:line | issue | recommendation`
-- Validation:
-  - `command | result`
-- Residual Risks:
-  - `not validated yet`
-- Suggested Commit Message:
-  - short imperative summary when useful
+- Findings: `severity | file:line | issue | recommendation`.
+- Changes Made: docstring/type/test/docs cleanup applied.
+- Validation: `command | result`.
+- Residual Risks: unvalidated paths.
+- Suggested Commit Message: include only when useful or requested.
 
 ## Read On Demand
 
-- Read [references/docstring-and-typing.md](references/docstring-and-typing.md) when touched code needs docstring and type-hint cleanup guidance.
+- `references/docstring-and-typing.md`: cleanup scope and examples.

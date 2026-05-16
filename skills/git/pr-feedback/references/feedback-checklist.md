@@ -1,6 +1,9 @@
 # Checklist when replying to PR feedback
 
-When the PR under review is about a **skill** (or touches skill files), use the dimensions below to ensure your replies address what reviewers care about. Same dimensions as the skill review checklist; here they are used to **respond** to feedback, not to perform the review.
+When the PR under review is about a **skill** or touches skill files, use the
+dimensions below to ensure replies address what reviewers care about. These are
+the same dimensions as the skill review checklist, but used to respond to
+feedback rather than perform the review.
 
 ---
 
@@ -26,12 +29,14 @@ When the PR under review is about a **skill** (or touches skill files), use the 
 ## 4. Fit with skill philosophy
 
 - [ ] The skill **avoids** prescribing a single generic API that tries to fit every model.
-- [ ] It focuses on **pattern + per-model adaptation**: document the pattern once, point to examples/tests, let the agent generate model-specific code.
+- [ ] It focuses on **pattern + per-model adaptation**: document the pattern
+  once, point to examples/tests, and let the agent generate model-specific code.
 - [ ] It does **not** over-abstract (e.g. one "apply_checkpointing(model)" that hides all variation).
 
 ## 5. Test guidance
 
-- [ ] **Test templates** (if any) are sufficient: enable/disable state, actual usage of the feature, and where applicable numerical/gradient checks.
+- [ ] **Test templates** are sufficient when present: enable/disable state,
+  actual usage of the feature, and numerical/gradient checks where applicable.
 - [ ] No misleading or incomplete test steps (e.g. "just run the test" without saying what to assert).
 - [ ] Gaps are called out (e.g. "add a test that enables checkpointing and compares gradients to non-checkpoint run").
 

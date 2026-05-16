@@ -48,13 +48,18 @@ find outputs -path '*/checkpoints/*' -maxdepth 3 -type d
 Find external eval artifacts near a run:
 
 ```bash
-rg --files outputs -g 'results*.json' -g 'metrics*.json' -g 'samples*.jsonl' -g 'predictions*.jsonl' -g 'predictions*.csv'
+rg --files outputs \
+  -g 'results*.json' \
+  -g 'metrics*.json' \
+  -g 'samples*.jsonl' \
+  -g 'predictions*.jsonl' \
+  -g 'predictions*.csv'
 ```
 
 Summarize one run deterministically:
 
 ```bash
-python3 skills/experiment/analysis/scripts/summarize_run.py \
+python3 skills/experiment/experiment-analysis/scripts/summarize_run.py \
   --run-dir outputs/<run_id> \
   --output outputs/<run_id>/run_summary.json
 ```
