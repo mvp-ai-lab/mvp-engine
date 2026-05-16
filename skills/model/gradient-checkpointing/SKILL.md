@@ -152,6 +152,17 @@ pytest recipes/<recipe>/tests/test_smoke.py -q --config-override model.gradient_
 If the recipe smoke test does not expose `--config-override`, set the equivalent
 recipe-local smoke override before running it.
 
+Add impact validation:
+
+```text
+recipes/<recipe>/tests/skills/gradient-checkpointing/test_memory_impact.py
+```
+
+The impact test should run controlled `enabled=false` and `enabled=true`
+training jobs, collect peak accelerator memory, verify checkpointing was invoked,
+and assert the enabled run uses less memory within a recipe-appropriate
+tolerance.
+
 ## Output
 
 - State whether native support or manual adaptation was used.

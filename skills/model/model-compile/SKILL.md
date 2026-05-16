@@ -156,6 +156,16 @@ pytest recipes/<recipe>/tests/test_smoke.py -q --config-override model.compile=t
 If the recipe smoke test does not expose `--config-override`, set the equivalent
 recipe-local smoke override before running it.
 
+Add impact validation:
+
+```text
+recipes/<recipe>/tests/skills/model-compile/test_compile_performance.py
+```
+
+The impact test should compare controlled compile-off and compile-on runs,
+separate first-step compile latency from steady-state timing, and use
+recipe-appropriate thresholds. For example, after the first step compile overhead, the compile-on run should not be slower than compile-off, and may be faster by a significant margin depending on the recipe and target.
+
 ## Output
 
 - State which config, engine, and model files changed.

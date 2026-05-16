@@ -44,14 +44,17 @@ that recipe if they are required by `SKILL.md`, not under `skills/` and not unde
       └── skills/
           └── <skill-id>/
               ├── asserts.py
-              └── test_effectiveness.py  # optional, only when the skill declares effectiveness checks
+              └── test_<impact>.py  # optional, only when the skill declares impact validation
   ```
 - `tests/test_structure.py` and `tests/test_smoke.py` are recipe-level
   cumulative tests. They should be created when the recipe is created and
   extended only when the baseline recipe test surface must change. If they are missing, you should use the test template files under `tests/templates` to create them.
 - If the skill requires hard validation, the skill directory must contain `asserts.py` Keep skill-specific structure and smoke assertions there.
-- A skill directory may also contain `test_effectiveness.py` when the skill
-  declares effectiveness checks.
+- A skill directory may also contain optional `test_<impact>.py` files when the
+  skill declares impact validation that structure and smoke cannot cover. Name
+  the file after the measured impact, such as `test_memory_impact.py`,
+  `test_compile_performance.py`, `test_behavior_parity.py`, or
+  `test_checkpoint_compatibility.py`.
 
 ### Authoring Constraints
 
@@ -94,10 +97,13 @@ not optional guidance. There are two types of validation:
   `--config-name`, and repeated `--config-override` flags if nessesary.
 - If two skills require incompatible smoke configs, stop and explain the
   conflict instead of adding parallel smoke paths that hide the incompatibility.
+- Impact validation is optional and only belongs in a skill when structure and
+  smoke cannot verify the skill's expected effect. Impact tests may run multiple
+  controlled jobs and compare measured metrics or invariants.
 
 #### Typical validation workflow (run them in order, stopping on first failure)
 1. do the soft validation first.
 2. `pytest recipes/<recipe>/tests/test_structure.py -q`: this makes sure the applied skill does not break the expected coding structure of the recipe, such as file locations, config structure, and engine structure.
 3. `pytest recipes/<recipe>/tests/test_smoke.py -q`: this makes sure the applied skill does not break the real training.
-4. `pytest recipes/<recipe>/tests/skills/<skill-id>/test_effectiveness.py -q`: this is optional. It tests the effectiveness of the applied skill against the expected impact defined in the skill instructions.
-
+4. Optional impact validation: run each skill-declared `test_<impact>.py`, for
+   example `pytest recipes/<recipe>/tests/skills/<skill-id>/test_memory_impact.py -q`.

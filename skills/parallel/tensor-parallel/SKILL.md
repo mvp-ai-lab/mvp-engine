@@ -149,12 +149,12 @@ parallel:
   local runtime metadata.
 - The mesh config has compatible `replicate`, `shard`, and `tensor` values.
 
-Add recipe-local assertions under `recipes/<recipe>/skill_tests/tensor-parallel/asserts.py`,
-using the standard `assert_structure(...)` and `assert_smoke(...)` hooks:
+Add recipe-local assertions under `recipes/<recipe>/tests/skills/tensor-parallel/asserts.py`,
+using the standard structure and smoke hooks:
 
-- `skill_tests/test_structure.py`: verify recipe structure and tensor-parallel wiring.
-- `skill_tests/test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
-- `skill_tests/tensor-parallel/test_effectiveness.py`: create a recipe-local test that uses
+- `tests/test_structure.py`: verify recipe structure and tensor-parallel wiring.
+- `tests/test_smoke.py`: run one real recipe-owned training step and checkpoint/log path.
+- `tests/skills/tensor-parallel/test_sharding_impact.py`: create a recipe-local impact test that uses
   `mvp_engine.test.recipe_probe` helpers, then add a method such as
   `assert_tp_tensor_dims_match_mesh(model, reference_shapes, tp_config, mesh)`.
   Compare each TP-covered parameter's local shape against its pre-parallel
@@ -163,7 +163,7 @@ using the standard `assert_structure(...)` and `assert_smoke(...)` hooks:
   dim with denominator `tp_size * fsdp_shard_size` when FSDP2
   sharding is also enabled. Compare DTensor parameters with `param.to_local().shape`; otherwise use `param.shape`.
   When every TP-plan-covered parameter's local shape matches the expected shape,
-  the effectiveness test can be treated as passing.
+  the impact test can be treated as passing.
 
 ## Output
 
