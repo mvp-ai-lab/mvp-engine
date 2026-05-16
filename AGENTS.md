@@ -79,13 +79,13 @@ This repository contains the core engine, shared utilities, and experiment-speci
 - Name test files `test_<feature>.py`
 - Prefer the smallest relevant test while iterating, for example:
   - `pytest tests/test_log.py -q`
-- Consider broader test coverage before final submission
-
-Recipe-local test rules:
-
-- Put recipe-specific tests inside the corresponding recipe directory
-- If a recipe-local test imports `recipes.*`, add a local `conftest.py` under that recipe’s `tests/`
-- Do not rely on the top-level `tests/conftest.py` for recipe test discovery
+- There are two recipe-level
+  cumulative tests: `tests/test_structure.py` and `tests/test_smoke.py`. They should be created when the recipe is created and
+  extended only when the baseline recipe test surface must change. If they are missing, you should use the test template files under `tests/templates` to create them.
+- Recipe-local skill tests may also include optional impact validation under
+  `tests/skills/<skill-id>/test_<impact>.py` when structure and smoke cannot
+  verify the skill's expected effect. Name these tests after the measured
+  invariant, such as `test_memory_impact.py` or `test_checkpoint_compatibility.py`.
 
 ## Git Rules
 

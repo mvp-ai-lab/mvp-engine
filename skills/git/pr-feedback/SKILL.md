@@ -1,73 +1,85 @@
 ---
 name: pr-feedback
-description: Use after a PR is open and review comments arrive. Triage reviewer comments, implement scoped fixes, re-run validation, and draft reviewer-ready responses with file references.
+description: Triage reviewer feedback on an open PR, implement scoped fixes,
+  rerun validation, and prepare reviewer-ready responses tied to comments,
+  changed files, and validation evidence.
 ---
 
-# Handle PR Feedback
+# PR Feedback
 
 ## Goal
 
-- Resolve open reviewer feedback on an existing PR with targeted changes.
-- Keep code changes scoped to comment intent and make validation evidence easy to report.
-- Produce reviewer responses that are ready to post.
+Resolve reviewer feedback without broadening the PR:
+
+- account for every unresolved review comment;
+- implement only changes that map to reviewer intent;
+- preserve unrelated user edits;
+- rerun the strongest relevant validation;
+- draft concise responses that reviewers can verify.
 
 ## Required Inputs
 
-- PR context such as base/head branches or an equivalent diff range.
-- Reviewer comments, including inline comments, summary comments, or linked issues.
-- Validation commands that should run before the branch is pushed again.
+Identify these before editing:
+
+- PR URL/number or equivalent base/head diff;
+- unresolved inline and top-level reviewer comments;
+- base branch and current working branch;
+- validation commands expected for the PR;
+- whether any local uncommitted changes are unrelated.
+
+Ask the user only when reviewer intent or permission to mutate/push is unclear.
 
 ## Workflow
 
-### 1. Collect review context
+### 1. Collect Review Context
 
-- Gather all unresolved comments and map each one to concrete files, lines, or commits.
-- Note whether the comment is blocking correctness, design/readability, or clarification-only.
+Gather comments and map each to:
 
-### 2. Triage and plan
+- file and line or PR-level topic;
+- severity: correctness, design, readability, docs, tests, or clarification;
+- action: fix, explain, defer, or ask for clarification.
 
-- Group comments by action type:
-  - must-fix correctness issues
-  - design or readability improvements
-  - explanation-only responses
-- Mark conflicts or ambiguous comments that still need user or reviewer clarification.
+### 2. Plan Scoped Changes
 
-### 3. Implement targeted fixes
+Group comments that require the same edit. Keep explanation-only comments
+separate from code changes.
 
-- Keep each code change tightly aligned with the comment that motivated it.
-- Update docstrings, type hints, or comments when the behavior contract changes.
-- Avoid unrelated cleanup in the same patch.
+If comments conflict, identify the conflict before editing and ask for a
+decision only when the repo context cannot resolve it.
 
-### 4. Re-validate
+### 3. Implement Fixes
 
-- Run the required lint and test commands.
-- If full validation is too expensive, run the targeted checks that cover the changed paths and report the remaining gap explicitly.
+Make the smallest correct change for each actionable comment. Update docstrings,
+typing, tests, or docs only when the behavior contract changed or the reviewer
+asked for it.
 
-### 5. Draft reviewer responses
+Avoid unrelated cleanup and do not revert local changes you did not make.
 
-- For each comment, state:
-  - what changed
-  - where it changed using `file:line`
-  - what validation supports the change
-- If code is not being changed, give a concise technical rationale instead of a vague refusal.
+### 4. Re-Validate
 
-## Validation
+Run targeted tests for touched behavior first, then broader gates when feasible.
+If full validation is too expensive or blocked, state the exact remaining gap.
 
-- Every unresolved comment is accounted for as fixed, clarified, or still pending.
-- Each code change maps back to a concrete reviewer comment.
-- Validation results are recorded, or any remaining validation gap is called out explicitly.
-- Reviewer responses cite the changed locations precisely enough for the reviewer to follow them.
+### 5. Draft Responses
+
+For every comment, prepare:
+
+- status: fixed, clarified, deferred, or pending;
+- what changed or why no code change was needed;
+- changed file/line references;
+- validation command and result.
+
+Read `references/feedback-checklist.md` when the PR changes skills.
 
 ## Output
 
-- Comment Resolution:
-  - `comment id | action (fixed/clarified/pending) | file:line`
-- Validation:
-  - `command | result`
-- Pending Items:
-  - `needs user decision / reviewer confirmation`
+- Comment Resolution: `comment id/topic | fixed/clarified/deferred/pending`.
+- Changes: files changed and why.
+- Validation: `command | result`.
+- Reviewer Responses: concise text ready to post.
+- Pending Items: decisions or reviewer confirmations still needed.
 
 ## Read On Demand
 
-- Read [references/feedback-checklist.md](references/feedback-checklist.md) when the PR changes skills and the response should match the same review dimensions used by skill reviewers.
-- Read [../pr-gate/references/docstring-and-typing.md](../pr-gate/references/docstring-and-typing.md) when behavior changed and the touched code needs docstring or typing cleanup.
+- `references/feedback-checklist.md`: skill-PR feedback dimensions.
+- `../pr-gate/references/docstring-and-typing.md`: docstring/type cleanup rules.

@@ -1,212 +1,201 @@
 ---
 name: tensor-parallel
-description: Add recipe-local tensor parallel plans and optional TP postprocess hooks for a
-  model in this repo. Use when enabling TP for a new model, updating mesh config, or fixing
-  TP-local runtime metadata.
+description: Add, review, update, and validate recipe-local tensor-parallel
+  plans, TP metadata postprocessors, and compatible mesh config for mvp-engine
+  models.
 ---
 
-# TP Module Config Playbook
+# Tensor Parallel
 
 ## Goal
 
-- Generate `<MODEL_NAME>_TP_MODULE_CONFIG` for the target model and bind it on the
-  top-level model class as `TP_MODULE_CONFIG`.
-- Add `TP_MODULE_POSTPROCESSORS` only when TP sharding changes module-local metadata that
-  the runtime does not fix automatically.
-- Update the training mesh config so TP size, replicate, and shard are compatible.
+Add tensor parallelism without changing model math:
+
+- define a recipe/model-local `TP_MODULE_CONFIG`;
+- bind it on the top-level model class as `TP_MODULE_CONFIG`;
+- add `TP_MODULE_POSTPROCESSORS` only when sharding changes module-local runtime
+  metadata;
+- set a compatible `parallel.mesh.tensor` layout;
+- keep model-specific TP logic in the recipe/model implementation.
+
+The repo runtime contract is fixed: `mvp_engine/distributed/tp.py` reads
+`model.__class__.TP_MODULE_CONFIG`, applies `parallelize_module(...)`, then runs
+optional `TP_MODULE_POSTPROCESSORS`.
 
 ## Required Inputs
 
-- The target `modeling_*.py` file under `recipes/**/model/**/`.
-- The top-level model class actually used by training.
-- The repeated compute block classes that contain the linears TP should shard.
-- The current training config and mesh settings. If config changes are needed,
-  include GPUs per node and the TP size that should be set.
+Identify these before editing:
+
+- target recipe path;
+- top-level model class used by training;
+- model builder and `prepare_model()` path;
+- repeated module classes containing TP-covered linears;
+- direct child names of target `nn.Linear` modules;
+- forward code that reshapes, splits, indexes, or caches head/expert metadata;
+- current `parallel.mesh` values and intended TP size;
+- recipe-local `tests/test_structure.py` and `tests/test_smoke.py`.
+
+Ask the user only if TP size, available devices, or target module ownership
+cannot be derived from the task.
 
 ## Workflow
 
-### 1. Collect the runtime structure
+### 1. Locate Runtime Integration
 
-- Find the target modeling file and the top-level model class used by training.
-- Find the repeated compute blocks such as attention, MLP, projector, or branch MLP
-  classes.
-- In each block class, collect direct `nn.Linear` child names from `__init__`.
-- Build the TP plan with these heuristics:
-  - use `"col"` for input-expansion projections such as `q_proj`, `k_proj`, `v_proj`,
-    `qkv`, `fc1`, `up_proj`, `gate_proj`, and `_a/_b` branch variants
-  - use `"row"` for output-merge projections such as `out_proj`, `o_proj`, `proj_out`,
-    `fc2`, `down_proj`, `wo`, and `_a/_b` branch variants
-  - if unsure, treat early projections as `"col"` and the final projection back to hidden
-    size as `"row"`
-- Keep in mind the runtime contract in this repo:
-  - `TP_MODULE_CONFIG` maps `module.__class__.__name__ -> plan`
-  - each plan maps child linear names to `"col"` or `"row"`
-  - child names must match `named_children()` on the real module class
+Search the recipe first:
 
-### 2. Implement the modeling-side TP config
+```bash
+rg -n "TP_MODULE_CONFIG|TP_MODULE_POSTPROCESSORS|parallelize_model|parallel.mesh" recipes/<recipe>
+rg -n "q_proj|k_proj|v_proj|out_proj|fc1|fc2|gate_proj|up_proj|down_proj" recipes/<recipe>
+```
 
-- Define `<MODEL_NAME>_TP_MODULE_CONFIG` in the modeling file.
-- Bind it on the top-level model class as `TP_MODULE_CONFIG`.
-- If the model comes from `transformers`, it is acceptable to create a wrapper class with
-  the same top-level class name in the local modeling file and bind the TP attributes
-  there.
-- If the modeling file already contains the top-level wrapper class used by training, only
-  extend that existing class with `TP_MODULE_CONFIG` or `TP_MODULE_POSTPROCESSORS`; do not
-  create a second wrapper class with the same name.
-- If the model needs both TP and FSDP2 prefetching, `TP_MODULE_CONFIG`,
-  `TP_MODULE_POSTPROCESSORS`, and `APPLY_FSDP2_CUSTOM_PREFETCHING` must be merged onto the
-  same top-level model class declaration.
+Find:
+
+- where the top-level model class is defined or subclassed;
+- where `parallelize_model(...)` is called;
+- which repeated block classes contain attention, MLP, projector, expert, or
+  head linears;
+- whether FSDP2 prefetching or other runtime class attributes already live on
+  the same top-level class.
+
+### 2. Draft The TP Plan
+
+Build `TP_MODULE_CONFIG` as:
 
 ```python
-<MODEL_NAME>_TP_MODULE_CONFIG: dict[str, object] = {
-    "<AttentionClass>": {
+MODEL_TP_MODULE_CONFIG: dict[str, object] = {
+    "<RuntimeBlockClass>": {
         "q_proj": "col",
         "k_proj": "col",
         "v_proj": "col",
-        "out_proj": "row",
-    },
-    "<MLPClass>": {
-        "fc1": "col",
-        "fc2": "row",
+        "o_proj": "row",
     },
 }
-
-
-class <TopModelClass>(...):
-    TP_MODULE_CONFIG = <MODEL_NAME>_TP_MODULE_CONFIG
 ```
 
-### 3. Check whether TP postprocessing is required
+Use runtime class names as keys. Use direct child linear names as plan keys.
+Plan values should be `"col"` or `"row"` unless the recipe has a documented
+custom `ParallelStyle`.
 
-- Read the target module's `forward()` carefully after drafting the TP plan.
-- If `forward()` only consumes tensor shapes produced by the sharded linears, extra
-  postprocessing is usually unnecessary.
-- If `forward()` depends on cached metadata on `self`, add a postprocess hook.
-- Common warning signs include:
-  - `view(..., self.num_attention_heads, self.attention_head_size)`
-  - `reshape(..., self.num_key_value_heads, ...)`
-  - `split(self.hidden_size, dim=...)`
-  - loops or indexing that assume global expert, head, or group counts
+Read `references/tp_rules.md` when mapping attention, MLP, VLM projector, MoE,
+or metadata-sensitive modules.
 
-### 4. Add TP postprocessing when needed
+### 3. Bind The Plan
 
-- Add a recipe-local helper and bind it through `TP_MODULE_POSTPROCESSORS`.
-- The dict key must match the runtime class name, just like `TP_MODULE_CONFIG` keys do.
-- Keep the hook minimal: update only the fields whose meaning changes after sharding.
-- Prefer changing module-local derived metadata instead of mutating model config.
+Bind the plan on the top-level class that training actually instantiates:
 
 ```python
-def _adjust_attention_for_tp(module, tp_mesh) -> None:
-    tp_size = tp_mesh.size()
-    if tp_size <= 1:
-        return
-    module.num_attention_heads //= tp_size
-    module.all_head_size = module.num_attention_heads * module.attention_head_size
-
-
-class MyModel(...):
-    TP_MODULE_CONFIG = MYMODEL_TP_MODULE_CONFIG
-    TP_MODULE_POSTPROCESSORS = {
-        "MyAttention": _adjust_attention_for_tp,
-    }
+class <TopModelClass>(...):
+    TP_MODULE_CONFIG = MODEL_TP_MODULE_CONFIG
 ```
 
-### 5. Update the training config
+If the top-level class already carries `APPLY_FSDP2_CUSTOM_PREFETCHING` or other
+runtime class attributes, merge `TP_MODULE_CONFIG` onto that same class. Do not
+create a second wrapper class with the same purpose.
 
-- If the user has not already specified them, ask these two questions before editing
-  config:
-  - how many GPUs per node will training use
-  - what TP size should the recipe use
-- Add `tensor: <N>` to the mesh config when it is missing.
-- Adjust `replicate` and `shard` so they remain compatible with the chosen TP size.
+### 4. Add Postprocessors Only When Needed
 
-The final structure should look like:
+Add `TP_MODULE_POSTPROCESSORS` only when module-local metadata must change after
+TP sharding. Common examples:
+
+- attention modules cache `num_heads`, `num_key_value_heads`, or `all_head_size`;
+- MoE or routed modules cache local expert counts;
+- forward code uses `view`, `reshape`, `split`, loops, or indexing based on
+  global head/expert/hidden dimensions.
+
+Keep postprocessors local and idempotent. Mutate module runtime fields, not the
+global config.
+
+### 5. Update Mesh Config
+
+Set `parallel.mesh.tensor` to the desired TP size. In this repo, pure TP without
+FSDP2 is rejected by `parallelize_model(...)`, so `parallel.mesh.shard` must be
+greater than one when `tensor > 1`.
+
+Preserve the intended data-parallel product:
 
 ```yaml
 parallel:
   mesh:
     replicate: <D>
     shard: <S>
-    tensor: <N>
-  backend_kwargs:
-    ...
+    tensor: <T>
 ```
 
 ## Validation
 
-- `TP_MODULE_CONFIG` keys equal real runtime class names.
-- Each plan key exists in the target class as a real child module.
-- Plan values use only `"col"` or `"row"`.
-- The top-level model class exposes `<MODEL_NAME>_TP_MODULE_CONFIG` through
-  `TP_MODULE_CONFIG`.
-- If the top-level wrapper class already existed, the change extends that class instead of
-  creating a second class with the same name.
-- If the model uses both TP and FSDP2 prefetching, the related class attributes are merged
-  onto the same top-level model class declaration.
-- Every module whose `forward()` depends on cached global metadata was reviewed for TP
-  postprocessing.
-- `TP_MODULE_POSTPROCESSORS`, if present, uses real runtime class names and only mutates
-  local runtime metadata.
-- The mesh config has compatible `replicate`, `shard`, and `tensor` values.
+### Soft Validation
 
-Add recipe-local tests under `recipes/<recipe>/skill_tests/tensor-parallel/`:
+Review the modified recipe without running tests:
 
-- `test_spec.yaml`: declare the required test layers for this applied skill.
-- `test_structure.py`: at least verify recipe import, registry wiring, config
-  schema validation, required slots, and logger/checkpoint hooks; it must also
-  verify TP class attributes and config wiring exist on the user's top-level
-  model class.
-- `test_runtime.py`: at least build dataset, collator, model, optimizer,
-  scheduler, and engine successfully without starting training; it must also
-  verify runtime resolves `TP_MODULE_CONFIG` and runs required postprocessors.
-- `test_smoke.py`: cover one real recipe-owned single step: forward, loss,
-  backward, optimizer step, logger write, and checkpoint noop or temporary
-  save; it must also verify the user's own recipe/model completes that step with
-  tensor parallel enabled.
-- Prefer copying `tests/test_structure_template.py`,
-  `tests/test_runtime_template.py`, and `tests/test_smoke_template.py` into the
-  recipe-local skill directory first, then only edit the import block and the
-  TP-specific assertions or launcher path that this skill needs.
-- Because this skill typically needs distributed smoke execution, the copied
-  `test_smoke.py` should use `multi_rank_distributed_env(...)` from
-  `tests/test_smoke_template.py` and configure the run for tensor parallel,
-  optionally combined with DDP or FSDP2 sharding if the skill path requires it
-  or the user explicitly prefers that layout.
-- `test_smoke.py` must use the full real capability path for this skill: real
-  engine, real recipe entrypoints, real TP / launcher / logger / checkpoint
-  wiring. Do not short-circuit the path with monkeypatch-based fake wrappers,
-  fake `parallelize_model`, fake process groups, fake device meshes, or similar
-  test-only stand-ins.
-- If the recipe's full-capability single step only makes sense on multi-GPU or
-  distributed hardware, write the smoke test as a real launcher-driven smoke
-  test and set `gpu_preferred: true` in `test_spec.yaml`; do not degrade it
-  into fake logic just to make it run on CPU or single-process setups.
+- `TP_MODULE_CONFIG` is bound on the real top-level model class;
+- config keys match runtime class names and plan keys match direct child
+  modules;
+- plan values are valid TP modes and match expansion/merge semantics;
+- all metadata-sensitive modules were reviewed for postprocessing;
+- postprocessors, if present, are idempotent and mutate only local runtime
+  metadata;
+- TP, FSDP2 prefetching, and other class attributes are merged on the same
+  top-level class when used together;
+- mesh `replicate`, `shard`, and `tensor` are compatible with the intended world
+  size;
+- no generic TP DSL, YAML plan, or `mvp_engine/` runtime change was added;
+- structure or smoke checks are not reported as completed sharding-impact
+  validation.
 
-Do not swap in an unrelated tiny model for this skill. The smoke test should use
-the user's real recipe/model entrypoint with the smallest recipe-owned config that
-still exercises the TP landing points.
+### Hard Validation
 
-When executing this skill for a user recipe, add these tests automatically. Do not
-require the user to spell out the test file list. Run validation only in fresh
-subagents with `fork_context=false`. Do not run these `python -m tests.test_skills`
-commands from the main agent's local terminal, background terminal sessions, or
-any other non-subagent shell fallback. First run
-`python -m tests.test_skills --recipe <recipe> --skill tensor-parallel --layer structure`,
-then a new subagent for `--layer runtime` only after structure passes, and then a
-new subagent for `--layer smoke` only after runtime passes. The main agent should
-summarize all three layer results. If `test_smoke.py` is blocked by GPU
-availability, distributed-launch constraints, or permissions, the main agent
-should return the exact `python -m tests.test_skills` command and any required
-launcher command for the user.
+Copy and adapt `references/asserts.py` into:
+
+```text
+recipes/<recipe>/tests/skills/tensor-parallel/asserts.py
+```
+
+Ensure the recipe has `tests/test_structure.py` and `tests/test_smoke.py`; use
+`tests/templates/` if missing.
+
+Run in fresh subagents, in order, stopping on first failure:
+
+```bash
+pytest recipes/<recipe>/tests/test_structure.py -q
+pytest recipes/<recipe>/tests/test_smoke.py -q --config-override parallel.mesh.tensor=2
+```
+
+Also supply a compatible shard override if the base config has `shard: 1`.
+
+Add optional sharding impact validation when the task requires proof of local
+shard shapes. Use a recipe-local file such as:
+
+```text
+recipes/<recipe>/tests/skills/tensor-parallel/test_sharding_impact.py
+```
+
+The impact test should compare TP-covered parameter local shapes against
+pre-parallel reference shapes under the active tensor mesh.
+
+Add optional numerical impact validation when the task requires proof that TP
+preserves model semantics. Use a recipe-local file such as:
+
+```text
+recipes/<recipe>/tests/skills/tensor-parallel/test_loss_parity_impact.py
+```
+
+The impact test should run the same deterministic batch through TP-off and
+TP-on models and compare loss or logits within recipe-appropriate tolerances.
+Use eval mode, fixed seeds, no optimizer step, identical weights, and the same
+mixed precision policy where feasible.
 
 ## Output
 
-- State which modeling and config files were updated.
-- Summarize the TP plan by module class.
-- State whether TP postprocessing was added and for which runtime classes.
-- State the final mesh settings or the remaining user input needed to finish them.
+- State which model and config files changed.
+- Summarize the TP plan by runtime module class.
+- State whether TP postprocessors were added and why.
+- State final mesh settings.
+- Report soft validation and hard validation status.
+- Call out any remaining gap, such as no TP-active smoke run, no local-shape
+  impact validation, or no loss-parity validation.
 
 ## Read On Demand
 
-- Read `./references/vit_classification/` when you need a full TP example with model
-  changes, config wiring, and recipe-local tests.
+- `references/asserts.py`: recipe-local hard-validation assertion template.
+- `references/tp_rules.md`: TP plan, postprocessor, mesh, and impact rules.
