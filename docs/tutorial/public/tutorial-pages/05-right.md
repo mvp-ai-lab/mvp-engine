@@ -17,4 +17,4 @@ Just ask your coding agent to implement a feature. If there is a skill for that 
 - clearer review points
 - recipe-local validation when a skill changes training behavior
 
-In practice, skills turn "same idea, different experiments" work into a repeatable coding workflow.
+In practice, skills turn “same idea, different experiments" work into a repeatable coding workflow.
