@@ -173,7 +173,7 @@ class BasicVLMEngine(Engine):
             None.
 
         Returns:
-            The HF cosine scheduler aligned with LF-private.
+            The Hugging Face cosine scheduler used by this recipe.
         """
         warmup_steps = math.ceil(self.total_steps * float(self.config.optim.warmup_ratio))
         return get_scheduler(

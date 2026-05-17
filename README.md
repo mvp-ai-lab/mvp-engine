@@ -18,10 +18,27 @@
 
 ## Overview
 
-MVP Engine is a lightweight, extensible training engine for multimodal model research. The core design focuses on separating **experiment logic** (your model, optimizer, scheduler,
-data pipeline) from **training orchestration** (loop policy, logging, checkpointing), so you can iterate on multimodal ideas without rewriting boilerplate.
+> **We HATE over-abstraction**.   
 
-MVP Engine follows an **Agentic** philosophy: the shared `mvp_engine/` package only implements the stable core training runtime, while customization stays in recipes. Instead of over-abstracting custom requirements into the core engine, we provide reusable `skills/` guides. Users can ask a coding AI to run these skills and generate the exact training recipe they need under `recipes/<your_experiment>/`.
+MVP Engine is a lightweight training engine for multimodal model research. Its core principle is simple: keep stable orchestration in `mvp_engine/`, and keep experiment-specific model, data, optimizer, scheduler, and training logic in `recipes/`.
+
+Most training frameworks become heavily abstracted because they need to support every model family, data format, parallel strategy, and training trick through one reusable API surface. That pressure is real, but the result is often a deep stack of config switches, adapters, hooks, and indirection that makes simple experiments hard to read and hard to modify.
+
+MVP Engine resolves this tension with **skills**. The core engine stays small and boring: launch, config merge, distributed setup, logging, checkpointing, and the training loop. Reusable but model-dependent patterns, such as tensor parallelism, gradient checkpointing, freeze policies, packing, loss guards, or migration steps, live as agent-facing `skills/` instructions. A coding agent applies those skills directly to the target recipe, generating concrete code where it belongs instead of forcing every variation into the core runtime.
+
+## Design at a Glance
+
+- **Engine as the orchestration layer**: `mvp_engine/engine/engine.py` defines the base `Engine` class and the
+  train workflow (`before_train -> do_train -> after_train`). Subclasses implement `prepare_*` methods and
+  step hooks such as `train_pre_step` and `forward_step`.
+- **Core-only shared package**: common code in `mvp_engine/` should stay generic, minimal, and stable.
+- **Hydra configuration**: `mvp_engine/launch.py` merges default config with recipe configs and launches the
+  requested workflow (`train`, `evaluate`, or custom).
+- **Logging system**: metrics are aggregated and dispatched to terminal/file backends; additional backends can
+  be added with minimal changes.
+- **Skills**: reusable code patterns that a coding agent can apply to recipes, such as parallelism, freeze policies. Skills are not part of the core engine but are available for recipe customization.
+- **Recipe**: other stuffs such as dataset loading and preprocessing live in each recipe, so task-specific
+  formats can evolve without adding brittle abstractions to the core engine.
 
 ## Agentic Workflow
 
@@ -30,33 +47,9 @@ MVP Engine follows an **Agentic** philosophy: the shared `mvp_engine/` package o
 3. Use a coding AI to execute relevant `skills/` (parallel, model, data, debug, recipe, etc.).
 4. Let the AI assemble or modify recipe code/configs for your target training objective.
 
-## Design at a Glance
+## Project Layout
 
-- **Engine as the orchestration layer**: `mvp_engine/engine/engine.py` defines the base `Engine` class and the
-  train workflow (`before_train -> run_train -> after_train`). Subclasses implement `prepare_*` methods and
-  the evaluation pipeline.
-- **Core-only shared package**: common code in `mvp_engine/` should stay generic, minimal, and stable.
-- **Registry-based extensibility**: `ENGINE_REGISTRY` makes it easy to register custom engines and select them
-  in config via `engine: YourEngine`.
-- **Hydra configuration**: `mvp_engine/launch.py` merges default config with recipe configs and launches the
-  requested workflow (`train`, `evaluate`, or custom).
-- **Logging system**: metrics are aggregated and dispatched to terminal/file backends; additional backends can
-  be added with minimal changes.
-- **WebDataset data pipeline**: `mvp_engine/dataset/webdataset.py` provides a resampled shard loader for large
-  scale multimodal datasets stored in tar shards.
-
-### Training Workflow
-
-1. **Initialize**: setup parallel, seed, run ID, output directory, and loggers.
-2. **Build components**: dataloaders, model, optimizer, scheduler, gradient scaler.
-3. **Run loop**: iteration-based training with optional gradient accumulation and mixed precision.
-4. **Checkpoint**: periodic and final checkpoints, plus engine state for resuming.
-
-### Project Layout
-
-- `mvp_engine/engine/` — core orchestration logic and Engine base class
-- `mvp_engine/utils/` — logging, distributed helpers, training utilities
-- `mvp_engine/dataset/` — dataset builders (WebDataset utilities)
+- `mvp_engine` — core orchestration logic and Engine base class, tools such as logging, distributed helpers, training utilities
 - `recipes/` — experiment-specific configs and custom engine/model/data definitions
 - `skills/` — reusable agent skills used by coding AI to implement recipe customization patterns
 - `outputs/` — run outputs, logs, and checkpoints
@@ -64,25 +57,21 @@ MVP Engine follows an **Agentic** philosophy: the shared `mvp_engine/` package o
 
 ## Getting Started
 
-```
-mkdir data
-cd data
-ln -s /mnt/data-alpha-sg-02/team-camera/projects/Potato3D/processed_data/potato_v1 ./
+```bash
+uv venv --python=3.12
+source .venv/bin/activate
+uv sync
 
-torchrun --nproc_per_node=8 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port=12355 -m mvp_engine.launch --config ./recipes/minimal_vlm/configs/train.yaml
+# Recipes that use `flash_attention_2` may require a FlashAttention wheel that
+# matches the local Python, CUDA, PyTorch, and C++ ABI versions.
+
+# Demo Training Command
+torchrun --nproc_per_node=1 -m mvp_engine.launch --config ./recipes/magic_transformer/configs/train.yaml
 ```
 
 ## Development
 
 ```
-uv venv --python=3.12
-source .venv/bin/activate
-
-# For Dependencies
-uv sync
-uv pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
-
-# For Development Tools
 uv pip install pre-commit
 pre-commit install
 ```
