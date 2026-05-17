@@ -39,8 +39,8 @@ npu = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["mvp_engine"]
-include = ["*"]
+where = ["."]
+include = ["mvp_engine*"]
 exclude = [
     "test"
 ]
@@ -56,3 +56,21 @@ Repository = "https://github.com/mvp-ai-lab/mvp-engine"
 
 [tool.isort]
 known_third_party = ["wandb"]
+
+[tool.pytest.ini_options]
+testpaths = [
+    "tests",
+    "recipes",
+]
+norecursedirs = [
+    ".git",
+    ".venv",
+    "venv",
+    "env",
+    "outputs",
+    "output",
+    "wandb",
+    "playground",
+    "tutorial-demo",
+    "references",
+]
