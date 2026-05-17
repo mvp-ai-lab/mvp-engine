@@ -1,15 +1,14 @@
 # minimal-vlm
 
-This recipe fine-tunes `Qwen/Qwen3-VL-2B-Instruct` on a local JSONL dataset.
-The default demo dataset is at `data/minimal_vlm/demo.jsonl`.
+This recipe fine-tunes `Qwen/Qwen3-VL-2B-Instruct` on a local parquet dataset.
+The default demo dataset is at `data/minimal_vlm/demo.parquet`.
 
 `mvp_dataset` must be importable in the runtime environment. The recipe uses it
-to shard local JSONL files under `.jsonl_shards/` next to the source dataset and
-to build the training dataset.
+to build a resampled parquet training dataset.
 
 ## What it does
 
-- Loads multimodal chat data from JSONL.
+- Loads multimodal chat data from parquet.
 - Rewrites `<image>` placeholders into the Hugging Face chat format expected by Qwen3-VL.
 - Supervises all assistant turns in the conversation.
 - Freezes the visual stack by default and trains the language model plus `lm_head`.
@@ -17,10 +16,10 @@ to build the training dataset.
 
 ## Dataset format
 
-Each JSONL row must contain:
+Each parquet row must contain:
 
 - `messages`: a non-empty list of chat messages with `role` and string `content`
-- `images`: a list of image paths relative to the JSONL file
+- `images`: a list of image paths relative to the parquet data file
 
 The total number of image paths must exactly match the total number of `<image>`
 placeholders across the conversation.
@@ -39,11 +38,12 @@ Example:
 
 ## Quick Start
 
-Download Demo Data:
+Download demo data:
 
 ```bash
-cd data
-hf download mvp-lab/mvp-engine-minimal-vlm-data ./minimal_vlm --repo-type=dataset
+hf download mvp-lab/mvp-engine-minimal-vlm-data \
+  --repo-type dataset \
+  --local-dir data/minimal_vlm
 ```
 
 Run the default demo config:

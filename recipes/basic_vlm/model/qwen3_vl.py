@@ -245,11 +245,11 @@ def inject_model_flops_calculation(model):
 
 
 def apply_qwen3_vl_compat_patches(model):
-    """Mirror the LLaMA-Factory Qwen3-VL vision/runtime patches.
+    """Apply recipe-local Qwen3-VL vision/runtime compatibility patches.
 
     These are behavior patches, not optimizations:
     - run vision patch embedding as fp32 linear math instead of Conv3D
-    - replace the vision RoPE helper with the LF implementation
+    - use a vision RoPE helper compatible with the current Qwen3-VL tensor layout
     """
     from transformers.models.qwen3_vl import modeling_qwen3_vl
 
@@ -281,7 +281,7 @@ def apply_qwen3_vl_compat_patches(model):
         sin: torch.Tensor,
         unsqueeze_dim: int = 1,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Apply the LF-compatible vision RoPE embedding to query/key tensors."""
+        """Apply vision RoPE embedding to query/key tensors."""
         cos = cos.unsqueeze(unsqueeze_dim)
         sin = sin.unsqueeze(unsqueeze_dim)
         q_embed = (q * cos) + (rotate_half(q) * sin)
@@ -295,7 +295,7 @@ def apply_qwen3_vl_compat_patches(model):
 
 
 def inject_sum_loss_forward(model, *, chunk_size: int = 4096):
-    """Patch Qwen3-VL forward to return LF-style per-token CE loss."""
+    """Patch Qwen3-VL forward to return unreduced per-token CE loss."""
 
     def forward(
         self,

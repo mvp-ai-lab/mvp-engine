@@ -46,10 +46,8 @@ skills/
 ├── parallel/             ← distributed and parallelism skills
 ├── model/                ← model integration and conversion skills
 ├── data/                 ← data pipeline skills
-├── debug/                ← debugging and performance analysis skills
 ├── recipe/               ← recipe setup skills
 ├── experiment/           ← experiment analysis skills
-├── config/               ← config generation guidance
 ├── git/                  ← git, review, and merge workflow skills
 └── skills/               ← skill authoring guidance
 ```
@@ -91,13 +89,19 @@ Use @skills/git/pr-gate/SKILL.md
 - `parallel/tensor-parallel`: [parallel/tensor-parallel/SKILL.md](parallel/tensor-parallel/SKILL.md)
 - `training/model-compile`: [training/model-compile/SKILL.md](training/model-compile/SKILL.md)
 - `training/gradient-checkpointing`: [training/gradient-checkpointing/SKILL.md](training/gradient-checkpointing/SKILL.md)
+- `training/loss-spike-guard`: [training/loss-spike-guard/SKILL.md](training/loss-spike-guard/SKILL.md)
+- `training/token-normalized-loss`: [training/token-normalized-loss/SKILL.md](training/token-normalized-loss/SKILL.md)
 - `model/model-migration`: [model/model-migration/SKILL.md](model/model-migration/SKILL.md)
+- `model/model-flops-utilization`: [model/model-flops-utilization/SKILL.md](model/model-flops-utilization/SKILL.md)
+- `model/vlm-freeze-policy`: [model/vlm-freeze-policy/SKILL.md](model/vlm-freeze-policy/SKILL.md)
+- `data/vlm-data-pipeline`: [data/vlm-data-pipeline/SKILL.md](data/vlm-data-pipeline/SKILL.md)
+- `data/vlm-packing`: [data/vlm-packing/SKILL.md](data/vlm-packing/SKILL.md)
 - `recipe/new-recipe-template`: [recipe/new-recipe-template/SKILL.md](recipe/new-recipe-template/SKILL.md)
 - `git/pr-gate`: [git/pr-gate/SKILL.md](git/pr-gate/SKILL.md)
 - `git/pr-feedback`: [git/pr-feedback/SKILL.md](git/pr-feedback/SKILL.md)
 - `git/pr-skill-review`: [git/pr-skill-review/SKILL.md](git/pr-skill-review/SKILL.md)
-- `experiment/analysis`: [experiment/analysis/SKILL.md](experiment/analysis/SKILL.md)
 - `git/recipe-merge-repair`: [git/recipe-merge-repair/SKILL.md](git/recipe-merge-repair/SKILL.md)
+- `experiment/analysis`: [experiment/analysis/SKILL.md](experiment/analysis/SKILL.md)
 
 ## Adding a New Skill
 

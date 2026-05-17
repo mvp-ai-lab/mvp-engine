@@ -37,8 +37,6 @@ model:
   gradient_checkpointing:
     enabled: true
     use_reentrant: false
-  # Freeze flags — set true to stop gradient for the corresponding sub-module.
-  # Defaults follow the alignment-stage convention: train merger only.
   freeze_vit: false
   freeze_merger: false
   freeze_llm: false

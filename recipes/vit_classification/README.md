@@ -9,8 +9,8 @@ This recipe focuses on a plain ImageNet-style classification example with
   path for smoke runs.
 - `model/vit.py`: builds the HuggingFace ViT classifier. The template defaults to
   local random initialization so users do not need to download weights up front.
-- `engine/vit_classification_engine.py`: minimal train/evaluate loop on top of the
-  shared `Engine`.
+- `engine/vit_classification_engine.py`: minimal training hooks on top of the
+  shared `Engine`, using `TrainStepContext` for batch preparation and forward metrics.
 - `configs/train.yaml`: a small, readable starter config.
 
 ## Expected real dataset layout

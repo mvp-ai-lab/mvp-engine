@@ -4,10 +4,9 @@ Qwen3-VL packed training needs two coordinated overrides:
 - ``create_causal_mask`` must return the integer segment-id mask directly.
 - ``_get_unpad_data`` must interpret segment ids as block-diagonal boundaries.
 
-This matches the working behavior used in the LLaMA-Factory reference. The
-previous patch only modified shared masking utils, which left Qwen3-VL's own
-causal-mask path inconsistent and produced artificially low packed-sequence
-losses.
+The patch updates both the shared unpadding helper and Qwen3-VL's own
+causal-mask path so packed-sequence loss uses the intended block-diagonal
+attention boundaries.
 """
 
 from __future__ import annotations
