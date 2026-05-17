@@ -103,7 +103,7 @@ not optional guidance. There are two types of validation:
 
 #### Typical validation workflow (run them in order, stopping on first failure)
 1. do the soft validation first.
-2. `pytest recipes/<recipe>/tests/test_structure.py -q`: this makes sure the applied skill does not break the expected coding structure of the recipe, such as file locations, config structure, and engine structure.
-3. `pytest recipes/<recipe>/tests/test_smoke.py -q`: this makes sure the applied skill does not break the real training.
+2. Structure test: `pytest recipes/<recipe>/tests/test_structure.py -q`: this makes sure the applied skill does not break the expected coding structure of the recipe, such as file locations, config structure, and engine structure.
+3. Smoke test: it usually requires GPU/NPU resources, so first check your local environment or follow the instructions in `AGENTS.md` or `CUSTOM.md` to access the resources. Then run `pytest recipes/<recipe>/tests/test_smoke.py -q`: this makes sure the applied skill does not break the real training.
 4. Optional impact validation: run each skill-declared `test_<impact>.py`, for
    example `pytest recipes/<recipe>/tests/skills/<skill-id>/test_memory_impact.py -q`.
