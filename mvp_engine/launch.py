@@ -54,7 +54,11 @@ def _import_recipe_modules(recipe_dir: Path) -> None:
 
     import importlib
 
-    py_files = sorted(py_file for py_file in recipe_dir.glob("**/*.py") if not py_file.name.startswith("_"))
+    py_files = sorted(
+        py_file
+        for py_file in recipe_dir.glob("**/*.py")
+        if not py_file.name.startswith("_") and py_file.name != "conftest.py" and "tests" not in py_file.parts
+    )
     py_files = _filter_gitignored_paths(py_files)
 
     for py_file in py_files:
