@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mvp_engine"
-version = "0.0.1"
+version = "0.1.0"
 authors = [{name = "MVP-Lab"}]
 description = "A simple, unified multimodal models training engine. Lean, flexible, and built for hacking, and hacking at scale."
 readme = "README.md"
