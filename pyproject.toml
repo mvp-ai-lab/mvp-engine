@@ -12,7 +12,7 @@ authors = [{name = "MVP-Lab"}]
 description = "A simple, unified multimodal models training engine. Lean, flexible, and built for hacking, and hacking at scale."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Apache-2.0" }
+license = { text = "AGPL-3.0-only" }
 dependencies = [
     "addict",
     "datasets",
