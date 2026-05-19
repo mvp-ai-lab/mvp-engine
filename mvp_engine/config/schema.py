@@ -74,6 +74,7 @@ class BaseDDPConfig(BaseModel):
 class BaseBackendKwargsConfig(BaseModel):
     model_config = ConfigDict(frozen=False)
 
+    sequence_parallel: bool = False
     fsdp2: BaseFSDP2Config = Field(default_factory=BaseFSDP2Config)
     ddp: BaseDDPConfig = Field(default_factory=BaseDDPConfig)
 
