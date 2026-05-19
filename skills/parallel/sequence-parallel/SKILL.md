@@ -111,6 +111,10 @@ Read `references/sp_rules.md` before finalizing the plan. Check:
 
 - entry modules that receive full hidden states before the first column-parallel
   projection;
+- replicated parameters that consume local sequence shards and therefore need
+  tensor-mesh gradient sync;
+- FSDP2-wrapped replicated DTensor parameters without a `"tensor"` mesh dim,
+  which need post-accumulate `.grad` sync;
 - row-parallel outputs that remain sequence-sharded;
 - norms and dropout that are safe on local sequence shards;
 - any loss, router, sampler, cache, logging, or metric code that needs the full

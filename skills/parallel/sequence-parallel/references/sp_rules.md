@@ -113,6 +113,10 @@ Entry boundaries:
   produce full sequence tensors before the first SP-aware column projection.
 - If a module expects replicated full sequence input, do not mark it
   `"sequence"` unless the upstream layout is already sequence-sharded.
+- Pick the SP entry boundary deliberately. Prefer sharding tokens or hidden
+  states before replicated modules that should process local sequence shards.
+- Avoid running tied embeddings on full sequence and the tied LM head on local
+  sequence shards; that mixes two gradient meanings for one shared parameter.
 
 Output boundaries:
 
@@ -140,6 +144,26 @@ Review carefully:
 - logging and loss normalization that count global tokens;
 - attention mask construction that assumes full local sequence length.
 
+## Replicated Parameters On Sequence Shards
+
+If a non-TP / replicated module consumes only local sequence shards, each TP rank
+computes only its local-token gradient contribution.
+
+Required action:
+
+- wrap the module with a SP-aware style that handles replicated parameter grads,
+  or
+- explicitly all-reduce those parameter grads across the tensor mesh.
+
+With FSDP2, replicated parameters may become DTensors on the FSDP mesh only
+(for example `("replicate", "shard")`, with no `"tensor"` mesh dim). For those
+parameters, synchronize the final accumulated `.grad` with
+`register_post_accumulate_grad_hook`, not only a normal pre-accumulation grad
+hook.
+
+Common examples: embeddings, tied LM heads, final projections, routers, fusion
+layers, and custom norms/dropouts not covered by `SequenceParallel`.
+
 ## Common Failure Cases
 
 - `sequence_parallel=true` with `parallel.mesh.tensor == 1`.
@@ -151,6 +175,10 @@ Review carefully:
   sequence.
 - A router, sampler, metric, or loss uses local sequence shards as if they were
   global tensors.
+- A replicated parameter sees only local sequence shards but its gradient is not
+  synchronized across the tensor mesh.
+- The model shards sequence after embedding, while a tied LM head later consumes
+  sequence-local outputs.
 - TP postprocessors update head counts but sequence-local code still uses a
   cached global hidden dimension.
 
@@ -162,6 +190,8 @@ the SP-active training path runs. It does not prove global parity or speedup.
 Use an optional impact test when correctness depends on a nontrivial boundary:
 
 - compare TP/SP-off and TP/SP-on loss or logits on the same deterministic batch;
+- compare TP/SP-off and TP/SP-on gradients for replicated parameters that consume
+  sequence-sharded activations;
 - inspect DTensor local shapes for sequence-sharded hidden-state parameters or
   activations when the recipe has a stable hook point;
 - assert global token counts are gathered or reduced before loss/metric
