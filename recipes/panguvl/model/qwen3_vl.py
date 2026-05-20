@@ -330,6 +330,16 @@ def build_qwen3_vl_model(model_config: Any):
         torch_dtype="auto",
         attn_implementation=model_config.attn_implementation,
     )
+    pad_token_id = getattr(model_config, "pad_token_id", None)
+    if pad_token_id is not None:
+        model.config.pad_token_id = int(pad_token_id)
+        text_config = getattr(model.config, "text_config", None)
+        if text_config is not None:
+            text_config.pad_token_id = int(pad_token_id)
+        generation_config = getattr(model, "generation_config", None)
+        if generation_config is not None:
+            generation_config.pad_token_id = int(pad_token_id)
+
     model = inject_model_flops_calculation(model)
     model = apply_model_gradient_checkpointing(
         model,

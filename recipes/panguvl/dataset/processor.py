@@ -53,8 +53,14 @@ def build_qwen3_vl_processor(model_config: Any):
     tokenizer = getattr(processor, "tokenizer", None)
     if tokenizer is not None:
         tokenizer.padding_side = "right"
-        if tokenizer.pad_token_id is None and tokenizer.eos_token is not None:
-            tokenizer.pad_token = tokenizer.eos_token
+        pad_token_id = getattr(model_config, "pad_token_id", 2)
+        if tokenizer.pad_token_id is None:
+            pad_token_id = int(pad_token_id)
+            pad_token = tokenizer.convert_ids_to_tokens(pad_token_id)
+            if pad_token is None or pad_token == tokenizer.unk_token:
+                raise ValueError(f"Cannot set pad_token: token id {pad_token_id} is not a known tokenizer token.")
+            tokenizer.pad_token = pad_token
+            tokenizer.pad_token_id = pad_token_id
 
     processor.__fingerprint__ = ProcessorFingerprint(_processor_fingerprint(processor))
     return processor

@@ -91,6 +91,7 @@ class PanguvlModelConfig(BaseModel):
     pretrained_model_name_or_path: str = "./recipes/panguvl/pretrained/Qwen3-VL-8B-Instruct"
     attn_implementation: Literal["eager", "sdpa", "flash_attention_2"] = "flash_attention_2"
     image_max_pixels: int | None = Field(None, ge=1)
+    pad_token_id: int | None = Field(2, ge=0)
     gradient_checkpointing: PanguvlGradientCheckpointingConfig = Field(
         default_factory=PanguvlGradientCheckpointingConfig
     )

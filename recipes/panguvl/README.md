@@ -170,18 +170,20 @@ The recipe expects Open-Bee style parquet rows with `messages` or
 
 ### 6. Smoke-Test The Launch Configuration
 
-Use one process and `dev_mode=true` for a quick local run:
+Use one process and the debug config for a quick local run. The debug config
+sets a small explicit `loop.total_steps`, so it skips the full dataset pass used
+to infer training steps when `loop.total_steps=-1`.
 
 ```bash
 torchrun --nproc_per_node=1 -m mvp_engine.launch \
-  --config recipes/panguvl/configs/stage1.yaml \
+  --config recipes/panguvl/configs/debug.yaml \
   model.pretrained_model_name_or_path=checkpoints/OpenPangu-VL-7B \
-  data.train_path="$DATA_PATH" \
-  data.num_workers=0 \
-  dev_mode=true \
-  log.backends='[terminal]' \
-  model.compile=false
+  data.train_path="$DATA_PATH"
 ```
+
+For ad-hoc debugging with any stage config, set a positive step count, for
+example `loop.total_steps=2`. Step inference only runs when
+`loop.total_steps=-1`.
 
 ### 7. Run Distributed Training
 
