@@ -1,0 +1,30 @@
+[
+  {
+    "left": "/tutorial-pages/01-left.md",
+    "right": "/tutorial-pages/01-right.md"
+  },
+  {
+    "left": "/tutorial-pages/02-left.md",
+    "right": "/tutorial-pages/02-right.md"
+  },
+  {
+    "left": "/tutorial-pages/03-left.md",
+    "right": "/tutorial-pages/03-right.md"
+  },
+  {
+    "left": "/tutorial-pages/04-left.md",
+    "right": "/tutorial-pages/04-right.md"
+  },
+  {
+    "left": "/tutorial-pages/05-left.md",
+    "right": "/tutorial-pages/05-right.md"
+  },
+  {
+    "left": "/tutorial-pages/06-left.md",
+    "right": "/tutorial-pages/06-right.md"
+  },
+  {
+    "left": "/tutorial-pages/07-left.md",
+    "right": "/tutorial-pages/07-right.md"
+  }
+]

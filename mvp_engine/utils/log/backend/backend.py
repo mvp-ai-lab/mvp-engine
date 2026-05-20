@@ -21,6 +21,7 @@ class Backend:
         metrics: Mapping[str, Union[float, str]],
         step: int,
         epoch: Optional[int] = None,
+        total_steps: Optional[int] = None,
     ) -> None:
         """Log aggregated metric values.
 
@@ -28,6 +29,7 @@ class Backend:
             metrics: Mapping from metric name to aggregated value (float or str).
             step: Training step associated with the metrics.
             epoch: Optional epoch number.
+            total_steps: Optional total number of training steps for progress display.
         """
         raise NotImplementedError
 
@@ -36,6 +38,9 @@ class Backend:
 
     def info(self, message: str) -> None:
         """Log an informational message (backend-specific)."""
+
+    def debug(self, message: str) -> None:
+        """Log a debug message (backend-specific)."""
 
     def warning(self, message: str) -> None:
         """Log a warning message (backend-specific)."""

@@ -1,0 +1,61 @@
+dev_mode: false
+engine: MagicTransformerEngine
+
+seed: 42
+deterministic: false
+
+project:
+  name: "magic_transformer"
+  dir: "./outputs"
+
+log:
+  interval: 10
+  backends: ["terminal", "file"]
+
+parallel:
+  mesh:
+    replicate: -1
+    shard: 1
+    tensor: 1
+  backend_kwargs:
+    ddp:
+      # MoD routing and odd-layer KV reuse intentionally leave some trainable
+      # parameters unused in a given backward pass, so DDP must track them.
+      find_unused_parameters: true
+
+data:
+  fake_train_size: 128
+  fake_eval_size: 32
+  seq_len: 16
+  vocab_size: 1024
+  batch_size: 8
+  num_workers: 0
+
+model:
+  vocab_size: 1024
+  max_seq_len: 16
+  d_model: 128
+  n_heads: 4
+  n_kv_heads: 2
+  n_layers: 4
+  dropout: 0.0
+  rope_base: 10000.0
+  mod_top_k_ratio: 0.5
+  dual_stream: true
+  router_ema_decay: 0.9
+
+optim:
+  lr: 0.0003
+  weight_decay: 0.01
+  gradient_accumulation_steps: 1
+  mixed_precision: "fp32"
+  warmup_ratio: 0.05
+  clip_grad_norm: 1.0
+
+loop:
+  policy: "iter"
+  total_steps: 100
+
+checkpoint:
+  keep_n: 2
+  interval: 50

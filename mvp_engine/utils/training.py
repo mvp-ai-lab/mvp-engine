@@ -1,10 +1,134 @@
 """Training utilities for gradient accumulation and mixed precision."""
 
+import math
+from collections.abc import Iterable
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Generator, Union
 
 import torch
+import torch.distributed as dist
+import torch.nn as nn
+from torch.distributed.fsdp import FSDPModule
 from torch.nn.parallel import DistributedDataParallel as DDP
+
+try:
+    from torch.distributed.tensor import DTensor
+except Exception:  # pragma: no cover - runtime-dependent
+    DTensor = ()
+
+
+def _get_local_tensor(tensor: torch.Tensor) -> torch.Tensor:
+    """Return the local shard/replica tensor for a DTensor."""
+    local_tensor = tensor.to_local()
+    wait = getattr(local_tensor, "wait", None)
+    if callable(wait):
+        local_tensor = wait()
+    return local_tensor
+
+
+def _get_dtensor_placements_key(grad: torch.Tensor) -> tuple[str, ...]:
+    """Represent DTensor placements so clipping can group identical layouts together."""
+    return tuple(repr(placement) for placement in grad.placements)
+
+
+def _get_dtensor_reduce_device(grad: torch.Tensor) -> torch.device:
+    """Return a device compatible with the DTensor mesh process group collectives."""
+    device_type = grad.device_mesh.device_type
+    if device_type == "cuda":
+        return torch.device("cuda", torch.cuda.current_device())
+    return torch.device(device_type)
+
+
+def _get_dtensor_group_total_norm(group_grads: list[torch.Tensor], norm_type: float) -> torch.Tensor:
+    """Compute the global norm for DTensor gradients without materializing full tensors."""
+    local_tensors = [_get_local_tensor(grad).detach() for grad in group_grads]
+    local_device = local_tensors[0].device
+    reduce_device = _get_dtensor_reduce_device(group_grads[0])
+
+    if math.isinf(norm_type):
+        total_norm = (
+            torch.stack(
+                [
+                    torch.linalg.vector_norm(local_tensor, ord=norm_type, dtype=torch.float32)
+                    for local_tensor in local_tensors
+                ]
+            )
+            .amax()
+            .to(device=reduce_device)
+        )
+        reduce_op = dist.ReduceOp.MAX
+    else:
+        total_norm = (
+            torch.stack(
+                [
+                    torch.linalg.vector_norm(local_tensor, ord=norm_type, dtype=torch.float32) ** norm_type
+                    for local_tensor in local_tensors
+                ]
+            )
+            .sum()
+            .to(device=reduce_device)
+        )
+        reduce_op = dist.ReduceOp.SUM
+
+    grad0 = group_grads[0]
+    for mesh_dim, placement in enumerate(grad0.placements):
+        if placement.is_shard() or placement.is_partial():
+            dist.all_reduce(total_norm, op=reduce_op, group=grad0.device_mesh.get_group(mesh_dim))
+
+    if not math.isinf(norm_type):
+        total_norm = total_norm ** (1.0 / norm_type)
+
+    return total_norm.to(device=local_device, dtype=torch.float32)
+
+
+@torch.no_grad()
+def _clip_dtensor_group_grads_with_norm_(
+    group_grads: list[torch.Tensor],
+    max_norm: float,
+    total_norm: torch.Tensor,
+) -> None:
+    """Scale local DTensor shards/replicas in-place using a precomputed global norm."""
+    clip_coef = max_norm / (total_norm + 1e-6)
+    clip_coef_clamped = torch.clamp(clip_coef, max=1.0)
+
+    for grad in group_grads:
+        local_tensor = _get_local_tensor(grad)
+        local_tensor.mul_(clip_coef_clamped.to(device=local_tensor.device, dtype=local_tensor.dtype))
+
+
+def _get_grad_mesh_key(grad: torch.Tensor) -> tuple:
+    """Group gradients by DTensor mesh so mixed-mesh clipping can be reduced safely."""
+    if not isinstance(grad, DTensor):
+        return ("local",)
+
+    mesh = grad.device_mesh
+    return (
+        "dtensor",
+        mesh.device_type,
+        tuple(mesh.mesh.shape),
+        tuple(mesh.mesh.reshape(-1).tolist()),
+        tuple(mesh.mesh_dim_names or ()),
+        _get_dtensor_placements_key(grad),
+    )
+
+
+@dataclass
+class GradientAccumulationState:
+    """Track micro-batch progress within a gradient accumulation window."""
+
+    gradient_accumulation_steps: int
+    micro_step: int = 0
+
+    def advance(self, skip_increase: bool = False) -> bool:
+        """Advance one micro-batch and return whether gradients should sync."""
+        if not skip_increase:
+            self.micro_step += 1
+
+        if self.micro_step % self.gradient_accumulation_steps == 0:
+            self.micro_step = 0
+            return True
+        return False
 
 
 @contextmanager
@@ -19,17 +143,31 @@ def accumulate_gradients(
     processes (normal backward behavior).
 
     Args:
-        model: The model (possibly wrapped in DDP).
+        model: The model (possibly wrapped in DDP or FSDP2).
         sync: Whether to synchronize gradients across processes.
 
     Yields:
         None
     """
-    if isinstance(model, DDP) and not sync:
-        with model.no_sync():
+    base_model = getattr(model, "_orig_mod", model)
+
+    # DDP
+    if isinstance(base_model, DDP):
+        if sync:
             yield
-    else:
+        else:
+            with base_model.no_sync():
+                yield
+        return
+
+    # FSDP2
+    if isinstance(base_model, FSDPModule):
+        base_model.set_requires_gradient_sync(sync)
         yield
+        return
+
+    # Non-parallel
+    yield
 
 
 class GradientScaler:
@@ -145,8 +283,9 @@ class GradientScaler:
             self._scaler.load_state_dict(state_dict)
 
 
+@torch.no_grad()
 def clip_grad_norm_(
-    parameters,
+    parameters: nn.Module | Iterable[torch.Tensor] | torch.Tensor,
     max_norm: float,
     norm_type: float = 2.0,
 ) -> torch.Tensor:
@@ -163,11 +302,48 @@ def clip_grad_norm_(
     Returns:
         Total norm of the gradients before clipping.
     """
+    if isinstance(parameters, nn.Module):
+        parameters = parameters.parameters()
+
     if isinstance(parameters, torch.Tensor):
         parameters = [parameters]
+    else:
+        parameters = list(parameters)
+
     parameters = [p for p in parameters if p.grad is not None]
 
     if len(parameters) == 0:
         return torch.tensor(0.0)
 
-    return torch.nn.utils.clip_grad_norm_(parameters, max_norm=max_norm, norm_type=norm_type)
+    grouped_parameters: dict[tuple, list[torch.Tensor]] = {}
+    for param in parameters:
+        group_key = _get_grad_mesh_key(param.grad)
+        grouped_parameters.setdefault(group_key, []).append(param)
+
+    group_total_norms: list[torch.Tensor] = []
+    for group_parameters in grouped_parameters.values():
+        group_grads = [param.grad for param in group_parameters]
+        if isinstance(group_grads[0], DTensor):
+            group_total_norm = _get_dtensor_group_total_norm(group_grads, norm_type)
+        else:
+            group_total_norm = torch.nn.utils.get_total_norm(group_grads, norm_type)
+        group_total_norms.append(group_total_norm.to(device=group_grads[0].device, dtype=torch.float32))
+
+    if math.isinf(norm_type):
+        total_norm = torch.stack(group_total_norms).amax()
+    else:
+        total_norm = torch.linalg.vector_norm(torch.stack(group_total_norms), ord=norm_type)
+
+    for group_parameters in grouped_parameters.values():
+        group_grads = [param.grad for param in group_parameters]
+        if isinstance(group_grads[0], DTensor):
+            _clip_dtensor_group_grads_with_norm_(group_grads, max_norm, total_norm)
+        else:
+            torch.nn.utils.clip_grads_with_norm_(
+                group_parameters,
+                max_norm,
+                total_norm,
+                foreach=False,
+            )
+
+    return total_norm

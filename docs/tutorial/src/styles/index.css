@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+  .book-turn-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 31;
+    display: block;
+    pointer-events: none;
+    transform: scaleX(1.08);
+  }
+
+  .book-turn-canvas {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+}

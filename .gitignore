@@ -163,8 +163,9 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-data/
-scripts/
+/data/
+/scripts/
+/references/
 wandb/
 playground/
 .deepspeed_env
@@ -182,5 +183,7 @@ slurmlogs
 .vscode
 .idea
 
-slurm/*
-batch_files/*
+# AI
+CUSTOM.md
+/references
+.codex

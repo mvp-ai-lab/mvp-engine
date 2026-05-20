@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Mapping, Optional, Union
 
-from omegaconf import DictConfig, OmegaConf
+import yaml
 
 from mvp_engine.distributed.utils import is_main_process
 
@@ -40,17 +40,18 @@ class FileBackend(Backend):
                 path.mkdir(parents=True, exist_ok=True)
             self.log_file = open(path / f"log_{id}.log", "w")
 
-    def log_config(self, config: DictConfig) -> None:
+    def log_config(self, config: dict) -> None:
         """Write a YAML dump of `config` to a file."""
         if self.enable:
             with open(self.path / f"config_{self.id}.yaml", "w") as f:
-                f.write(OmegaConf.to_yaml(config))
+                yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
 
     def log_metrics(
         self,
         metrics: Mapping[str, Union[float, str]],
         step: int,
         epoch: Optional[int] = None,
+        total_steps: Optional[int] = None,
     ) -> None:
         """Append aggregated metrics to the log file.
 
@@ -58,17 +59,21 @@ class FileBackend(Backend):
             metrics: Mapping of metric names to aggregated values.
             step: Training step.
             epoch: Optional epoch index.
+            total_steps: Optional total number of training steps for progress display.
         """
         if not self.enable or self.log_file is None:
             return
         if len(metrics) == 0:
             return
-        eta = metrics.pop("eta", None)
+        eta = metrics.get("eta")
         date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         eta_str = f" | ETA {eta}" if eta is not None else ""
         epoch_str = f"Epoch {epoch} - " if epoch is not None else ""
-        log_str = f"{date_str} | {self.id}{eta_str} | {epoch_str}Step {step:>8} || "
+        step_str = f"{step:>8}/{total_steps}" if total_steps is not None else f"{step:>8}"
+        log_str = f"{date_str} | {self.id}{eta_str} | {epoch_str}Step {step_str} || "
         for key, value in metrics.items():
+            if key == "eta":
+                continue
             log_str += f"{key}: {value} | "
 
         self.log_file.write(log_str + "\n")
@@ -78,6 +83,12 @@ class FileBackend(Backend):
         """Close the log file if opened."""
         if self.enable and self.log_file is not None:
             self.log_file.close()
+
+    def debug(self, message: str) -> None:
+        """Write a debug-level message to the log file."""
+        if self.enable and self.log_file:
+            self.log_file.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {self.id} | DEBUG | {message}\n")
+            self.log_file.flush()
 
     def info(self, message: str) -> None:
         """Write an info-level message to the log file."""

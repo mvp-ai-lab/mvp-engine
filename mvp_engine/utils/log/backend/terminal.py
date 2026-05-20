@@ -2,7 +2,7 @@ import inspect
 from datetime import datetime
 from typing import Mapping, Optional
 
-from omegaconf import DictConfig, OmegaConf
+import yaml
 from rich.console import Console
 
 from mvp_engine.distributed.utils import is_main_process
@@ -55,16 +55,18 @@ class TerminalBackend(Backend):
         self.id = id
         self.enable: bool = is_main_process()
         self.console: Optional[Console] = None
+        self.show_location: bool = False
 
         if self.enable:
             self.console = Console(color_system="auto")
+            self.show_location = self.console.is_terminal
 
-    def log_config(self, config: DictConfig) -> None:
+    def log_config(self, config: dict) -> None:
         """Pretty-print configuration when running on main process."""
         if self.enable:
             self.info("=" * 80)
             self.info("Configurations:")
-            for line in f"{OmegaConf.to_yaml(config)}".splitlines():
+            for line in yaml.dump(config, default_flow_style=False, allow_unicode=True).splitlines():
                 self.info(" " * 4 + line)
             self.info("=" * 80)
 
@@ -73,6 +75,7 @@ class TerminalBackend(Backend):
         metrics: Mapping[str, float],
         step: int,
         epoch: Optional[int] = None,
+        total_steps: Optional[int] = None,
     ) -> None:
         """Print metric values with optional epoch and ETA.
 
@@ -80,6 +83,7 @@ class TerminalBackend(Backend):
             metrics: Mapping of metric names to values; ``eta`` is stripped if present.
             step: Current global step.
             epoch: Optional epoch number.
+            total_steps: Optional total number of training steps for progress display.
         """
         if not self.enable or not metrics:
             return
@@ -90,8 +94,9 @@ class TerminalBackend(Backend):
         eta_str = f" | [bold]ETA[/bold] {eta}" if eta is not None else ""
         epoch_str = f"[bold]Epoch[/bold] {epoch} - " if epoch is not None else ""
 
+        step_str = f"{step:>8}/{total_steps}" if total_steps is not None else f"{step:>8}"
         parts = [
-            f"[bold]{date_str}[/bold] | [bright_yellow]{self.id}[/bright_yellow]{eta_str} | {epoch_str}[bold]Step[/bold] {step:>8} ||",
+            f"[bold]{date_str}[/bold] | [bright_yellow]{self.id}[/bright_yellow]{eta_str} | {epoch_str}[bold]Step[/bold] {step_str} ||",
         ]
 
         for key, value in metrics_dict.items():
@@ -107,11 +112,29 @@ class TerminalBackend(Backend):
         return None
 
     def _print_with_location(self, message: str, level: str, level_color: str, location: str) -> None:
-        """Print message with caller location right-aligned at the end."""
+        """Print message with caller location on TTYs and plain output otherwise."""
         if self.console is None:
             return None
         date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        terminal_width = self.console.width or 120
+
+        if not self.show_location:
+            if level_color == "cyan":
+                self.console.print(
+                    f"[bold]{date_str}[/bold] | [bright_yellow]{self.id}[/bright_yellow] | "
+                    f"[{level_color}]{level: <5}[/{level_color}] | {message}",
+                    soft_wrap=True,
+                )
+            else:
+                self.console.print(
+                    f"[bold]{date_str}[/bold] | [bright_yellow]{self.id}[/bright_yellow] | "
+                    f"[{level_color}]{level: <5}[/{level_color}] | [{level_color}]{message}[/{level_color}]",
+                    soft_wrap=True,
+                )
+            return None
+
+        terminal_width = self.console.width
+        if not isinstance(terminal_width, int) or terminal_width <= 0:
+            terminal_width = 120
 
         # Build the main content (without location)
         if level_color == "cyan":
@@ -130,6 +153,12 @@ class TerminalBackend(Backend):
             self.console.print(f"{main_content}{' ' * padding}{location_part}", soft_wrap=True)
         else:
             self.console.print(f"{main_content} {location_part}", soft_wrap=True)
+
+    def debug(self, message: str) -> None:
+        """Log a debug message."""
+        if self.enable:
+            location = _get_caller_info(depth=3)
+            self._print_with_location(message, "DEBUG", "dim", location)
 
     def info(self, message: str) -> None:
         """Log an informational message."""
