@@ -7,9 +7,21 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 
 from mvp_engine.engine import ENGINE_REGISTRY
+from mvp_engine.patches import apply_all_patches
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RECIPES_ROOT = PROJECT_ROOT / "recipes"
+_RUNTIME_PATCHES_APPLIED = False
+
+
+def _apply_runtime_patches() -> None:
+    """Apply process-wide runtime patches before importing/wrapping training code."""
+
+    global _RUNTIME_PATCHES_APPLIED
+    if _RUNTIME_PATCHES_APPLIED:
+        return
+    apply_all_patches()
+    _RUNTIME_PATCHES_APPLIED = True
 
 
 def _find_recipe_dir(config_path: Path) -> Path | None:
@@ -42,7 +54,11 @@ def _import_recipe_modules(recipe_dir: Path) -> None:
 
     import importlib
 
-    py_files = sorted(py_file for py_file in recipe_dir.glob("**/*.py") if not py_file.name.startswith("_"))
+    py_files = sorted(
+        py_file
+        for py_file in recipe_dir.glob("**/*.py")
+        if not py_file.name.startswith("_") and py_file.name != "conftest.py" and "tests" not in py_file.parts
+    )
     py_files = _filter_gitignored_paths(py_files)
 
     for py_file in py_files:
@@ -63,7 +79,7 @@ def _filter_gitignored_paths(paths: list[Path]) -> list[Path]:
         return paths
 
     result = subprocess.run(
-        ["git", "check-ignore", "--stdin"],
+        ["git", "check-ignore", "--no-index", "--stdin"],
         input="\n".join(relative_paths),
         capture_output=True,
         cwd=project_root,
@@ -81,6 +97,8 @@ def _filter_gitignored_paths(paths: list[Path]) -> list[Path]:
 
 @hydra.main(version_base=None)
 def main(config: DictConfig) -> None:
+    _apply_runtime_patches()
+
     default_config = OmegaConf.to_container(
         OmegaConf.load(Path(__file__).parent / "config" / "default.yaml"),
         resolve=True,
@@ -102,6 +120,8 @@ def main(config: DictConfig) -> None:
 
 
 if __name__ == "__main__":
+    _apply_runtime_patches()
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, help="Path to YAML config file")
     args, remaining = parser.parse_known_args()

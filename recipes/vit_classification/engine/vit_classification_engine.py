@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 
 from mvp_engine.distributed.parallelize import parallelize_model
 from mvp_engine.distributed.utils import get_rank, get_world_size, is_main_process
-from mvp_engine.engine import ENGINE_REGISTRY, Engine
+from mvp_engine.engine import ENGINE_REGISTRY, Engine, TrainStepContext
 from mvp_engine.utils.log import logger
 from mvp_engine.utils.misc import calculate_model_size
 
@@ -23,13 +23,6 @@ class TrainBatch(TypedDict):
 
     pixel_values: torch.Tensor
     labels: torch.Tensor
-
-
-class TrainStepOutput(TypedDict):
-    """Outputs returned by one training step."""
-
-    loss: torch.Tensor
-    logs: dict[str, float]
 
 
 @ENGINE_REGISTRY.register()
@@ -115,16 +108,19 @@ class ViTClassificationEngine(Engine):
         )
         return SequentialLR(self.optimizer, [scheduler_warmup, scheduler_main], milestones=[warmup_steps])
 
-    def train_pre_step(self, data: tuple[torch.Tensor, torch.Tensor]) -> TrainBatch:
+    def train_pre_step(self, ctx: TrainStepContext) -> TrainStepContext:
         """Move a batch from the dataloader onto the current device."""
+        data: tuple[torch.Tensor, torch.Tensor] = ctx.data
         pixel_values, labels = data
-        return {
+        ctx.data = {
             "pixel_values": pixel_values.to(self.device, non_blocking=True),
             "labels": labels.to(self.device, non_blocking=True),
         }
+        return ctx
 
-    def train_one_step(self, data: TrainBatch) -> TrainStepOutput:
+    def forward_step(self, ctx: TrainStepContext) -> None:
         """Run the forward pass and collect training metrics."""
+        data: TrainBatch = ctx.data
         with torch.autocast(
             device_type=self.device_type,
             dtype=self.dtype,
@@ -135,7 +131,7 @@ class ViTClassificationEngine(Engine):
         predictions = outputs.logits.argmax(dim=-1)
         accuracy = (predictions == data["labels"]).float().mean()
 
-        return {
+        ctx.outputs = {
             "loss": outputs.loss,
             "logs": {
                 "train/loss": outputs.loss.item(),

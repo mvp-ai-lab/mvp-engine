@@ -15,8 +15,9 @@ from transformers.utils.logging import disable_progress_bar
 
 from mvp_engine.distributed.parallelize import parallelize_model
 from mvp_engine.distributed.utils import get_data_parallel_world_size, is_main_process
-from mvp_engine.engine import ENGINE_REGISTRY, Engine
+from mvp_engine.engine import ENGINE_REGISTRY, Engine, TrainStepContext
 from mvp_engine.utils.log import logger
+from mvp_engine.utils.metrics import DistributedMetricAccumulator
 from mvp_engine.utils.misc import calculate_model_size
 from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
@@ -31,7 +32,6 @@ from ..dataset import (
 from ..model import build_qwen3_vl_model
 from ..model.packing import apply_packed_fa2_patch, prepare_packed_model_inputs
 from ..utils.log.mfu import build_mfu_log
-from ..utils.metrics import MetricAccumulator
 
 
 @ENGINE_REGISTRY.register()
@@ -47,12 +47,11 @@ class PanguvlEngine(Engine):
         super().__init__(config)
         self.dp_world_size = get_data_parallel_world_size(self.device_mesh)
         disable_progress_bar()
-        self.metric_accumulator = MetricAccumulator()
-        self.metric_accumulator.register("global_total_token_count", "last")
-        self.metric_accumulator.register("global_token_count", "last")
-        self.metric_accumulator.register("local_token_count", "last")
-        self.metric_accumulator.register("local_loss_sum", "sum")
-        self.metric_accumulator.register("local_model_flops", "sum")
+        self.metric_accumulator = DistributedMetricAccumulator(device=self.device)
+        self.metric_accumulator.register("total_token_count", accumulate="sum", reduce="sum")
+        self.metric_accumulator.register("effective_token_count", accumulate="sum", reduce="sum")
+        self.metric_accumulator.register("loss_sum", accumulate="sum", reduce="sum")
+        self.metric_accumulator.register("model_flops", accumulate="sum", reduce="none")
 
     def _resolve_batching_config(self) -> None:
         """Resolve PanguVL global batch size into micro batch size or accumulation."""
@@ -115,6 +114,10 @@ class PanguvlEngine(Engine):
         Returns:
             A ``TorchLoader`` pipeline that yields padded multimodal batches.
         """
+        if workflow != "train":
+            logger.warning(f"PanguVL engine does not support workflow '{workflow}'.")
+            return
+
         self._resolve_batching_config()
 
         # Step 1: build the shared processor once so both the temporary counting
@@ -317,76 +320,13 @@ class PanguvlEngine(Engine):
             num_training_steps=self.total_steps,
         )
 
-    def run_iter_train(self) -> None:
-        """Run iteration-based training with window-prefetched token normalization."""
+    def train_pre_step(self, ctx: TrainStepContext) -> TrainStepContext:
+        """Prepare one micro-batch for forward."""
+        data: ModelInputs = ctx.data
+        data["total_token_num"] = int(data["attention_mask"].sum().item())
+        shifted_labels = F.pad(data["labels"], (0, 1), value=-100)[..., 1:]
+        data["effective_token_num"] = int((shifted_labels != -100).sum().item())
 
-        def _count_total_tokens(attention_mask: torch.Tensor) -> int:
-            """Count all non-padding tokens in one collated micro-batch."""
-            return int(attention_mask.sum().item())
-
-        def _count_valid_loss_tokens(labels: torch.Tensor, *, ignore_index: int = -100) -> int:
-            """Count the valid shifted labels used by causal-LM cross entropy."""
-            shifted_labels = F.pad(labels, (0, 1), value=ignore_index)[..., 1:]
-            return int((shifted_labels != ignore_index).sum().item())
-
-        train_iterator = iter(self.train_loader)
-        gradient_accumulation_steps = int(self.config.optim.gradient_accumulation_steps)
-
-        while self.step < self.total_steps:
-            remaining_micro_steps = gradient_accumulation_steps - int(self._accumulate_step)
-            if remaining_micro_steps <= 0:
-                remaining_micro_steps = gradient_accumulation_steps
-
-            local_total_token_count = 0
-            local_token_count = 0
-            micro_batches: list[ModelInputs] = []
-            for _ in range(remaining_micro_steps):
-                try:
-                    data = next(train_iterator)
-                except StopIteration:
-                    train_iterator = iter(self.train_loader)
-                    try:
-                        data = next(train_iterator)
-                    except StopIteration as exc:
-                        raise RuntimeError("PanguVL train loader did not yield any batches.") from exc
-                local_total_token_count += _count_total_tokens(data["attention_mask"])
-                effective_token_num = _count_valid_loss_tokens(data["labels"])
-                data["effective_token_num"] = effective_token_num
-                local_token_count += effective_token_num
-
-                micro_batches.append(data)
-
-            token_counts = torch.tensor(
-                [local_total_token_count, local_token_count],
-                device=self.device,
-                dtype=torch.long,
-            )
-            if dist.is_available() and dist.is_initialized():
-                dist.all_reduce(token_counts, op=dist.ReduceOp.SUM)
-
-            self.metric_accumulator.reset()
-            self.metric_accumulator.update(
-                global_total_token_count=int(token_counts[0].item()),
-                global_token_count=int(token_counts[1].item()),
-                local_token_count=local_token_count,
-            )
-
-            global_loss_token_count = self.metric_accumulator.get("global_token_count")
-            if global_loss_token_count is None or int(global_loss_token_count) <= 0:
-                raise ValueError("Accumulation window must contain at least one supervised token.")
-
-            for data in micro_batches:
-                self.train_after_step(self.train_one_step(self.train_pre_step(data)))
-
-    def train_pre_step(self, data: ModelInputs) -> ModelInputs:
-        """Move the collated batch to the local device and normalize keys.
-
-        Args:
-            data: Raw batch emitted by the dataloader.
-
-        Returns:
-            A normalized batch dictionary ready for the model forward pass.
-        """
         batch: ModelInputs = {}
         for key, value in data.items():
             if isinstance(value, torch.Tensor):
@@ -413,17 +353,12 @@ class PanguvlEngine(Engine):
             return batch
 
         batch = _cast_visual_inputs(batch)
-        return batch
+        ctx.data = batch
+        return ctx
 
-    def train_one_step(self, data: ModelInputs) -> dict[str, Any]:
-        """Run one forward pass and collect training metrics.
-
-        Args:
-            data: Normalized multimodal batch on the local device.
-
-        Returns:
-            A dictionary containing the loss tensor and logging scalars.
-        """
+    def forward_step(self, ctx: TrainStepContext) -> None:
+        """Run one forward pass and collect micro-batch training metrics."""
+        data: ModelInputs = ctx.data
         with torch.autocast(
             device_type=self.device_type,
             dtype=self.dtype,
@@ -431,12 +366,13 @@ class PanguvlEngine(Engine):
         ):
             outputs = self.model(**data)
 
-        return {
+        ctx.outputs = {
             "loss": outputs.loss,
             "logs": {
                 "train/loss": 0.0,
             },
             "effective_tokens": data["effective_token_num"],
+            "total_tokens": data["total_token_num"],
             "model_flops": float(
                 self.unwrapped_model.calculate_model_flops(
                     batch_size=int(data["input_ids"].shape[0]),
@@ -450,41 +386,57 @@ class PanguvlEngine(Engine):
             ),
         }
 
-    def train_after_step(self, outputs: dict[str, Any]) -> dict[str, Any]:
-        """Run the optimizer step and include recipe-local MFU metrics in logs."""
+    def backward_step(self, ctx: TrainStepContext) -> None:
+        """Backward one micro-batch with delayed global token normalization."""
+        outputs = ctx.outputs
+        assert outputs is not None, "The forward step must populate ctx.outputs."
         assert "loss" in outputs, "The model output must contain 'loss' key."
         assert "logs" in outputs, "The model output must contain 'logs' key."
 
-        is_sync = self.accumulate_step()
-        global_total_token_count = self.metric_accumulator.get("global_total_token_count")
-        if global_total_token_count is None or int(global_total_token_count) <= 0:
-            raise ValueError("PanguVL accumulation window is missing a valid global total token count.")
-        global_loss_token_count = self.metric_accumulator.get("global_token_count")
-        if global_loss_token_count is None or int(global_loss_token_count) <= 0:
-            raise ValueError("PanguVL accumulation window is missing a valid global token count.")
-        local_token_count = self.metric_accumulator.get("local_token_count")
-        if local_token_count is None or int(local_token_count) <= 0:
-            raise ValueError("PanguVL accumulation window is missing a valid local token count.")
+        ctx.should_sync = self.ga_state.advance()
+
+        local_micro_loss_sum = outputs["loss"].sum()
+        micro_effective_token_count = int(outputs["effective_tokens"])
+        micro_total_token_count = int(outputs["total_tokens"])
 
         self.metric_accumulator.update(
-            local_loss_sum=outputs["loss"].detach().to(device=self.device, dtype=torch.float64).sum(),
-            local_model_flops=float(outputs["model_flops"]),
+            total_token_count=micro_total_token_count,
+            effective_token_count=micro_effective_token_count,
+            loss_sum=local_micro_loss_sum.detach(),
+            model_flops=float(outputs["model_flops"]),
         )
 
-        # DDP/FSDP averages gradients across the DP/FSDP ranks, so each
-        # micro-step uses the local summed loss with the globally reduced token
-        # denominator and compensates by the real DP world size.
-        loss = outputs["loss"].sum() / int(global_loss_token_count)
-        if self.dp_world_size > 1:
-            loss = loss * float(self.dp_world_size)
+        backward_loss_divisor = (
+            int(self.config.data.batch_size)
+            * int(self.config.data.max_seq_len)
+            * int(self.config.optim.gradient_accumulation_steps)
+        )
+        outputs["backward_loss_divisor"] = backward_loss_divisor
 
-        with accumulate_gradients(self.model, sync=is_sync):
-            self.scaler.scale(loss).backward()
+        ctx.loss = local_micro_loss_sum / float(backward_loss_divisor)
+        with accumulate_gradients(self.model, sync=ctx.should_sync):
+            self.scaler.scale(ctx.loss).backward()
 
-        if not is_sync:
-            return outputs
+    def optimizer_step(self, ctx: TrainStepContext) -> None:
+        """Scale accumulated gradients by global tokens and apply the optimizer step."""
+        if not ctx.should_sync:
+            return
+
+        self.metric_accumulator.reduce_all()
+        global_total_token_count = int(self.metric_accumulator.total_token_count.global_value)
+        global_effective_token_count = int(self.metric_accumulator.effective_token_count.global_value)
+        if global_effective_token_count <= 0:
+            raise ValueError("Accumulation window must contain at least one supervised token.")
 
         self.scaler.unscale_(self.optimizer)
+        outputs = ctx.outputs
+        assert outputs is not None, "The forward step must populate ctx.outputs."
+        backward_loss_divisor = int(outputs["backward_loss_divisor"])
+        gradient_scale = float(backward_loss_divisor) * float(self.dp_world_size) / float(global_effective_token_count)
+        with torch.no_grad():
+            for parameter in self.model.parameters():
+                if parameter.grad is not None:
+                    parameter.grad.mul_(gradient_scale)
 
         max_grad_norm = self.config.optim.clip_grad_norm
         if max_grad_norm is not None:
@@ -497,47 +449,58 @@ class PanguvlEngine(Engine):
         self.scheduler.step()
         self.optimizer.zero_grad(set_to_none=True)
 
+        ctx.outputs["global_total_token_count"] = global_total_token_count
+        ctx.outputs["global_effective_token_count"] = global_effective_token_count
+        ctx.outputs["global_loss_sum"] = self.metric_accumulator.loss_sum.global_value
+        ctx.outputs["model_flops_per_step"] = self.metric_accumulator.model_flops.local_value
+        ctx.outputs["step_lrs"] = step_lrs
+        ctx.optimizer_step_completed = True
+
+    def train_post_step(self, ctx: TrainStepContext) -> None:
+        """Log one synchronized optimizer step and save checkpoints."""
+        if not ctx.optimizer_step_completed:
+            return
+
+        outputs = ctx.outputs
+        assert outputs is not None, "The forward step must populate ctx.outputs."
+
         self.step += 1
         self.timer.tick()
+        step_time_seconds = float(self.timer.progress_time_latest)
+        global_total_token_count = int(outputs["global_total_token_count"])
+        global_effective_token_count = int(outputs["global_effective_token_count"])
+        global_loss_sum = outputs["global_loss_sum"]
 
-        global_loss_sum = self.metric_accumulator.get("local_loss_sum")
-        if global_loss_sum is None:
-            raise ValueError("PanguVL accumulation window is missing a valid local loss sum.")
-        if not isinstance(global_loss_sum, torch.Tensor):
-            global_loss_sum = torch.tensor(global_loss_sum, device=self.device, dtype=torch.float64)
-        else:
-            global_loss_sum = global_loss_sum.detach().clone()
-        if dist.is_available() and dist.is_initialized():
-            dist.all_reduce(global_loss_sum, op=dist.ReduceOp.SUM)
-
-        accumulated_metrics = self.metric_accumulator.finalize()
-        other_logs = {
-            "eta": self.timer.eta_string,
-            "perf/batch_time": self.timer.batch_time,
-            "perf/toks_per_sec": int(global_loss_token_count) / self.timer.batch_time,
-            "tokens/global_total": int(global_total_token_count),
-            "tokens/global_loss": int(global_loss_token_count),
-        }
-        other_logs.update(
+        outputs["logs"]["train/loss"] = float(global_loss_sum / int(global_effective_token_count))
+        outputs["logs"].update(
+            {
+                "eta": self.timer.eta_string,
+                "perf/batch_time": step_time_seconds,
+                "perf/data_time": self.timer.get_scope_time("data_time"),
+                "perf/exec_time": self.timer.get_scope_time("exec_time"),
+                "perf/toks_per_sec": global_total_token_count / step_time_seconds if step_time_seconds > 0 else 1e-8,
+                "tokens/total": global_total_token_count,
+                "tokens/effective": global_effective_token_count,
+            }
+        )
+        outputs["logs"].update(
             build_mfu_log(
-                model_flops_per_step=float(accumulated_metrics["local_model_flops"]),
+                model_flops_per_step=outputs["model_flops_per_step"],
                 device_type=self.device.type,
                 precision=str(self.config.optim.mixed_precision),
-                step_time_seconds=float(self.timer.batch_time_latest),
+                step_time_seconds=step_time_seconds,
             )
         )
 
-        for i, lr in enumerate(step_lrs):
-            other_logs[f"lr/group_{i}"] = lr
+        for i, lr in enumerate(outputs["step_lrs"]):
+            outputs["logs"][f"lr/group_{i}"] = lr
 
-        outputs["logs"]["train/loss"] = float(global_loss_sum / int(global_loss_token_count))
         logger.log_metrics(
-            {**outputs["logs"], **other_logs},
+            outputs["logs"],
             step=self.step,
+            total_steps=self.total_steps,
         )
 
         self.metric_accumulator.reset()
 
         self.save()
-
-        return outputs
