@@ -37,6 +37,10 @@ module names with the `"sequence"` style. The runtime merges it with
 - `parallel.mesh.tensor > 1` is required.
 - `parallel.mesh.shard > 1` is required because this repo rejects pure TP/SP
   without FSDP2.
+- Prefer sequence length divisible by TP/SP size
+  (`seq_len % parallel.mesh.tensor == 0`).
+- If sequence length is not divisible, pad in the dataloader/collator and mask
+  padding tokens in loss/metrics, or verify every SP path supports uneven shards.
 - Do not add `parallel.mesh.sequence`.
 - The product of explicit or inferred mesh dimensions must match world size.
 
@@ -53,6 +57,11 @@ When `sequence_parallel=true`, the same TP styles become sequence-layout aware:
 - `"row"` maps to `RowwiseParallel(output_layouts=Shard(sequence_dim))`;
 - `"sequence"` maps to `SequenceParallel(sequence_dim=sequence_dim, use_local_output=True)`.
 
+Column-parallel modules annotate local tensor inputs as sequence-sharded, then
+redistribute to the replicated layout they need before computing. Row-parallel
+modules produce sequence-sharded outputs. Do not assume every op inside a
+TP-covered module sees the same local sequence length as its caller.
+
 Use `SEQUENCE_PARALLEL_SEQUENCE_DIM = 1` for `[batch, seq, hidden]` tensors. Use
 `0` for `[seq, batch, hidden]` tensors.
 
@@ -61,6 +70,9 @@ Use `SEQUENCE_PARALLEL_SEQUENCE_DIM = 1` for `[batch, seq, hidden]` tensors. Use
 - Keep projection linears in `TP_MODULE_CONFIG` as `"col"` and `"row"`.
 - Put norm, dropout, and other safe elementwise hidden-state modules in
   `SEQUENCE_PARALLEL_MODULE_CONFIG` as `"sequence"`.
+- Do not mark modules with tensor kwargs as `"sequence"` unless those kwargs are
+  already layout-compatible or handled in recipe code. Runtime hooks prepare the
+  first positional tensor input, not arbitrary tensor kwargs.
 - Use runtime class names as keys.
 - Use direct child module names as plan keys.
 - Keep TP and SP attributes on the same top-level model class.
@@ -125,6 +137,9 @@ Output boundaries:
   and checkpoint-only debug outputs may need full sequence tensors.
 - Add explicit gather logic only in recipe code that truly consumes global
   sequence tensors.
+- For routed, packed, or cached flows, review derived lengths such as `top_k`,
+  packed segment length, and cache slice length. They need either divisibility by
+  TP/SP size or explicit uneven-shard handling.
 
 ## Norm, Dropout, And Elementwise Modules
 
@@ -139,6 +154,8 @@ Usually safe for `"sequence"`:
 Review carefully:
 
 - BatchNorm or modules reducing over sequence/batch dimensions;
+- modules that take tensor kwargs, such as `scale`, masks, position ids, or
+  cache tensors;
 - routers or top-k selectors that choose globally across tokens;
 - packed-sequence utilities that compute global token positions;
 - logging and loss normalization that count global tokens;
@@ -157,9 +174,22 @@ Required action:
 
 With FSDP2, replicated parameters may become DTensors on the FSDP mesh only
 (for example `("replicate", "shard")`, with no `"tensor"` mesh dim). For those
-parameters, synchronize the final accumulated `.grad` with
-`register_post_accumulate_grad_hook`, not only a normal pre-accumulation grad
-hook.
+parameters, a normal pre-accumulation grad hook may not fire. Use
+`register_post_accumulate_grad_hook`, but all-reduce only the newly added local
+gradient delta. Re-reducing the whole accumulated `.grad` on every backward
+overcounts during gradient accumulation.
+
+Do not validate this with only one backward. Run at least two backward calls
+before `zero_grad`; a hook that all-reduces the whole accumulated `.grad` can
+pass one backward and fail accumulation.
+
+Use `SUM`, not average, across the tensor mesh: each sequence-parallel rank owns
+a different token slice, so the full replicated-parameter gradient is the sum of
+those local contributions.
+
+When FSDP2 is required, prefer installing replicated-parameter grad sync after
+FSDP2. Do not apply tensor-mesh all-reduce both before and after FSDP2 for the
+same gradient path.
 
 Common examples: embeddings, tied LM heads, final projections, routers, fusion
 layers, and custom norms/dropouts not covered by `SequenceParallel`.
@@ -168,9 +198,12 @@ layers, and custom norms/dropouts not covered by `SequenceParallel`.
 
 - `sequence_parallel=true` with `parallel.mesh.tensor == 1`.
 - `sequence_parallel=true` with `parallel.mesh.shard == 1`.
+- Sequence length is not divisible by TP/SP size and no explicit padding/masking
+  or uneven-shard handling exists.
 - A `"sequence"` plan is bound on a wrapper class that training never
   instantiates.
 - `SEQUENCE_PARALLEL_SEQUENCE_DIM` does not match hidden-state layout.
+- A `"sequence"` module receives tensor kwargs whose layouts were not prepared.
 - A row-parallel output is consumed by code that expects a replicated full
   sequence.
 - A router, sampler, metric, or loss uses local sequence shards as if they were

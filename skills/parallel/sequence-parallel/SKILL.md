@@ -31,8 +31,13 @@ Identify these before editing:
 - existing `TP_MODULE_CONFIG` and `TP_MODULE_POSTPROCESSORS`;
 - norm, dropout, residual, and activation modules that should run on sequence
   shards;
+- tensor kwargs passed into those modules, such as masks, scales, position ids,
+  or cache tensors;
 - sequence dimension used by the model's hidden states;
 - current `parallel.mesh` values and intended TP/SP size;
+- sequence length or packing/collation rule, and whether it is divisible by
+  TP/SP size;
+- derived sequence lengths from routing, top-k, packing, or cache slicing;
 - recipe-local `tests/test_structure.py` and `tests/test_smoke.py`.
 
 Ask the user only if TP/SP size, sequence dimension, available devices, or
@@ -76,6 +81,10 @@ Rules:
 - `parallel.mesh.shard > 1` is required because this repo rejects pure TP/SP
   without FSDP2;
 - `sp_size == tp_size`;
+- prefer `seq_len % parallel.mesh.tensor == 0`; otherwise pad/mask explicitly
+  and verify every SP gather/scatter/reduce path handles uneven sequence shards;
+- check routed, packed, or cached sequence lengths too, not only the raw input
+  length;
 - do not add `parallel.mesh.sequence`.
 
 ### 3. Add Sequence-Parallel Plans
@@ -111,12 +120,18 @@ Read `references/sp_rules.md` before finalizing the plan. Check:
 
 - entry modules that receive full hidden states before the first column-parallel
   projection;
+- column-parallel projections gather sequence-sharded inputs before computing,
+  while row-parallel outputs remain sequence-sharded;
 - replicated parameters that consume local sequence shards and therefore need
   tensor-mesh gradient sync;
 - FSDP2-wrapped replicated DTensor parameters without a `"tensor"` mesh dim,
-  which need post-accumulate `.grad` sync;
+  which need post-accumulate sync of the newly added `.grad` delta;
+- whether grad sync hooks are installed at the right lifecycle point without
+  applying tensor-mesh all-reduce twice;
 - row-parallel outputs that remain sequence-sharded;
 - norms and dropout that are safe on local sequence shards;
+- tensor kwargs passed into SP-planned modules, because runtime hooks only
+  prepare the first positional tensor input;
 - any loss, router, sampler, cache, logging, or metric code that needs the full
   sequence.
 
@@ -140,7 +155,13 @@ Review the modified recipe without running tests:
 - `SEQUENCE_PARALLEL_SEQUENCE_DIM` matches the model hidden-state layout;
 - sequence plan values use `"sequence"` and TP plan values use `"col"` or
   `"row"`;
-- entry and output boundaries have been reviewed for full-sequence assumptions.
+- entry and output boundaries have been reviewed for full-sequence assumptions;
+- tensor kwargs into SP-planned modules are absent, already layout-compatible, or
+  handled in recipe code;
+- replicated grad sync is installed after FSDP2 when FSDP2 is required, sums
+  newly added TP-local grad deltas, and avoids double all-reduce.
+- any custom replicated-grad hook is validated with at least two backward calls
+  before `zero_grad`, so post-accumulate hooks do not re-reduce old gradients.
 
 ### Hard Validation
 
