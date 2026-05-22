@@ -42,9 +42,63 @@ LLM_PREFIXES = (
     "lm_head.",
 )
 
+OPENPANGU_KEY_MAPPING = {
+    "^visual": "model.visual",
+    r"^model(?!\.(language_model|visual))": "model.language_model",
+}
+
+PRETRAINED_WEIGHT_PREFIXES = (
+    "model.language_model.",
+    "model.visual.",
+    "lm_head.",
+)
+
 
 def _matches(name: str, prefixes: tuple[str, ...]) -> bool:
     return any(name.startswith(p) for p in prefixes)
+
+
+def _normalize_loading_info_keys(values: Any) -> set[str]:
+    normalized: set[str] = set()
+    for value in values or ():
+        if isinstance(value, (tuple, list)) and value:
+            normalized.add(str(value[0]))
+        else:
+            normalized.add(str(value))
+    return normalized
+
+
+def _validate_checkpoint_loading_info(loading_info: dict[str, Any]) -> None:
+    """Fail if pretrained PanguVL weights were not loaded from the checkpoint."""
+    missing_keys = _normalize_loading_info_keys(loading_info.get("missing_keys"))
+    unexpected_keys = _normalize_loading_info_keys(loading_info.get("unexpected_keys"))
+    mismatched_keys = _normalize_loading_info_keys(loading_info.get("mismatched_keys"))
+    conversion_errors = set((loading_info.get("conversion_errors") or {}).keys())
+
+    disallowed_missing = {
+        key for key in missing_keys if key.startswith(PRETRAINED_WEIGHT_PREFIXES) or key == "lm_head.weight"
+    }
+    disallowed_unexpected = {key for key in unexpected_keys if key.startswith(("model.", "visual.", "lm_head."))}
+
+    failures = {
+        "missing": disallowed_missing,
+        "unexpected": disallowed_unexpected,
+        "mismatched": mismatched_keys,
+        "conversion_errors": conversion_errors,
+    }
+    failures = {name: keys for name, keys in failures.items() if keys}
+    if not failures:
+        return
+
+    lines = ["PanguVL checkpoint load left pretrained weights missing or unexpected."]
+    for name, keys in failures.items():
+        examples = sorted(keys)[:20]
+        lines.append(f"{name}: {len(keys)}")
+        lines.extend(f"  {key}" for key in examples)
+        if len(keys) > len(examples):
+            lines.append(f"  ... {len(keys) - len(examples)} more")
+    lines.append("This usually means OpenPangu checkpoint keys were not remapped into the runtime model namespace.")
+    raise RuntimeError("\n".join(lines))
 
 
 def _slice_hidden(hidden_states: torch.Tensor, logits_to_keep: int | torch.Tensor) -> torch.Tensor:
@@ -324,12 +378,15 @@ def build_qwen3_vl_model(model_config: Any):
         The initialized Qwen3-VL model.
     """
 
-    model = AutoModelForCausalLM.from_pretrained(
+    model, loading_info = AutoModelForCausalLM.from_pretrained(
         model_config.pretrained_model_name_or_path,
         trust_remote_code=True,
         torch_dtype="auto",
         attn_implementation=model_config.attn_implementation,
+        key_mapping=OPENPANGU_KEY_MAPPING,
+        output_loading_info=True,
     )
+    _validate_checkpoint_loading_info(loading_info)
     pad_token_id = getattr(model_config, "pad_token_id", None)
     if pad_token_id is not None:
         model.config.pad_token_id = int(pad_token_id)
