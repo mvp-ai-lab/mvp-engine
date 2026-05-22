@@ -121,13 +121,20 @@ void main() {
   vec4 front = texture2D(u_front, mapPageUv(v_uv, u_frontUvRect));
   vec4 back = texture2D(u_back, mapPageUv(vec2(1.0 - v_uv.x, v_uv.y), u_backUvRect));
   vec4 tex = gl_FrontFacing ? front : back;
+
+  float pageAlpha = tex.a < 0.8 ? 0.0 : 1.0;
+
+  if (pageAlpha < 0.01) {
+    discard;
+  }
+
   float textureMix = smoothstep(0.02, 0.82, tex.a);
   vec3 color = mix(u_paper, tex.rgb, textureMix);
 
   float softenedLight = mix(1.0, v_light, 0.62);
   float frontLight = clamp(softenedLight + 0.025, 0.84, 1.11);
   float backLight = clamp(softenedLight + 0.085, 0.90, 1.18);
-  gl_FragColor = vec4(color * (gl_FrontFacing ? frontLight : backLight), tex.a);
+  gl_FragColor = vec4(color * (gl_FrontFacing ? frontLight : backLight), pageAlpha);
 }
 `;
 
@@ -332,25 +339,45 @@ function drawElementSurfaces(root: HTMLElement, context: CanvasRenderingContext2
   });
 }
 
+function cssPixelValue(value: string) {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
 function objectFitRect(image: HTMLImageElement, rect: DOMRect, style: CSSStyleDeclaration) {
   const sourceRatio = image.naturalWidth / image.naturalHeight;
-  const targetRatio = rect.width / rect.height;
   const shouldContain = style.objectFit === "contain" || style.objectFit === "scale-down";
   let width = rect.width;
   let height = rect.height;
+  let left = rect.left;
+  let top = rect.top;
 
   if (shouldContain) {
+    const cssWidth = cssPixelValue(style.width) || rect.width;
+    const cssHeight = cssPixelValue(style.height) || rect.height;
+    const scaleX = rect.width / cssWidth;
+    const scaleY = rect.height / cssHeight;
+    const targetRatio = cssWidth / cssHeight;
+    let fittedCssWidth = cssWidth;
+    let fittedCssHeight = cssHeight;
+
+    // object-fit is resolved before ancestor transforms such as the book's scaleX(1.08).
     if (sourceRatio > targetRatio) {
-      height = rect.width / sourceRatio;
+      fittedCssHeight = cssWidth / sourceRatio;
     } else {
-      width = rect.height * sourceRatio;
+      fittedCssWidth = cssHeight * sourceRatio;
     }
+
+    width = fittedCssWidth * scaleX;
+    height = fittedCssHeight * scaleY;
+    left = rect.left + ((cssWidth - fittedCssWidth) / 2) * scaleX;
+    top = rect.top + ((cssHeight - fittedCssHeight) / 2) * scaleY;
   }
 
   return {
     height,
-    left: rect.left + (rect.width - width) / 2,
-    top: rect.top + (rect.height - height) / 2,
+    left,
+    top,
     width,
   };
 }
