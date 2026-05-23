@@ -10,6 +10,8 @@ import torch.nn.functional as F
 from transformers import AutoModelForImageTextToText
 from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLCausalLMOutputWithPast
 
+from mvp_engine.utils.log import simple_info
+
 # ---------------------------------------------------------------------------
 # Parameter-name prefixes for each logical sub-module
 # ---------------------------------------------------------------------------
@@ -31,6 +33,10 @@ LLM_PREFIXES = (
     "model.language_model.",
     "lm_head.",
 )
+
+CHECKPOINT_PARENT_CLASSES = {"Qwen3VLTextDecoderLayer", "Qwen3VLVisionBlock"}
+CHECKPOINT_MODES_WITH_NATIVE = {"native", "native_and_nested"}
+CHECKPOINT_MODES_WITH_NESTED = {"nested", "native_and_nested"}
 
 
 def _matches(name: str, prefixes: tuple[str, ...]) -> bool:
@@ -105,6 +111,67 @@ def apply_model_gradient_checkpointing(
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": use_reentrant})
     setattr(model.config, "use_cache", False)
     return model
+
+
+def resolve_gradient_checkpointing_mode(gradient_checkpointing_config: Any) -> str:
+    """Resolve the checkpointing mode while preserving legacy ``enabled`` semantics."""
+    mode = getattr(gradient_checkpointing_config, "mode", None)
+    if mode is not None:
+        return str(mode)
+    if bool(getattr(gradient_checkpointing_config, "enabled", False)):
+        return "native"
+    return "none"
+
+
+def checkpointing_mode_includes_native(mode: str) -> bool:
+    """Return whether the mode should enable model-native gradient checkpointing."""
+    return mode in CHECKPOINT_MODES_WITH_NATIVE
+
+
+def checkpointing_mode_includes_nested(mode: str) -> bool:
+    """Return whether the mode should wrap nested child modules."""
+    return mode in CHECKPOINT_MODES_WITH_NESTED
+
+
+def _is_checkpoint_wrapped(module: torch.nn.Module) -> bool:
+    return hasattr(module, "_checkpoint_wrapped_module")
+
+
+def apply_nested_activation_checkpointing(
+    model,
+    *,
+    enabled: bool = False,
+    use_reentrant: bool = False,
+    target_modules: list[str] | tuple[str, ...] = ("self_attn", "mlp", "attn"),
+) -> int:
+    """Wrap Qwen3-VL attention/MLP children with explicit activation checkpointing."""
+    if not enabled:
+        return 0
+
+    from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
+        CheckpointImpl,
+        checkpoint_wrapper,
+    )
+
+    checkpoint_impl = CheckpointImpl.REENTRANT if use_reentrant else CheckpointImpl.NO_REENTRANT
+    target_names = set(target_modules)
+    wrapped_count = 0
+
+    for parent in model.modules():
+        if parent.__class__.__name__ not in CHECKPOINT_PARENT_CLASSES:
+            continue
+        for child_name, child in list(parent.named_children()):
+            if child_name not in target_names:
+                continue
+            if _is_checkpoint_wrapped(child):
+                continue
+            parent.add_module(
+                child_name,
+                checkpoint_wrapper(child, checkpoint_impl=checkpoint_impl, preserve_rng_state=False),
+            )
+            wrapped_count += 1
+
+    return wrapped_count
 
 
 def upcast_trainable_params_to_fp32(model):
@@ -386,11 +453,6 @@ def build_qwen3_vl_model(model_config: Any):
     )
     model = apply_qwen3_vl_compat_patches(model)
     model = inject_model_flops_calculation(model)
-    model = apply_model_gradient_checkpointing(
-        model,
-        enabled=bool(model_config.gradient_checkpointing.enabled),
-        use_reentrant=bool(model_config.gradient_checkpointing.use_reentrant),
-    )
     model = inject_sum_loss_forward(model)
 
     apply_freeze_policy(
@@ -399,6 +461,27 @@ def build_qwen3_vl_model(model_config: Any):
         freeze_merger=model_config.freeze_merger,
         freeze_llm=model_config.freeze_llm,
     )
+
+    checkpointing_config = model_config.gradient_checkpointing
+    checkpointing_mode = resolve_gradient_checkpointing_mode(checkpointing_config)
+    native_enabled = checkpointing_mode_includes_native(checkpointing_mode)
+    nested_enabled = checkpointing_mode_includes_nested(checkpointing_mode)
+    model = apply_model_gradient_checkpointing(
+        model,
+        enabled=native_enabled,
+        use_reentrant=bool(checkpointing_config.use_reentrant),
+    )
+    nested_count = apply_nested_activation_checkpointing(
+        model,
+        enabled=nested_enabled,
+        use_reentrant=bool(checkpointing_config.use_reentrant),
+        target_modules=checkpointing_config.nested_target_modules,
+    )
+    simple_info(
+        "Qwen3-VL gradient checkpointing "
+        f"mode={checkpointing_mode}, native={native_enabled}, nested_wrapped={nested_count}."
+    )
+
     model = upcast_trainable_params_to_fp32(model)
 
     return model

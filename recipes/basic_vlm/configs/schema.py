@@ -72,7 +72,9 @@ class BasicVLMGradientCheckpointingConfig(BaseModel):
     model_config = ConfigDict(frozen=False, extra="forbid")
 
     enabled: bool = False
+    mode: Literal["none", "native", "nested", "native_and_nested"] | None = None
     use_reentrant: bool = False
+    nested_target_modules: list[str] = Field(default_factory=lambda: ["self_attn", "mlp", "attn"])
 
 
 class BasicVLMModelConfig(BaseModel):

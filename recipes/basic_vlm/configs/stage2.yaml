@@ -36,6 +36,7 @@ model:
   image_max_pixels: 1280000
   gradient_checkpointing:
     enabled: true
+    mode: "native"
     use_reentrant: false
   freeze_vit: false
   freeze_merger: false
