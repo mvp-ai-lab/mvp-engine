@@ -34,6 +34,8 @@ Identify these before editing:
 - tensor kwargs passed into those modules, such as masks, scales, position ids,
   or cache tensors;
 - sequence dimension used by the model's hidden states;
+- dataset or dataloader sharding code, including any `RuntimeContext`,
+  `DataLoadMesh`, sampler, or rank/world-size logic;
 - current `parallel.mesh` values and intended TP/SP size;
 - sequence length or packing/collation rule, and whether it is divisible by
   TP/SP size;
@@ -51,6 +53,7 @@ Search the recipe first:
 
 ```bash
 rg -n "TP_MODULE_CONFIG|SEQUENCE_PARALLEL|parallelize_model|parallel.mesh|sequence_parallel" recipes/<recipe>
+rg -n "RuntimeContext|DataLoadMesh|device_mesh|dp_dims|DistributedSampler|rank|world_size" recipes/<recipe>
 rg -n "LayerNorm|RMSNorm|Dropout|dropout|norm" recipes/<recipe>
 ```
 
@@ -60,6 +63,8 @@ Find:
 - which repeated block classes already have TP-covered linears;
 - which modules consume and return hidden states shaped like `[batch, seq, hidden]`
   or `[seq, batch, hidden]`;
+- whether dataloading shards samples by all global ranks or only by data-parallel
+  mesh dimensions;
 - whether runtime class attributes already live on the same top-level class.
 
 ### 2. Confirm Mesh And Backend
@@ -81,6 +86,16 @@ Rules:
 - `parallel.mesh.shard > 1` is required because this repo rejects pure TP/SP
   without FSDP2;
 - `sp_size == tp_size`;
+- all ranks in the same TP/SP group must read the same samples and
+  micro-batches;
+- `tensor` is model-parallel, not data-parallel, and must not multiply global
+  batch size or dataset slots;
+- shard data only over data-parallel dimensions, normally `replicate` and
+  FSDP2 `shard`;
+- exclude `tensor` and any other non-data-parallel dimensions such as `context`
+  from dataloader sharding;
+- when using `mvp_dataset`, pass a `device_mesh` plus `dp_dims` that excludes
+  `tensor`, or provide an equivalent sampler/loader guarantee;
 - prefer `seq_len % parallel.mesh.tensor == 0`; otherwise pad/mask explicitly
   and verify every SP gather/scatter/reduce path handles uneven sequence shards;
 - check routed, packed, or cached sequence lengths too, not only the raw input
@@ -150,6 +165,10 @@ Review the modified recipe without running tests:
 - `sequence_parallel` is configured under `parallel.backend_kwargs`;
 - `parallel.mesh.tensor > 1` and `parallel.mesh.shard > 1` for SP-active smoke;
 - no `parallel.mesh.sequence` field was introduced;
+- dataloading uses identical samples for ranks that differ only on the `tensor`
+  mesh dimension;
+- global batch accounting excludes `tensor` and includes only data-parallel
+  dimensions such as `replicate` and `shard`;
 - `TP_MODULE_CONFIG` remains bound on the real top-level model class;
 - `SEQUENCE_PARALLEL_MODULE_CONFIG`, if present, is bound on the same class;
 - `SEQUENCE_PARALLEL_SEQUENCE_DIM` matches the model hidden-state layout;
@@ -189,11 +208,16 @@ requires the world size to match `replicate * shard * tensor`.
 
 Add optional impact validation when the task requires proof that norm/dropout
 modules receive sequence-local tensors or that loss/logit parity is preserved.
+Also add a dataloader identity impact test when changing recipe data loading:
+within one TP/SP group, assert sample ids or a stable batch fingerprint are
+identical across tensor ranks, while data-parallel ranks receive distinct slots.
 
 ## Output
 
 - State which model, config, and test files changed.
 - Summarize TP/SP size and final mesh settings.
+- State how dataloader sharding preserves identical batches within TP/SP
+  groups.
 - Summarize `SEQUENCE_PARALLEL_MODULE_CONFIG` by runtime module class.
 - State whether `SEQUENCE_PARALLEL_SEQUENCE_DIM` was added and why.
 - Report soft validation and hard validation status.

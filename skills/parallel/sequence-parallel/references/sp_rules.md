@@ -43,6 +43,26 @@ module names with the `"sequence"` style. The runtime merges it with
   padding tokens in loss/metrics, or verify every SP path supports uneven shards.
 - Do not add `parallel.mesh.sequence`.
 - The product of explicit or inferred mesh dimensions must match world size.
+- Preserve global batch semantics when changing `replicate`.
+
+## Data-Loading Rules
+
+Sequence parallel reuses the tensor-parallel mesh. SP ranks cooperate on the
+same logical model replica and must not consume different samples.
+
+- All ranks in the same TP/SP group must receive identical samples and
+  micro-batches.
+- `tensor` is not data-parallel and must not contribute to dataset sharding,
+  dataloader slots, or global batch size.
+- Shard data over data-parallel dimensions only, normally `replicate` and FSDP2
+  `shard`.
+- Exclude `tensor` and other non-data-parallel dimensions such as `context` from
+  sampler or `RuntimeContext` sharding.
+- For `mvp_dataset`, construct `RuntimeContext` with `device_mesh` and `dp_dims`
+  that include only data-parallel dimensions, or provide an equivalent
+  recipe-local sampler guarantee.
+- Validate recipe loaders with a stable sample id or batch fingerprint when
+  changing mesh-aware data loading.
 
 ## TP/SP Layout Rules
 
@@ -200,6 +220,7 @@ layers, and custom norms/dropouts not covered by `SequenceParallel`.
 - `sequence_parallel=true` with `parallel.mesh.shard == 1`.
 - Sequence length is not divisible by TP/SP size and no explicit padding/masking
   or uneven-shard handling exists.
+- TP/SP group ranks read different samples or different packed-batch layouts.
 - A `"sequence"` plan is bound on a wrapper class that training never
   instantiates.
 - `SEQUENCE_PARALLEL_SEQUENCE_DIM` does not match hidden-state layout.
@@ -223,6 +244,8 @@ the SP-active training path runs. It does not prove global parity or speedup.
 Use an optional impact test when correctness depends on a nontrivial boundary:
 
 - compare TP/SP-off and TP/SP-on loss or logits on the same deterministic batch;
+- assert same-batch identity across ranks in one TP/SP group when recipe
+  dataloading is mesh-aware;
 - compare TP/SP-off and TP/SP-on gradients for replicated parameters that consume
   sequence-sharded activations;
 - inspect DTensor local shapes for sequence-sharded hidden-state parameters or
