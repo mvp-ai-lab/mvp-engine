@@ -200,15 +200,15 @@ class DistributedMetric:
         return self._local_sum
 
     def _as_tensor(self, value: Any) -> torch.Tensor:
-        """Convert one scalar metric update to a detached float64 tensor."""
+        """Convert one scalar metric update to a detached float32 tensor."""
         if isinstance(value, torch.Tensor):
             if value.numel() != 1:
                 raise ValueError(f"Metric '{self.name}' only supports scalar tensors.")
-            return value.detach().to(device=self.device, dtype=torch.float64)
+            return value.detach().to(device=self.device, dtype=torch.float32)
         if isinstance(value, bool):
-            return torch.tensor(float(value), device=self.device, dtype=torch.float64)
+            return torch.tensor(float(value), device=self.device, dtype=torch.float32)
         if isinstance(value, (int, float)):
-            return torch.tensor(float(value), device=self.device, dtype=torch.float64)
+            return torch.tensor(float(value), device=self.device, dtype=torch.float32)
         raise TypeError(f"Unsupported metric value type for '{self.name}': {type(value).__name__}")
 
     @staticmethod
