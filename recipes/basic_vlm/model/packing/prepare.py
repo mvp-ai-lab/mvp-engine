@@ -1,10 +1,10 @@
-"""Batch preparation helpers for packed Basic VLM training."""
-
-from __future__ import annotations
+"""Prepare canonical packed Basic VLM batches for Qwen3-VL forward."""
 
 from typing import Any
 
 import torch
+
+from mvp_engine.kit.mllm.data import build_packed_block_causal_mask
 
 from .qwen3_vl import build_qwen3_vl_packed_position_ids
 
@@ -16,17 +16,15 @@ def prepare_packed_model_inputs(
     attn_implementation: str | None,
     mask_dtype: torch.dtype,
 ) -> dict[str, Any]:
-    """Convert packed batch metadata into model-ready attention inputs.
-
-    Pops ``pack_segment_ids`` from the batch and replaces it with:
-    - ``position_ids``: cumulative RoPE positions across packed segments (always)
-    - ``attention_mask``: segment-id tensor for FA2, or a 4D additive mask for other backends
-
-    If ``pack_segment_ids`` is absent the batch is returned unchanged.
-    """
-    pack_segment_ids = batch.pop("pack_segment_ids", None)
+    """Convert DataKit canonical packed metadata into Qwen3-VL model inputs."""
+    pack_segment_ids = batch.get("pack_segment_ids")
     if pack_segment_ids is None:
-        return batch
+        raise ValueError("Packed Basic VLM batches must include pack_segment_ids.")
+
+    batch.pop("source_sample_num", None)
+    batch.pop("num_input_tokens", None)
+    batch.pop("num_loss_tokens", None)
+    batch.pop("num_source_samples", None)
 
     batch["position_ids"] = build_qwen3_vl_packed_position_ids(
         input_ids=batch["input_ids"],
@@ -36,15 +34,59 @@ def prepare_packed_model_inputs(
     )
 
     if attn_implementation == "flash_attention_2":
-        # FA2 path: pass segment ids directly; apply_packed_fa2_patch() makes the HF
-        # FA2 utils interpret integer segment-id masks as packed cu_seqlens boundaries.
-        batch["attention_mask"] = pack_segment_ids
+        batch["attention_mask"] = None
+        batch.update(build_packed_fa2_varlen_kwargs(pack_segment_ids))
     else:
-        # Eager / SDPA path: build a standard 4D additive causal mask that blocks
-        # cross-segment attention.
-        batch["attention_mask"] = _build_packed_block_causal_mask(pack_segment_ids, dtype=mask_dtype)
+        batch["attention_mask"] = build_packed_block_causal_mask(pack_segment_ids, dtype=mask_dtype)
 
     return batch
+
+
+def build_packed_fa2_varlen_kwargs(pack_segment_ids: torch.Tensor) -> dict[str, torch.Tensor | int]:
+    """Build FlashAttention varlen kwargs from packed segment ids."""
+    if pack_segment_ids.ndim != 2:
+        raise ValueError(f"Expected 2D pack_segment_ids, got shape {tuple(pack_segment_ids.shape)}.")
+
+    segment_lengths = []
+    for row in pack_segment_ids:
+        if row.numel() == 0:
+            continue
+        valid_length = int(row.ne(0).sum().item())
+        if valid_length <= 0:
+            raise ValueError("Each packed FlashAttention row must contain at least one non-padding token.")
+        if bool(row[:valid_length].eq(0).any().item()) or bool(row[valid_length:].ne(0).any().item()):
+            raise ValueError("Packed FlashAttention padding must be a single zero-valued suffix.")
+
+        starts = torch.cat(
+            [
+                torch.zeros(1, device=row.device, dtype=torch.long),
+                torch.nonzero(row[1:] != row[:-1], as_tuple=False).flatten() + 1,
+            ]
+        )
+        ends = torch.cat(
+            [
+                starts[1:],
+                torch.tensor([row.numel()], device=row.device, dtype=torch.long),
+            ]
+        )
+        segment_lengths.append(ends - starts)
+
+    if not segment_lengths:
+        raise ValueError("pack_segment_ids must contain at least one token.")
+
+    seqlens = torch.cat(segment_lengths).to(dtype=torch.int32)
+    cu_seqlens = torch.zeros(seqlens.numel() + 1, device=pack_segment_ids.device, dtype=torch.int32)
+    cu_seqlens[1:] = torch.cumsum(seqlens, dim=0)
+    if int(cu_seqlens[-1].item()) != int(pack_segment_ids.numel()):
+        raise ValueError("Packed FlashAttention sequence lengths must cover the full padded batch.")
+
+    max_length = int(seqlens.max().item())
+    return {
+        "cu_seq_lens_q": cu_seqlens,
+        "cu_seq_lens_k": cu_seqlens,
+        "max_length_q": max_length,
+        "max_length_k": max_length,
+    }
 
 
 def _build_packed_block_causal_mask(
@@ -53,23 +95,11 @@ def _build_packed_block_causal_mask(
     dtype: torch.dtype,
 ) -> torch.Tensor:
     """Build a 4D additive mask that isolates packed samples for eager/SDPA backends."""
-    if pack_segment_ids.ndim != 2:
-        raise ValueError(f"Expected 2D pack_segment_ids, got shape {tuple(pack_segment_ids.shape)}.")
+    return build_packed_block_causal_mask(pack_segment_ids, dtype=dtype)
 
-    batch_size, sequence_length = pack_segment_ids.shape
-    token_positions = torch.arange(sequence_length, device=pack_segment_ids.device)
-    causal_mask = token_positions.unsqueeze(0) <= token_positions.unsqueeze(1)
 
-    valid_tokens = pack_segment_ids.ne(0)
-    same_segment = pack_segment_ids.unsqueeze(-1) == pack_segment_ids.unsqueeze(-2)
-    allowed = valid_tokens.unsqueeze(-1) & valid_tokens.unsqueeze(-2) & same_segment & causal_mask.unsqueeze(0)
-
-    min_dtype = torch.finfo(dtype).min
-    attention_mask = torch.full(
-        (batch_size, 1, sequence_length, sequence_length),
-        min_dtype,
-        dtype=dtype,
-        device=pack_segment_ids.device,
-    )
-    attention_mask.masked_fill_(allowed.unsqueeze(1), 0)
-    return attention_mask
+__all__ = [
+    "_build_packed_block_causal_mask",
+    "build_packed_fa2_varlen_kwargs",
+    "prepare_packed_model_inputs",
+]

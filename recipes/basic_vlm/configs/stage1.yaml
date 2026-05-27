@@ -23,7 +23,6 @@ data:
   train_path: "./data/Open-Bee-Lance/stage1/meta.json"
   ref_columns: ["images"]
   thinking_mode: "non-empty"
-  packing: true
   packing_selection_strategy: "best_fit"
   packing_open_pack_limit: 8
   packing_buffer_size: 64
@@ -38,11 +37,12 @@ model:
     enabled: false
     use_reentrant: false
   freeze_vit: true
-  freeze_merger: false
+  freeze_projector: false
   freeze_llm: true
-  compile: true
-  compile_backend: "inductor"
-  compile_mode: "default"
+  compile:
+    enabled: false
+    backend: "inductor"
+    mode: "default"
 optim:
   lr: 1.0e-4
   weight_decay: 0.0
@@ -53,7 +53,7 @@ optim:
 
 loop:
   policy: "iter"
-  total_steps: -1
+  total_steps: 100
 
 checkpoint:
   interval: 100

@@ -1,9 +1,21 @@
 """Packed-attention helpers for the Basic VLM recipe."""
 
-from .fa2_patch import apply_packed_fa2_patch
-from .prepare import prepare_packed_model_inputs
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .prepare import build_packed_fa2_varlen_kwargs, prepare_packed_model_inputs
 
 __all__ = [
-    "apply_packed_fa2_patch",
+    "build_packed_fa2_varlen_kwargs",
     "prepare_packed_model_inputs",
 ]
+
+
+def __getattr__(name: str):
+    """Lazily resolve Basic VLM packing helper exports."""
+    if name not in __all__:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    from . import prepare
+
+    return getattr(prepare, name)

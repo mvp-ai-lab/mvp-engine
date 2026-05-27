@@ -20,7 +20,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
     ``--config-override`` may be passed multiple times. Each value uses
     OmegaConf dotlist syntax, for example ``parallel.mesh.tensor=2`` or
-    ``model.compile=false``.
+    ``model.compile.enabled=false``.
     """
     parser.addoption(
         "--world-size",

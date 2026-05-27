@@ -1,3 +1,7 @@
+"""Basic multimodal sample processing helpers for MLLM recipes."""
+
+from __future__ import annotations
+
 import io
 import math
 import re
@@ -6,13 +10,9 @@ from pathlib import Path
 from typing import Any
 
 import torch
-import torchvision.transforms.v2.functional as tvF
 from PIL import Image
-from torchvision.transforms import InterpolationMode
 
 from mvp_engine.utils.log import simple_info
-
-from ..guards.data import build_empty_sample
 
 ROLE_MAP = {
     "assistant": "assistant",
@@ -33,11 +33,21 @@ IMAGE_TOKEN_PLACEHOLDER = "<|mvp_image_placeholder|>"
 VISION_START_TOKEN = "<|vision_start|>"
 VISION_END_TOKEN = "<|vision_end|>"
 DEFAULT_IMAGE_TOKEN = "<|image_pad|>"
+
 _VISION_TOKEN_IDS: set[int] = set()
 _VISION_TOKEN_ID_TENSOR: torch.Tensor | None = None
 
 
-def process_image(
+def build_empty_sample():
+    """Build an empty model-input sentinel for invalid samples."""
+    return {
+        "input_ids": torch.empty(0, dtype=torch.long),
+        "attention_mask": torch.empty(0, dtype=torch.long),
+        "labels": torch.empty(0, dtype=torch.long),
+    }
+
+
+def read_image(
     image: str | bytes | dict[str, Any] | Image.Image,
     *,
     image_root: Path | None = None,
@@ -55,11 +65,11 @@ def process_image(
     if isinstance(image, dict):
         image_bytes = image.get("bytes")
         if isinstance(image_bytes, (bytes, bytearray, memoryview)):
-            return process_image(bytes(image_bytes), image_root=image_root)
+            return read_image(bytes(image_bytes), image_root=image_root)
 
         image_path = image.get("path")
         if isinstance(image_path, str) and image_path:
-            return process_image(image_path, image_root=image_root)
+            return read_image(image_path, image_root=image_root)
 
         raise ValueError("contains an invalid image record.")
 
@@ -86,6 +96,9 @@ def process_image(
         return opened.convert("RGB").copy()
 
 
+read_image = read_image
+
+
 def convert_images_to_pixel_values(
     sample: dict[str, Any] | list[dict[str, Any]],
     *,
@@ -109,8 +122,11 @@ def convert_images_to_pixel_values(
 
         def _load_resized_image_tensor(image: Any, target_size: list[int]) -> torch.Tensor:
             """Load one image and resize it to its precomputed smart-resize shape."""
+            import torchvision.transforms.v2.functional as tvF
+            from torchvision.transforms import InterpolationMode
+
             height, width = int(target_size[0]), int(target_size[1])
-            pil_image = process_image(image)
+            pil_image = read_image(image)
             image_tensor = tvF.pil_to_tensor(pil_image)
             if tuple(image_tensor.shape[-2:]) != (height, width):
                 image_tensor = tvF.resize(

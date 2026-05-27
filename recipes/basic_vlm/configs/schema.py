@@ -15,7 +15,6 @@ class BasicVLMDataConfig(BaseModel):
     train_path: str = ""
     ref_columns: list[str] = Field(default_factory=lambda: ["images"])
     thinking_mode: bool | None | Literal["non-empty"] = "non-empty"
-    packing: bool = False
     packing_selection_strategy: Literal["random", "best_fit"] = "best_fit"
     packing_open_pack_limit: int = Field(8, ge=1)
     packing_buffer_size: int = Field(64, ge=0)
@@ -75,6 +74,16 @@ class BasicVLMGradientCheckpointingConfig(BaseModel):
     use_reentrant: bool = False
 
 
+class BasicVLMCompileConfig(BaseModel):
+    """Model compile options for the Basic VLM recipe."""
+
+    model_config = ConfigDict(frozen=False, extra="forbid")
+
+    enabled: bool = True
+    backend: str = "inductor"
+    mode: str = "default"
+
+
 class BasicVLMModelConfig(BaseModel):
     """Model loading, precision compatibility, and freeze-policy options."""
 
@@ -90,12 +99,10 @@ class BasicVLMModelConfig(BaseModel):
     # Freeze flags for each sub-module.  Default follows the alignment-stage
     # convention: train only the merger while keeping ViT and LLM frozen.
     freeze_vit: bool = True
-    freeze_merger: bool = False
+    freeze_projector: bool = False
     freeze_llm: bool = False
 
-    compile: bool = True
-    compile_backend: str = "inductor"
-    compile_mode: str = "default"
+    compile: BasicVLMCompileConfig = Field(default_factory=BasicVLMCompileConfig)
 
     @field_validator("pretrained_model_name_or_path", mode="before")
     @classmethod
@@ -115,6 +122,7 @@ class BasicVLMOptimConfig(BaseOptimConfig):
 
     model_config = ConfigDict(frozen=False)
 
+    optimizer: str = "AdamW"
     gradient_accumulation_steps: int = 1
     global_batch_size: int | None = Field(None, ge=1)
     loss_spike_skip_multiplier: float | None = Field(None, gt=0.0)
@@ -155,3 +163,51 @@ class BasicVLMConfig(BaseEngineConfig):
     model: BasicVLMModelConfig = Field(default_factory=BasicVLMModelConfig)
     optim: BasicVLMOptimConfig = Field(default_factory=BasicVLMOptimConfig)
     loop: BasicVLMLoopConfig = Field(default_factory=BasicVLMLoopConfig)
+
+    def resolve_batching_config(self, *, data_parallel_world_size: int) -> None:
+        """Resolve global batch size into micro batch size or accumulation steps."""
+        target_global_batch_size = self.optim.global_batch_size
+        accumulation_steps = int(self.optim.gradient_accumulation_steps)
+        micro_batch_size = int(self.data.batch_size)
+
+        if target_global_batch_size is None:
+            if accumulation_steps == -1:
+                raise ValueError("`optim.gradient_accumulation_steps=-1` requires `optim.global_batch_size`.")
+            if micro_batch_size == -1:
+                raise ValueError("`data.batch_size=-1` requires `optim.global_batch_size`.")
+            return
+
+        if micro_batch_size == -1 and accumulation_steps == -1:
+            raise ValueError(
+                "`optim.global_batch_size` cannot infer both `data.batch_size` and "
+                "`optim.gradient_accumulation_steps` at the same time."
+            )
+
+        if micro_batch_size == -1:
+            batch_size_divisor = int(data_parallel_world_size) * accumulation_steps
+            if batch_size_divisor <= 0 or target_global_batch_size % batch_size_divisor != 0:
+                raise ValueError(
+                    "`data.batch_size` cannot be inferred exactly: "
+                    "`optim.global_batch_size` must be divisible by "
+                    "`data_parallel_world_size * optim.gradient_accumulation_steps`."
+                )
+            self.data.batch_size = target_global_batch_size // batch_size_divisor
+            micro_batch_size = int(self.data.batch_size)
+        elif accumulation_steps == -1:
+            accumulation_divisor = int(data_parallel_world_size) * micro_batch_size
+            if accumulation_divisor <= 0 or target_global_batch_size % accumulation_divisor != 0:
+                raise ValueError(
+                    "`optim.gradient_accumulation_steps` cannot be inferred exactly: "
+                    "`optim.global_batch_size` must be divisible by "
+                    "`data_parallel_world_size * data.batch_size`."
+                )
+            self.optim.gradient_accumulation_steps = target_global_batch_size // accumulation_divisor
+            accumulation_steps = int(self.optim.gradient_accumulation_steps)
+
+        effective_global_batch_size = int(data_parallel_world_size) * micro_batch_size * accumulation_steps
+        if effective_global_batch_size != target_global_batch_size:
+            raise ValueError(
+                "`optim.global_batch_size` does not match the configured batching: "
+                f"expected {effective_global_batch_size} from "
+                "`data_parallel_world_size * data.batch_size * optim.gradient_accumulation_steps`."
+            )
