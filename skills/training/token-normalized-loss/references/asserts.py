@@ -1,4 +1,4 @@
-"""Recipe-local assertions for the token-normalized-loss skill.
+"""Recipe-local assertions for the kit-aware token-normalized-loss skill.
 
 Copy this file to:
 recipes/<recipe>/tests/skills/token-normalized-loss/asserts.py
@@ -7,58 +7,41 @@ recipes/<recipe>/tests/skills/token-normalized-loss/asserts.py
 import inspect
 import math
 import textwrap
-from pathlib import Path
-
-from mvp_engine.testing.utils import read_recipe_source
-
-
-def test_file_structure(recipe_root: Path) -> None:
-    """Verify recipe code contains token-normalized loss wiring."""
-    source = read_recipe_source(recipe_root)
-
-    assert 'reduction="none"' in source or "reduction='none'" in source, (
-        "Model loss path must use unreduced per-token loss."
-    )
-    assert "effective_token" in source, "Recipe must count effective supervised tokens."
-    assert "loss_sum" in source, "Recipe must accumulate unreduced loss_sum."
-    assert "backward_loss_divisor" in source, "Recipe must store a provisional backward denominator."
-    assert "gradient_scale" in source, "Optimizer step must rescale gradients by global token count."
-    assert "tokens/effective" in source, "Recipe must log tokens/effective."
 
 
 def test_engine_structure(engine_class: type) -> None:
-    """Verify engine phases contain token-normalized loss accounting."""
-    method_names = ("train_pre_step", "forward_step", "backward_step", "optimizer_step", "train_post_step")
+    """Verify engine phases use TokenNormedLossKit for accounting."""
+    method_names = ("prepare_model", "backward_step", "optimizer_step", "train_post_step")
     source_by_method = {
         name: textwrap.dedent(inspect.getsource(method))
         for name in method_names
         if (method := getattr(engine_class, name, None)) is not None
     }
 
-    assert "effective_token" in source_by_method.get("train_pre_step", ""), (
-        "train_pre_step must compute effective supervised token counts."
-    )
+    prepare_source = source_by_method.get("prepare_model", "")
     backward_source = source_by_method.get("backward_step", "")
     optimizer_source = source_by_method.get("optimizer_step", "")
     post_source = source_by_method.get("train_post_step", "")
 
-    assert ".sum()" in backward_source and "loss_sum" in backward_source, (
-        "backward_step must sum unreduced per-token loss."
+    assert "token_loss_kit" in "\n".join(source_by_method.values()), "Engine must own a TokenNormedLossKit instance."
+    assert "apply_chunked_token_loss_patch" in prepare_source or 'reduction="none"' in prepare_source, (
+        "Model must return unreduced per-token loss."
     )
-    assert "backward_loss_divisor" in backward_source, "backward_step must store the provisional backward_loss_divisor."
-    assert "reduce_all" in optimizer_source or "all_reduce" in optimizer_source, (
-        "optimizer_step must reduce loss/token metrics before gradient rescale."
+    assert ".sum()" in backward_source and "accumulate_microbatch" in backward_source, (
+        "backward_step must sum unreduced loss and call TokenNormedLossKit.accumulate_microbatch(...)."
     )
-    assert "gradient_scale" in optimizer_source and ".grad" in optimizer_source, (
-        "optimizer_step must rescale gradients by global effective token count."
+    assert "effective_tokens" in backward_source and "total_tokens" in backward_source, (
+        "backward_step must pass total/effective token counts."
     )
+    assert "reduce_window" in optimizer_source, "optimizer_step must call TokenNormedLossKit.reduce_window()."
+    assert "rescale_gradients" in optimizer_source, "optimizer_step must call TokenNormedLossKit.rescale_gradients()."
     assert "clip_grad" in optimizer_source, "Gradient clipping must remain after token rescale."
     assert "tokens/effective" in post_source and "perf/toks_per_sec" in post_source, (
         "train_post_step must log token metrics from global reduced values."
     )
 
-    _assert_order(optimizer_source, "unscale_", "gradient_scale")
-    _assert_order(optimizer_source, "gradient_scale", "clip_grad")
+    _assert_order(optimizer_source, "unscale_", "rescale_gradients")
+    _assert_order(optimizer_source, "rescale_gradients", "clip_grad")
 
 
 def assert_train_post_step_end(engine, ctx) -> None:

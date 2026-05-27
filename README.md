@@ -36,7 +36,9 @@ MVP Engine is a lightweight training engine for multimodal model research. Its c
 
 Most training frameworks become heavily abstracted because they need to support every model family, data format, parallel strategy, and training trick through one reusable API surface. That pressure is real, but the result is often a deep stack of config switches, adapters, hooks, and indirection that makes simple experiments hard to read and hard to modify.
 
-MVP Engine resolves this tension with **skills**. The core engine stays small and boring: launch, config merge, distributed setup, logging, checkpointing, and the training loop. Reusable but model-dependent patterns, such as tensor parallelism, gradient checkpointing, freeze policies, packing, loss guards, or migration steps, live as agent-facing `skills/` instructions. A coding agent applies those skills directly to the target recipe, generating concrete code where it belongs instead of forcing every variation into the core runtime.
+MVP Engine resolves this tension with two agent-era interfaces: **kits** and **skills**. The core engine stays small and boring: launch, config merge, distributed setup, logging, checkpointing, and the training loop. Stable reusable training capabilities live as callable `mvp_engine.kit` APIs. Variable model- or recipe-specific workflows live as agent-facing `skills/` instructions that explain how to use, extend, or deliberately bypass those APIs.
+
+Kits are intentionally practical: a kit is a small suite of APIs that a user or agent can call from an engine to get real work done. For example, an MLLM recipe can call `MLLMDataKit` for processor/dataset/packing/collation orchestration, `MLLMModelKit` for model setup features, `TokenNormedLossKit` for token-normalized loss, `MFUKit` for MFU logging, and `OptimKit` for optimizer/scheduler construction. A skill should not re-teach an agent to hand-write behavior already covered by a kit; it should explain the kit API, its boundaries, and the extension points.
 
 ## Design at a Glance
 
@@ -44,26 +46,31 @@ MVP Engine resolves this tension with **skills**. The core engine stays small an
   train workflow (`before_train -> do_train -> after_train`). Subclasses implement `prepare_*` methods and
   step hooks such as `train_pre_step` and `forward_step`.
 - **Core-only shared package**: common code in `mvp_engine/` should stay generic, minimal, and stable.
+- **Kits as callable API suites**: `mvp_engine/kit/` groups stable capabilities that recipes can call directly
+  from their engines. Kits should have clear boundaries, small public APIs, and concrete extension points.
 - **Hydra configuration**: `mvp_engine/launch.py` merges default config with recipe configs and launches the
   requested workflow (`train`, `evaluate`, or custom).
 - **Logging system**: metrics are aggregated and dispatched to terminal/file backends; additional backends can
   be added with minimal changes.
-- **Skills**: reusable code patterns that a coding agent can apply to recipes, such as parallelism, freeze policies. Skills are not part of the core engine but are available for recipe customization.
-- **Recipe**: other stuffs such as dataset loading and preprocessing live in each recipe, so task-specific
-  formats can evolve without adding brittle abstractions to the core engine.
+- **Skills**: reusable agent workflows that explain how to use kits, extend them, or implement model-specific
+  glue when no clean kit API fits.
+- **Recipe**: experiment-specific logic still lives in each recipe, so task-specific formats and model behavior
+  can evolve without adding brittle abstractions to the core engine.
 
 ## Agentic Workflow
 
 1. Keep the core engine minimal and reusable (`mvp_engine/`).
-2. Place task-specific model/data/training logic in `recipes/`.
-3. Use a coding AI to execute relevant `skills/` (parallel, model, data, debug, recipe, etc.).
-4. Let the AI assemble or modify recipe code/configs for your target training objective.
+2. Use `mvp_engine.kit` APIs for stable reusable capabilities.
+3. Place task-specific model/data/training logic in `recipes/`.
+4. Use a coding AI to execute relevant `skills/` when a workflow needs guidance, extension, or recipe-specific glue.
+5. Let the AI assemble or modify recipe code/configs for your target training objective.
 
 ## Project Layout
 
-- `mvp_engine` — core orchestration logic and Engine base class, tools such as logging, distributed helpers, training utilities
+- `mvp_engine` — core orchestration logic, Engine base class, reusable kits, logging, distributed helpers, training utilities
+- `mvp_engine/kit` — callable API suites for common training capabilities
 - `recipes/` — experiment-specific configs and custom engine/model/data definitions
-- `skills/` — reusable agent skills used by coding AI to implement recipe customization patterns
+- `skills/` — reusable agent skills used by coding AI to use kits and implement recipe customization patterns
 - `outputs/` — run outputs, logs, and checkpoints
 
 
