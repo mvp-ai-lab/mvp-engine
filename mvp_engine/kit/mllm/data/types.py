@@ -2,9 +2,29 @@
 
 from __future__ import annotations
 
-from typing import NotRequired, TypedDict
+from dataclasses import dataclass, field
+from typing import Any, Literal, NotRequired, TypedDict
 
 import torch
+
+
+@dataclass(frozen=True, slots=True)
+class CanonicalMedia:
+    """Normalized media reference attached to one canonical MLLM sample."""
+
+    type: Literal["image", "video", "audio"]
+    value: Any
+    size: list[int] | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class CanonicalMLLMSample:
+    """Normalized MLLM sample before model-family tokenization."""
+
+    messages: list[dict[str, Any]]
+    media: list[CanonicalMedia]
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class ModelInputs(TypedDict):

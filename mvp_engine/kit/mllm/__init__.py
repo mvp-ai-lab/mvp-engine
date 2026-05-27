@@ -3,15 +3,32 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .data import MLLMCollator, MLLMDataKit, ModelInputs, PackingOptions
+    from .data import (
+        MLLMCollator,
+        MLLMDataKit,
+        MLLMMediaKit,
+        MLLMSampleKit,
+        ModelInputs,
+        PackingOptions,
+    )
     from .model import MLLMModelKit
 
-__all__ = ["MLLMCollator", "MLLMDataKit", "MLLMModelKit", "ModelInputs", "PackingOptions"]
+__all__ = [
+    "MLLMCollator",
+    "MLLMDataKit",
+    "MLLMMediaKit",
+    "MLLMModelKit",
+    "MLLMSampleKit",
+    "ModelInputs",
+    "PackingOptions",
+]
 
 _EXPORT_MODULES = {
     "MLLMCollator": ".data",
     "MLLMDataKit": ".data",
+    "MLLMMediaKit": ".data",
     "MLLMModelKit": ".model",
+    "MLLMSampleKit": ".data",
     "ModelInputs": ".data",
     "PackingOptions": ".data",
 }

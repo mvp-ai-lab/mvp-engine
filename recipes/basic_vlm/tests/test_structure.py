@@ -31,7 +31,6 @@ def test_file_structure():
         "engine/__init__.py",
         "engine/basic_vlm_engine.py",
         "guards/__init__.py",
-        "guards/data.py",
         "guards/loss.py",
         "model/__init__.py",
         "model/qwen3_vl.py",
@@ -39,8 +38,6 @@ def test_file_structure():
         "model/packing/prepare.py",
         "model/packing/qwen3_vl.py",
         "utils/__init__.py",
-        "utils/log/__init__.py",
-        "utils/log/mfu.py",
         "utils/misc.py",
     ]
 

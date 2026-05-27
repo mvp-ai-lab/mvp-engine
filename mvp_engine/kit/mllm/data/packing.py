@@ -279,11 +279,11 @@ class PackingAssembler(Assembler[dict[str, Any], dict[str, Any] | list[dict[str,
 
 
 def finalize_packed_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
-    """Convert a packed sample group into the model-facing packed sample dict."""
+    """Convert a packed sample group into token and packing metadata fields."""
     if not samples:
         raise ValueError("Cannot finalize an empty packed sample group.")
 
-    packed_sample: dict[str, Any] = {
+    return {
         "input_ids": torch.cat([sample["input_ids"] for sample in samples], dim=0),
         "attention_mask": torch.cat([sample["attention_mask"] for sample in samples], dim=0),
         "labels": torch.cat([sample["labels"] for sample in samples], dim=0),
@@ -294,15 +294,8 @@ def finalize_packed_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
             ],
             dim=0,
         ),
+        "source_sample_num": len(samples),
     }
-
-    pixel_values = [sample["pixel_values"] for sample in samples if sample.get("pixel_values") is not None]
-    packed_sample["pixel_values"] = torch.cat(pixel_values, dim=0) if pixel_values else None
-
-    image_grid_thw = [sample["image_grid_thw"] for sample in samples if sample.get("image_grid_thw") is not None]
-    packed_sample["image_grid_thw"] = torch.cat(image_grid_thw, dim=0) if image_grid_thw else None
-    packed_sample["source_sample_num"] = len(samples)
-    return packed_sample
 
 
 def build_packed_block_causal_mask(

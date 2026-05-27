@@ -24,7 +24,7 @@ The dataset rows should provide:
 - `image_size` or `img_size`: image size metadata matching `images`.
 
 The loader validates the raw rows, tokenizes conversations with the Qwen3-VL
-processor, optionally packs samples, resolves image references, and materializes
+processor, always packs samples, resolves image references, and materializes
 pixel tensors for training.
 
 ## Run

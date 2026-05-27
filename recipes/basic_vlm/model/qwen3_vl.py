@@ -148,14 +148,6 @@ def _calculate_vision_flops(
     return vit_flops, merger_flops
 
 
-def patch_trainable_params_precision(model):
-    """Store trainable weights in fp32 master precision."""
-    for _, parameter in model.named_parameters():
-        if parameter.requires_grad and parameter.dtype != torch.float32:
-            parameter.data = parameter.data.to(dtype=torch.float32)
-    return model
-
-
 def patch_qwen3vl_conv3d(model):
     """Apply recipe-local Qwen3-VL vision/runtime compatibility patches.
 

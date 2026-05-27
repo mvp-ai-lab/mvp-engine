@@ -7,14 +7,12 @@ if TYPE_CHECKING:
         calculate_model_flops,
         patch_qwen3vl_conv3d,
         patch_qwen3vl_model_flops,
-        patch_trainable_params_precision,
     )
 
 __all__ = [
     "calculate_model_flops",
     "patch_qwen3vl_conv3d",
     "patch_qwen3vl_model_flops",
-    "patch_trainable_params_precision",
 ]
 
 

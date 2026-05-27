@@ -4,30 +4,30 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .data import MLLMDataKit
+    from .data import (
+        MULTIMODAL_PLACEHOLDER,
+        THOUGHT_MARKERS,
+        THOUGHT_PATTERN,
+        THOUGHT_PREFIX,
+        THOUGHT_SUFFIX,
+        MLLMDataKit,
+    )
+    from .media import (
+        DEFAULT_IMAGE_TOKEN,
+        IMAGE_TOKEN_PLACEHOLDER,
+        VISION_END_TOKEN,
+        VISION_START_TOKEN,
+        MLLMMediaKit,
+        read_image,
+    )
     from .packing import (
         PackingAssembler,
         PackingOptions,
         build_packed_block_causal_mask,
         finalize_packed_samples,
     )
-    from .process import (
-        DEFAULT_IMAGE_TOKEN,
-        IMAGE_PLACEHOLDER,
-        IMAGE_TOKEN_PLACEHOLDER,
-        MULTIMODAL_PLACEHOLDER,
-        ROLE_MAP,
-        THOUGHT_MARKERS,
-        THOUGHT_PATTERN,
-        THOUGHT_PREFIX,
-        THOUGHT_SUFFIX,
-        VISION_END_TOKEN,
-        VISION_START_TOKEN,
-        convert_images_to_pixel_values,
-        process_sample,
-        read_image,
-    )
-    from .types import ModelInputs
+    from .sample import IMAGE_PLACEHOLDER, ROLE_MAP, MLLMSampleKit
+    from .types import CanonicalMedia, CanonicalMLLMSample, ModelInputs
 
 
 def MLLMCollator(
@@ -53,6 +53,8 @@ __all__ = [
     "IMAGE_TOKEN_PLACEHOLDER",
     "MLLMCollator",
     "MLLMDataKit",
+    "MLLMMediaKit",
+    "MLLMSampleKit",
     "ModelInputs",
     "MULTIMODAL_PLACEHOLDER",
     "PackingAssembler",
@@ -65,33 +67,35 @@ __all__ = [
     "VISION_END_TOKEN",
     "VISION_START_TOKEN",
     "build_packed_block_causal_mask",
-    "convert_images_to_pixel_values",
+    "CanonicalMedia",
+    "CanonicalMLLMSample",
     "finalize_packed_samples",
     "read_image",
-    "process_sample",
 ]
 
 _EXPORT_MODULES = {
-    "DEFAULT_IMAGE_TOKEN": ".process",
-    "IMAGE_PLACEHOLDER": ".process",
-    "IMAGE_TOKEN_PLACEHOLDER": ".process",
+    "DEFAULT_IMAGE_TOKEN": ".media",
+    "IMAGE_PLACEHOLDER": ".sample",
+    "IMAGE_TOKEN_PLACEHOLDER": ".media",
     "MLLMDataKit": ".data",
+    "MLLMMediaKit": ".media",
+    "MLLMSampleKit": ".sample",
     "ModelInputs": ".types",
-    "MULTIMODAL_PLACEHOLDER": ".process",
+    "MULTIMODAL_PLACEHOLDER": ".data",
     "PackingAssembler": ".packing",
     "PackingOptions": ".packing",
-    "ROLE_MAP": ".process",
-    "THOUGHT_MARKERS": ".process",
-    "THOUGHT_PATTERN": ".process",
-    "THOUGHT_PREFIX": ".process",
-    "THOUGHT_SUFFIX": ".process",
-    "VISION_END_TOKEN": ".process",
-    "VISION_START_TOKEN": ".process",
+    "ROLE_MAP": ".sample",
+    "THOUGHT_MARKERS": ".data",
+    "THOUGHT_PATTERN": ".data",
+    "THOUGHT_PREFIX": ".data",
+    "THOUGHT_SUFFIX": ".data",
+    "VISION_END_TOKEN": ".media",
+    "VISION_START_TOKEN": ".media",
     "build_packed_block_causal_mask": ".packing",
-    "convert_images_to_pixel_values": ".process",
+    "CanonicalMedia": ".types",
+    "CanonicalMLLMSample": ".types",
     "finalize_packed_samples": ".packing",
-    "process_sample": ".process",
-    "read_image": ".process",
+    "read_image": ".media",
 }
 
 

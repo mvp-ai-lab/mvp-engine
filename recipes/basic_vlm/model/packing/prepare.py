@@ -89,17 +89,7 @@ def build_packed_fa2_varlen_kwargs(pack_segment_ids: torch.Tensor) -> dict[str, 
     }
 
 
-def _build_packed_block_causal_mask(
-    pack_segment_ids: torch.Tensor,
-    *,
-    dtype: torch.dtype,
-) -> torch.Tensor:
-    """Build a 4D additive mask that isolates packed samples for eager/SDPA backends."""
-    return build_packed_block_causal_mask(pack_segment_ids, dtype=dtype)
-
-
 __all__ = [
-    "_build_packed_block_causal_mask",
     "build_packed_fa2_varlen_kwargs",
     "prepare_packed_model_inputs",
 ]
