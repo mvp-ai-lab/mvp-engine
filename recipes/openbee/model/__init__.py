@@ -1,4 +1,4 @@
-"""Model helpers for the basic_vlm recipe."""
+"""Model helpers for the openbee recipe."""
 
 from typing import TYPE_CHECKING
 
@@ -17,7 +17,7 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    """Lazily resolve Basic VLM model helper exports."""
+    """Lazily resolve OpenBee model helper exports."""
     if name not in __all__:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

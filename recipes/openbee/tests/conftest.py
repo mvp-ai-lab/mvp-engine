@@ -1,4 +1,4 @@
-"""Pytest configuration for Basic VLM recipe-local tests.
+"""Pytest configuration for OpenBee recipe-local tests.
 
 The options here are intentionally recipe-local. They let developers and agents
 run the same pytest entrypoints while selecting a config file, distributed world
@@ -16,7 +16,7 @@ sys.path.insert(0, str(project_root))
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    """Register command-line options consumed by Basic VLM tests.
+    """Register command-line options consumed by OpenBee tests.
 
     ``--config-override`` may be passed multiple times. Each value uses
     OmegaConf dotlist syntax, for example ``parallel.mesh.tensor=2`` or

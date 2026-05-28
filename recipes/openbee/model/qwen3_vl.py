@@ -1,4 +1,4 @@
-"""Qwen3-VL model helpers for the Basic VLM recipe."""
+"""Qwen3-VL model helpers for the OpenBee recipe."""
 
 from __future__ import annotations
 

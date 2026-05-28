@@ -1,4 +1,4 @@
-"""Structure tests for the Basic VLM recipe.
+"""Structure tests for the OpenBee recipe.
 
 These tests validate recipe files, config schemas, and engine registration
 without executing training. Recipe-local skill assertions can extend each layer
@@ -14,7 +14,7 @@ from mvp_engine.testing.utils import load_recipe_skill_asserts
 
 
 def test_file_structure():
-    """Validate the baseline Basic VLM file layout.
+    """Validate the baseline OpenBee file layout.
 
     Skill assertion modules may add their own file checks by defining
     ``test_file_structure(recipe_root)``. The baseline list stays focused on
@@ -29,7 +29,7 @@ def test_file_structure():
         "configs/stage2.yaml",
         "configs/stage3.yaml",
         "engine/__init__.py",
-        "engine/basic_vlm_engine.py",
+        "engine/openbee_engine.py",
         "guards/__init__.py",
         "guards/loss.py",
         "model/__init__.py",
@@ -52,15 +52,15 @@ def test_file_structure():
 
 
 def test_config_structure():
-    """Validate all Basic VLM YAML configs against the recipe schema.
+    """Validate all OpenBee YAML configs against the recipe schema.
 
-    Each config is parsed through ``BasicVLMConfig`` and its engine name is
+    Each config is parsed through ``OpenBeeConfig`` and its engine name is
     resolved through ``ENGINE_REGISTRY``. Skill assertion modules may add
     config-level checks by defining ``test_config_structure(config)``.
     """
     from mvp_engine.engine import ENGINE_REGISTRY
     from mvp_engine.launch import _import_recipe_modules
-    from recipes.basic_vlm.configs.schema import BasicVLMConfig
+    from recipes.openbee.configs.schema import OpenBeeConfig
 
     _import_recipe_modules(Path(__file__).resolve().parent.parent)
 
@@ -72,9 +72,7 @@ def test_config_structure():
         for config_file in configs:
             if config_file.endswith(".yaml"):
                 config_path = recipe_root / "configs" / config_file
-                config = BasicVLMConfig.model_validate(
-                    OmegaConf.to_container(OmegaConf.load(config_path), resolve=True)
-                )
+                config = OpenBeeConfig.model_validate(OmegaConf.to_container(OmegaConf.load(config_path), resolve=True))
 
                 try:
                     ENGINE_REGISTRY.get(config.engine)
@@ -100,7 +98,7 @@ def test_engine_structure():
     """
     from mvp_engine.engine import ENGINE_REGISTRY, Engine
     from mvp_engine.launch import _import_recipe_modules
-    from recipes.basic_vlm.configs.schema import BasicVLMConfig
+    from recipes.openbee.configs.schema import OpenBeeConfig
 
     _import_recipe_modules(Path(__file__).resolve().parent.parent)
 
@@ -112,9 +110,7 @@ def test_engine_structure():
         for config_file in configs:
             if config_file.endswith(".yaml"):
                 config_path = recipe_root / "configs" / config_file
-                config = BasicVLMConfig.model_validate(
-                    OmegaConf.to_container(OmegaConf.load(config_path), resolve=True)
-                )
+                config = OpenBeeConfig.model_validate(OmegaConf.to_container(OmegaConf.load(config_path), resolve=True))
 
                 engine_class = ENGINE_REGISTRY.get(config.engine)
                 missing_methods = Engine.__abstractmethods__ & engine_class.__abstractmethods__

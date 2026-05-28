@@ -1,4 +1,4 @@
-"""Smoke tests for the Basic VLM recipe.
+"""Smoke tests for the OpenBee recipe.
 
 The smoke test runs the real ``engine.train()`` path in spawned distributed
 worker processes. Recipe-local skill assertions are injected dynamically around
@@ -74,7 +74,7 @@ def test_smoke(
     config_overrides: tuple[str, ...],
     tmp_path: Path,
 ):
-    """Run Basic VLM smoke validation across ``world_size`` spawned workers.
+    """Run OpenBee smoke validation across ``world_size`` spawned workers.
 
     The test uses ``tmp_path`` as an isolated output root and passes
     ``config_overrides`` through to the smoke config loader. Multi-process

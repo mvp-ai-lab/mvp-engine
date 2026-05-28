@@ -1,4 +1,4 @@
-"""Pydantic schema for the Basic VLM recipe."""
+"""Pydantic schema for the OpenBee recipe."""
 
 from typing import Literal
 
@@ -7,8 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from mvp_engine.config.schema import BaseEngineConfig, BaseLoopConfig, BaseOptimConfig
 
 
-class BasicVLMDataConfig(BaseModel):
-    """Dataset and batching options for the Basic VLM recipe."""
+class OpenBeeDataConfig(BaseModel):
+    """Dataset and batching options for the OpenBee recipe."""
 
     model_config = ConfigDict(frozen=False, extra="forbid")
 
@@ -65,7 +65,7 @@ class BasicVLMDataConfig(BaseModel):
         raise ValueError("`data.thinking_mode` only accepts true, false, null, or 'non-empty'.")
 
 
-class BasicVLMGradientCheckpointingConfig(BaseModel):
+class OpenBeeGradientCheckpointingConfig(BaseModel):
     """Gradient checkpointing options passed to the Qwen3-VL model."""
 
     model_config = ConfigDict(frozen=False, extra="forbid")
@@ -74,8 +74,8 @@ class BasicVLMGradientCheckpointingConfig(BaseModel):
     use_reentrant: bool = False
 
 
-class BasicVLMCompileConfig(BaseModel):
-    """Model compile options for the Basic VLM recipe."""
+class OpenBeeCompileConfig(BaseModel):
+    """Model compile options for the OpenBee recipe."""
 
     model_config = ConfigDict(frozen=False, extra="forbid")
 
@@ -84,16 +84,16 @@ class BasicVLMCompileConfig(BaseModel):
     mode: str = "default"
 
 
-class BasicVLMModelConfig(BaseModel):
+class OpenBeeModelConfig(BaseModel):
     """Model loading, precision compatibility, and freeze-policy options."""
 
     model_config = ConfigDict(frozen=False, extra="forbid")
 
-    pretrained_model_name_or_path: str = "./recipes/basic_vlm/pretrained/Qwen3-VL-8B-Instruct"
+    pretrained_model_name_or_path: str = "./recipes/openbee/pretrained/Qwen3-VL-8B-Instruct"
     attn_implementation: Literal["eager", "sdpa", "flash_attention_2"] = "flash_attention_2"
     image_max_pixels: int | None = Field(None, ge=1)
-    gradient_checkpointing: BasicVLMGradientCheckpointingConfig = Field(
-        default_factory=BasicVLMGradientCheckpointingConfig
+    gradient_checkpointing: OpenBeeGradientCheckpointingConfig = Field(
+        default_factory=OpenBeeGradientCheckpointingConfig
     )
 
     # Freeze flags for each sub-module.  Default follows the alignment-stage
@@ -102,7 +102,7 @@ class BasicVLMModelConfig(BaseModel):
     freeze_projector: bool = False
     freeze_llm: bool = False
 
-    compile: BasicVLMCompileConfig = Field(default_factory=BasicVLMCompileConfig)
+    compile: OpenBeeCompileConfig = Field(default_factory=OpenBeeCompileConfig)
 
     @field_validator("pretrained_model_name_or_path", mode="before")
     @classmethod
@@ -117,8 +117,8 @@ class BasicVLMModelConfig(BaseModel):
         return normalized
 
 
-class BasicVLMOptimConfig(BaseOptimConfig):
-    """Optimizer options extended with Basic VLM batch and loss-guard settings."""
+class OpenBeeOptimConfig(BaseOptimConfig):
+    """Optimizer options extended with OpenBee batch and loss-guard settings."""
 
     model_config = ConfigDict(frozen=False)
 
@@ -138,8 +138,8 @@ class BasicVLMOptimConfig(BaseOptimConfig):
         return value
 
 
-class BasicVLMLoopConfig(BaseLoopConfig):
-    """Iteration-loop options for Basic VLM training."""
+class OpenBeeLoopConfig(BaseLoopConfig):
+    """Iteration-loop options for OpenBee training."""
 
     model_config = ConfigDict(frozen=False)
 
@@ -154,15 +154,15 @@ class BasicVLMLoopConfig(BaseLoopConfig):
         return value
 
 
-class BasicVLMConfig(BaseEngineConfig):
-    """Top-level Basic VLM recipe config."""
+class OpenBeeConfig(BaseEngineConfig):
+    """Top-level OpenBee recipe config."""
 
     model_config = ConfigDict(frozen=False, extra="allow")
 
-    data: BasicVLMDataConfig = Field(default_factory=BasicVLMDataConfig)
-    model: BasicVLMModelConfig = Field(default_factory=BasicVLMModelConfig)
-    optim: BasicVLMOptimConfig = Field(default_factory=BasicVLMOptimConfig)
-    loop: BasicVLMLoopConfig = Field(default_factory=BasicVLMLoopConfig)
+    data: OpenBeeDataConfig = Field(default_factory=OpenBeeDataConfig)
+    model: OpenBeeModelConfig = Field(default_factory=OpenBeeModelConfig)
+    optim: OpenBeeOptimConfig = Field(default_factory=OpenBeeOptimConfig)
+    loop: OpenBeeLoopConfig = Field(default_factory=OpenBeeLoopConfig)
 
     def resolve_batching_config(self, *, data_parallel_world_size: int) -> None:
         """Resolve global batch size into micro batch size or accumulation steps."""

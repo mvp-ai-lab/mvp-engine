@@ -1,4 +1,4 @@
-"""Miscellaneous helpers for the Basic VLM recipe."""
+"""Miscellaneous helpers for the OpenBee recipe."""
 
 from __future__ import annotations
 
@@ -8,18 +8,18 @@ import torch.distributed as dist
 from mvp_engine.kit.mllm import MLLMDataKit, PackingOptions
 from mvp_engine.utils.log import logger
 
-from ..configs.schema import BasicVLMConfig
+from ..configs.schema import OpenBeeConfig
 
 
 def infer_total_steps(
-    config: BasicVLMConfig,
+    config: OpenBeeConfig,
     *,
     processor,
     device: torch.device,
     data_parallel_world_size: int,
     data_parallel_group: dist.ProcessGroup | None = None,
 ) -> int:
-    """Infer total optimization steps from one finite Basic VLM data pass."""
+    """Infer total optimization steps from one finite OpenBee data pass."""
     inference_config = config.model_copy(deep=True)
     data_kit = MLLMDataKit()
 
@@ -67,15 +67,13 @@ def infer_total_steps(
 
     global_packed_samples = int(global_packed_samples_tensor.item())
     if global_packed_samples <= 0:
-        raise RuntimeError("Basic VLM step inference found no packed training samples.")
+        raise RuntimeError("OpenBee step inference found no packed training samples.")
 
     samples_per_optimization_step = (
         int(data_parallel_world_size) * int(config.data.batch_size) * int(config.optim.gradient_accumulation_steps)
     )
     if samples_per_optimization_step <= 0:
-        raise RuntimeError(
-            "Basic VLM step inference cannot infer steps with non-positive samples per optimization step."
-        )
+        raise RuntimeError("OpenBee step inference cannot infer steps with non-positive samples per optimization step.")
 
     total_steps = (global_packed_samples + samples_per_optimization_step - 1) // samples_per_optimization_step
     if total_steps <= 0:

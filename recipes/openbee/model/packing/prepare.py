@@ -1,4 +1,4 @@
-"""Prepare canonical packed Basic VLM batches for Qwen3-VL forward."""
+"""Prepare canonical packed OpenBee batches for Qwen3-VL forward."""
 
 from typing import Any
 
@@ -19,7 +19,7 @@ def prepare_packed_model_inputs(
     """Convert DataKit canonical packed metadata into Qwen3-VL model inputs."""
     pack_segment_ids = batch.get("pack_segment_ids")
     if pack_segment_ids is None:
-        raise ValueError("Packed Basic VLM batches must include pack_segment_ids.")
+        raise ValueError("Packed OpenBee batches must include pack_segment_ids.")
 
     batch.pop("source_sample_num", None)
     batch.pop("num_input_tokens", None)

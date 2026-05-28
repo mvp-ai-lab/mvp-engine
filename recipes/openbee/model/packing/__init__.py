@@ -1,4 +1,4 @@
-"""Packed-attention helpers for the Basic VLM recipe."""
+"""Packed-attention helpers for the OpenBee recipe."""
 
 from typing import TYPE_CHECKING
 
@@ -12,7 +12,7 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    """Lazily resolve Basic VLM packing helper exports."""
+    """Lazily resolve OpenBee packing helper exports."""
     if name not in __all__:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

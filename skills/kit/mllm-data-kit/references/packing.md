@@ -12,8 +12,8 @@ PackingOptions(
 )
 ```
 
-Do not add a config field that disables packing for the standard Basic VLM
-style recipe. If a new recipe truly cannot support packing, document why it
+Do not add a config field that disables packing for the standard OpenBee-style
+recipe. If a new recipe truly cannot support packing, document why it
 does not use the standard MLLM DataKit pipeline.
 
 Packed samples should contain:

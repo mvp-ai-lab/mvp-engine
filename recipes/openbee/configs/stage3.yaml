@@ -1,11 +1,11 @@
 dev_mode: false
-engine: BasicVLMEngine
+engine: OpenBeeEngine
 
 seed: 219
 deterministic: false
 
 project:
-  name: "basic_vlm"
+  name: "openbee"
   dir: "./outputs"
 
 log:

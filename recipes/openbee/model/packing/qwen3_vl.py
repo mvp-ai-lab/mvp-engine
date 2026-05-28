@@ -79,7 +79,7 @@ def _build_qwen3_vl_segment_position_ids(
     vision_start_token_id = int(model_config.vision_start_token_id)
 
     if bool((input_ids == video_token_id).any().item()):
-        raise NotImplementedError("Packed Basic VLM training only supports text+image inputs, not video inputs.")
+        raise NotImplementedError("Packed OpenBee training only supports text+image inputs, not video inputs.")
 
     vision_start_indices = torch.argwhere(input_ids == vision_start_token_id).squeeze(1)
     if vision_start_indices.numel() == 0:

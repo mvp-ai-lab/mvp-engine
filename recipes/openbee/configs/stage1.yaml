@@ -1,11 +1,11 @@
 dev_mode: false
-engine: BasicVLMEngine
+engine: OpenBeeEngine
 
-seed: 219
+seed: 42
 deterministic: false
 
 project:
-  name: "basic_vlm"
+  name: "openbee"
   dir: "./outputs"
 
 log:
@@ -17,46 +17,45 @@ log:
 parallel:
   mesh:
     replicate: -1
-    shard: 8
+    shard: 1
     tensor: 1
 data:
-  train_path: "./data/Open-Bee-Lance/stage2/meta.json"
+  train_path: "./data/Open-Bee-Lance/stage1/meta.json"
   ref_columns: ["images"]
   thinking_mode: "non-empty"
   packing_selection_strategy: "best_fit"
   packing_open_pack_limit: 8
   packing_buffer_size: 64
-  max_seq_len: 16384
+  max_seq_len: 8192
   batch_size: 1
-  num_workers: 4
+  num_workers: 12
 model:
-  pretrained_model_name_or_path: "./pretrained/Qwen3-VL-8B-Base-woDS-stage1"
+  pretrained_model_name_or_path: "./pretrained/Qwen3-VL-8B-Base-woDS-stage0"
   attn_implementation: "flash_attention_2"
-  image_max_pixels: 1280000
+  image_max_pixels: 1048576
   gradient_checkpointing:
-    enabled: true
+    enabled: false
     use_reentrant: false
-  freeze_vit: false
+  freeze_vit: true
   freeze_projector: false
-  freeze_llm: false
+  freeze_llm: true
   compile:
     enabled: false
     backend: "inductor"
     mode: "default"
 optim:
-  lr: 4.0e-5
+  lr: 1.0e-4
   weight_decay: 0.0
-  global_batch_size: 256
-  gradient_accumulation_steps: -1
+  gradient_accumulation_steps: 4
   mixed_precision: "bf16"
-  warmup_ratio: 0.002
+  warmup_ratio: 0.0
   clip_grad_norm: 1.0
 
 loop:
   policy: "iter"
-  total_steps: -1
+  total_steps: 100
 
 checkpoint:
-  interval: 200
+  interval: 100
   keep_n: 2
   hf_enable: true

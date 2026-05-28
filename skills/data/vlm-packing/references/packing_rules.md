@@ -12,11 +12,11 @@ Primary kit references:
   `PackingAssembler`, finalization, segment metadata, and block causal masks;
 - `mvp_engine/kit/mllm/data/media.py`: packed media merge and collation hooks;
 
-`recipes/basic_vlm` shows one concrete integration:
+`recipes/openbee` shows one concrete integration:
 
 - `configs/schema.py` and `configs/stage*.yaml`: active packing knobs;
 - `model/packing/`: packed model-input preparation and attention backend patches;
-- `engine/basic_vlm_engine.py`: packed preparation, token accounting, logging;
+- `engine/openbee_engine.py`: packed preparation, token accounting, logging;
 - `utils/misc.py`: packed total-step inference.
 
 Use these files as patterns, but adapt model-specific attention and position

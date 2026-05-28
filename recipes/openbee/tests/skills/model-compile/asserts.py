@@ -1,4 +1,4 @@
-"""Assertions for the Basic VLM model-compile skill."""
+"""Assertions for the OpenBee model-compile skill."""
 
 import ast
 import inspect

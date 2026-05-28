@@ -1,7 +1,7 @@
-# Basic VLM
+# OpenBee
 
-`basic_vlm` is the Basic VLM recipe for Qwen3-VL 8B training on Open-Bee style
-multimodal data. The recipe is implemented locally under `recipes/basic_vlm/`
+`openbee` is the OpenBee recipe for Qwen3-VL 8B training on OpenBee-style
+multimodal data. The recipe is implemented locally under `recipes/openbee/`
 and uses the shared `mvp_engine` launch, logging, checkpoint, and distributed
 training infrastructure.
 
@@ -30,16 +30,16 @@ pixel tensors for training.
 ## Run
 
 ```bash
-torchrun --nproc_per_node=8 -m mvp_engine.launch --config ./recipes/basic_vlm/configs/stage1.yaml
-torchrun --nproc_per_node=8 -m mvp_engine.launch --config ./recipes/basic_vlm/configs/stage2.yaml
-torchrun --nproc_per_node=8 -m mvp_engine.launch --config ./recipes/basic_vlm/configs/stage3.yaml
+torchrun --nproc_per_node=8 -m mvp_engine.launch --config ./recipes/openbee/configs/stage1.yaml
+torchrun --nproc_per_node=8 -m mvp_engine.launch --config ./recipes/openbee/configs/stage2.yaml
+torchrun --nproc_per_node=8 -m mvp_engine.launch --config ./recipes/openbee/configs/stage3.yaml
 ```
 
 Example override:
 
 ```bash
 torchrun --nproc_per_node=8 -m mvp_engine.launch \
-  --config ./recipes/basic_vlm/configs/stage2.yaml \
+  --config ./recipes/openbee/configs/stage2.yaml \
   data.train_path=./data/Open-Bee-Lance/stage2/meta.json \
   model.pretrained_model_name_or_path=./pretrained/Qwen3-VL-8B-Base-woDS-stage1
 ```

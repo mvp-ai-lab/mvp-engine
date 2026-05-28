@@ -1,4 +1,4 @@
-"""Loss guards for Basic VLM training."""
+"""Loss guards for OpenBee training."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Training engine for the Basic VLM recipe."""
+"""Training engine for the OpenBee recipe."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from mvp_engine.kit import (
 from mvp_engine.utils.log import logger
 from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
-from ..configs.schema import BasicVLMConfig
+from ..configs.schema import OpenBeeConfig
 from ..guards.loss import PerTokenLossGuard
 from ..model import patch_qwen3vl_conv3d, patch_qwen3vl_model_flops
 from ..model.packing import prepare_packed_model_inputs
@@ -36,11 +36,11 @@ if TYPE_CHECKING:
 
 
 @ENGINE_REGISTRY.register()
-class BasicVLMEngine(Engine):
-    """Recipe-local engine for the Basic VLM."""
+class OpenBeeEngine(Engine):
+    """Recipe-local engine for the OpenBee recipe."""
 
-    ConfigClass = BasicVLMConfig
-    config: BasicVLMConfig
+    ConfigClass = OpenBeeConfig
+    config: OpenBeeConfig
 
     processor: ProcessorMixin
     loss_guard: PerTokenLossGuard
@@ -52,7 +52,7 @@ class BasicVLMEngine(Engine):
     token_loss_kit: TokenNormedLossKit
 
     def __init__(self, config):
-        """Initialize Basic VLM-local distributed state and metric reducers."""
+        """Initialize OpenBee-local distributed state and metric reducers."""
         super().__init__(config)
         self.dp_world_size = get_data_parallel_world_size(self.device_mesh)
         self.dp_group = get_data_parallel_group(self.device_mesh)
@@ -79,7 +79,7 @@ class BasicVLMEngine(Engine):
             or ``None`` for unsupported non-training workflows.
         """
         if workflow != "train":
-            logger.warning(f"Basic VLM engine does not support workflow '{workflow}'.")
+            logger.warning(f"OpenBee engine does not support workflow '{workflow}'.")
             return
 
         # Step 1: build the shared processor.
