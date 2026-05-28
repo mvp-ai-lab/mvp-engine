@@ -1,191 +1,113 @@
 ---
 name: token-normalized-loss
-description: Add, review, update, and validate recipe-local token-normalized training loss for token models using unreduced per-token loss, accumulation-window global supervised-token normalization, gradient rescaling, and token-level logging.
+description: Add, review, update, and validate token-normalized training loss
+  using TokenNormedLossKit, including unreduced per-token loss patching,
+  accumulation-window global supervised-token normalization, gradient rescaling,
+  and token-level logging.
 ---
 
 # Token-Normalized Loss
 
 ## Goal
 
-Add token-normalized training loss without changing the intended objective:
+Use `TokenNormedLossKit` for the standard objective:
 
 ```text
 objective = sum(per_token_loss) / global_supervised_tokens
 ```
 
-The denominator is computed across the full gradient-accumulation window and
-all data-parallel ranks. Keep the implementation recipe-local unless the user
-explicitly asks for shared engine behavior.
+Do not reimplement distributed loss/token accumulation in each recipe unless the
+kit cannot represent the training loop.
 
 ## Required Inputs
 
-Identify these before editing:
-
 - target recipe path;
-- model forward path and current loss shape;
-- batch schema for `input_ids`, `labels`, `attention_mask`, packing metadata, or
-  equivalent token fields;
-- engine `train_pre_step()`, `forward_step()`, `backward_step()`,
-  `optimizer_step()`, and `train_post_step()` paths;
-- gradient accumulation and data-parallel topology;
-- existing metric accumulator or distributed reduction helper;
-- recipe-local `tests/test_structure.py` and `tests/test_smoke.py`.
-
-Ask the user only if the supervised-token definition or packed-label semantics
-cannot be derived from the recipe.
+- model forward path and loss shape;
+- batch fields for total and supervised token counts;
+- engine `forward_step()`, `backward_step()`, `optimizer_step()`, and
+  `train_post_step()` paths;
+- gradient accumulation and data-parallel process group;
+- recipe-local structure/smoke tests.
 
 ## Workflow
 
-### 1. Locate Runtime Integration Points
-
-Search the recipe first:
-
-```bash
-rg -n "reduction=\"none\"|effective_token|loss_sum|backward_loss_divisor|gradient_scale|tokens/effective|DistributedMetricAccumulator" recipes/<recipe>
-```
-
-Find:
-
-- where model loss is computed;
-- where labels are shifted or masked;
-- where token counts are available before device transfer;
-- where micro-batch loss is passed to backward;
-- where optimizer-step logging happens.
-
-### 2. Return Unreduced Per-Token Loss
-
-The model must return unreduced supervised-token loss when labels are present.
-
-Common causal-LM shape:
+### 1. Initialize The Kit
 
 ```python
-loss = F.cross_entropy(
-    logits[..., :-1, :].contiguous().view(-1, vocab_size),
-    labels[..., 1:].contiguous().view(-1),
-    ignore_index=-100,
-    reduction="none",
+from mvp_engine.kit import TokenNormedLossKit
+
+self.token_loss_kit = TokenNormedLossKit(
+    device=self.device,
+    dp_world_size=self.dp_world_size,
+    dp_group=self.dp_group,
 )
 ```
 
-Preserve inference behavior when labels are absent. If full logits are too
-large, use the recipe's existing chunking or projection strategy.
+### 2. Ensure Unreduced Per-Token Loss
 
-### 3. Count Tokens
+Prefer:
 
-Count token metrics once per micro-batch before backward:
+```python
+model = self.token_loss_kit.apply_chunked_token_loss_patch(model)
+```
 
-- `total_token_num`: valid input tokens, often `attention_mask.sum()`;
-- `effective_token_num`: supervised shifted-label positions where label is not
-  `-100`.
+Use recipe-local loss code only when the model is not compatible with the
+chunked causal-LM patch.
 
-For packed batches, count supervised labels after packing/truncation and ensure
-labels do not create cross-sample targets.
-
-### 4. Accumulate Loss And Token Metrics
-
-Across one gradient-accumulation window, accumulate locally and reduce globally:
-
-- total token count: local sum, distributed sum;
-- effective token count: local sum, distributed sum;
-- loss sum: local sum, distributed sum.
-
-Use an existing recipe accumulator when available. Keep the accumulation boundary
-aligned with the optimizer step.
-
-### 5. Backward And Rescale Gradients
+### 3. Accumulate And Backward
 
 In `backward_step()`:
 
-- advance gradient accumulation and set `ctx.should_sync`;
-- sum the unreduced micro-batch loss;
-- divide by a fixed provisional denominator before backward;
-- store that denominator for the optimizer step;
-- update detached loss/token metrics.
+- advance gradient accumulation and set sync state;
+- compute `local_micro_loss_sum = outputs["loss"].sum()`;
+- read `effective_tokens` and `total_tokens` from the batch;
+- call `accumulate_microbatch(...)`;
+- backward the returned provisional loss.
+
+### 4. Reduce And Rescale
 
 At the synchronized optimizer step:
 
-- reduce accumulated loss/token metrics;
-- require `global_effective_token_count > 0`;
-- unscale the optimizer before editing gradients;
-- multiply gradients by the final token-normalization factor;
-- clip gradients after this rescale and before `scaler.step(...)`.
+```python
+stats = self.token_loss_kit.reduce_window()
+self.scaler.unscale_(self.optimizer)
+self.token_loss_kit.rescale_gradients(self.model.parameters(), stats)
+```
 
-Read `references/loss_accounting.md` for the exact accounting formula and order.
-
-### 6. Log Token Metrics
-
-Log only after an optimizer step completes:
-
-- `train/loss = global_loss_sum / global_effective_token_count`;
-- `tokens/total`;
-- `tokens/effective`;
-- `perf/toks_per_sec`.
-
-Preserve existing recipe logs, learning-rate logs, checkpoint behavior, and MFU
-logging.
+Then clip, step optimizer/scheduler, log reduced stats, and call `reset()`.
 
 ## Validation
 
 ### Soft Validation
 
-Review the modified recipe without running tests:
-
 - model returns unreduced per-token loss when labels are present;
-- inference/generation behavior is unchanged when labels are absent;
-- `effective_token_num` matches shifted supervised labels after masking,
-  truncation, and packing;
-- loss sum, total token count, and effective token count accumulate over the same
-  optimizer-step window;
-- distributed reductions use sum for loss and token counts;
-- gradient rescale happens after metric reduction and unscale, but before
-  clipping and optimizer step;
-- zero supervised-token windows fail or follow the recipe's existing zero-token
-  policy explicitly;
-- `train/loss`, token counters, and throughput use global reduced values;
-- no repo-wide token-normalized loss logic was added to `mvp_engine/`;
-- structure or smoke checks are not reported as completed normalization-impact
-  validation.
+- `effective_tokens` matches shifted supervised labels after masking and
+  packing;
+- all microbatches in one accumulation window use the same backward divisor;
+- `reduce_window()` happens once per synchronized optimizer step;
+- `rescale_gradients()` runs after unscale and before clipping/optimizer step;
+- logs use `TokenLossStats.global_*` values.
 
 ### Hard Validation
 
-Copy and adapt `references/asserts.py` into:
-
-```text
-recipes/<recipe>/tests/skills/token-normalized-loss/asserts.py
-```
-
-Ensure the recipe has `tests/test_structure.py` and `tests/test_smoke.py`; use
-`tests/templates/` if missing.
-
-Run in fresh subagents, in order, stopping on first failure:
+Run:
 
 ```bash
 pytest recipes/<recipe>/tests/test_structure.py -q
 pytest recipes/<recipe>/tests/test_smoke.py -q
 ```
 
-Add optional impact validation only when the task requires proof of numerical
-equivalence. Use a recipe-local file such as:
-
-```text
-recipes/<recipe>/tests/skills/token-normalized-loss/test_normalization_impact.py
-```
-
-The impact test should compare a controlled accumulation window against the
-direct objective `sum(per_token_loss) / global_supervised_tokens`, including
-variable token counts across micro-batches or ranks when feasible.
+Add impact validation only when proving numerical equivalence across variable
+token counts or ranks is part of the task.
 
 ## Output
 
-- State whether the model already returned unreduced loss or needed a patch.
-- State where supervised tokens are counted and where metrics are reduced.
-- State where gradient rescaling happens relative to unscale, clipping, and
-  optimizer step.
-- Report soft validation and hard validation status.
-- Call out any remaining gap, such as no distributed environment for multi-rank
-  token normalization validation.
+- State whether the model used `apply_chunked_token_loss_patch` or a fallback.
+- State where token counts are produced, accumulated, reduced, and logged.
+- Report validation and any distributed-runtime gap.
 
 ## Read On Demand
 
-- `references/asserts.py`: recipe-local hard-validation assertion template.
-- `references/loss_accounting.md`: objective, gradient scaling, and logging rules.
+- `skills/kit/token-loss-kit/SKILL.md`: kit API guide.
+- `references/loss_accounting.md`: objective, gradient scaling, and logging
+  rules.

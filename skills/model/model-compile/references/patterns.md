@@ -8,10 +8,11 @@ Use top-level compile when `forward()` is mostly tensor/model math and all
 required preprocessing is trace-friendly:
 
 ```python
-if self.config.model.compile:
-    model.compile(
-        backend=self.config.model.compile_backend,
-        mode=self.config.model.compile_mode,
+if self.config.model.compile.enabled:
+    model = self.model_kit.apply_model_compile(
+        model,
+        backend=self.config.model.compile.backend,
+        mode=self.config.model.compile.mode,
     )
 ```
 
@@ -25,10 +26,10 @@ as tokenization glue, data-dependent sequence construction, packed metadata
 creation, custom object assembly, or dynamic multimodal routing:
 
 ```python
-if self.config.model.compile:
+if self.config.model.compile.enabled:
     model.backbone.compile(
-        backend=self.config.model.compile_backend,
-        mode=self.config.model.compile_mode,
+        backend=self.config.model.compile.backend,
+        mode=self.config.model.compile.mode,
     )
 ```
 
@@ -40,11 +41,11 @@ complexity without improving throughput.
 If a known unsupported region is small and isolated, keep it eager:
 
 ```python
-if self.config.model.compile:
+if self.config.model.compile.enabled:
     model.visual.forward = torch.compiler.disable(model.visual.forward)
     model.compile(
-        backend=self.config.model.compile_backend,
-        mode=self.config.model.compile_mode,
+        backend=self.config.model.compile.backend,
+        mode=self.config.model.compile.mode,
     )
 ```
 

@@ -1,15 +1,32 @@
-"""Packing utilities for the Basic VLM recipe."""
-
-from __future__ import annotations
+"""Sequence packing utilities for multimodal language model data."""
 
 import random
 from bisect import bisect_left
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 
 import torch
-from mvp_dataset.core import Assembler, RuntimeContext
+from mvp_dataset.core import Assembler
+
+
+@dataclass(frozen=True, slots=True)
+class PackingOptions:
+    """Options for sequence packing in an MLLM dataset pipeline."""
+
+    selection_strategy: str = "best_fit"
+    open_pack_limit: int = 8
+    buffer_size: int = 64
+    defer_finalize: bool = True
+
+    def __post_init__(self) -> None:
+        """Validate packing options."""
+        if self.selection_strategy not in {"random", "best_fit"}:
+            raise ValueError("packing selection_strategy must be one of random/best_fit.")
+        if self.open_pack_limit <= 0:
+            raise ValueError("packing open_pack_limit must be positive.")
+        if self.buffer_size < 0:
+            raise ValueError("packing buffer_size must be non-negative.")
 
 
 @dataclass(slots=True)
@@ -29,14 +46,14 @@ class _PendingSample:
     length: int
 
 
-class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any] | list[dict[str, Any]]]):
+class PackingAssembler(Assembler[dict[str, Any], dict[str, Any] | list[dict[str, Any]]]):
     """Assemble processed samples into longer packed sequences."""
 
     def __init__(
         self,
         *,
         max_length: int,
-        selection_strategy: Literal["random", "best_fit"] = "best_fit",
+        selection_strategy: str = "best_fit",
         open_pack_limit: int = 8,
         pack_buffer_size: int = 64,
         seed: int = 0,
@@ -69,7 +86,6 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any] | list[dict
         sample_length = int(sample["input_ids"].size(0))
         if sample_length <= 0:
             return []
-
         if sample_length >= self.max_length:
             return [self._pack_samples([sample])]
 
@@ -118,55 +134,48 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any] | list[dict
         if not self.pending_samples:
             return []
 
-        max_length = self.max_length
-        open_pack_limit = self.open_pack_limit
-        is_random = self.selection_strategy == "random"
-        rng = self.rng
-        open_packs = self.open_packs
         emitted: list[dict[str, Any] | list[dict[str, Any]]] = []
         made_progress = True
-
         while self.pending_samples and made_progress:
             made_progress = False
             pending = self.pending_samples
             indices = range(len(pending))
-            if is_random:
+            if self.selection_strategy == "random":
                 indices = list(indices)
-                rng.shuffle(indices)
+                self.rng.shuffle(indices)
 
             assigned_indices: list[int] = []
             for idx in indices:
                 sample_length = pending[idx].length
-
                 chosen_pack: _OpenPack | None = None
-                if is_random:
+                chosen_index = -1
+                if self.selection_strategy == "random":
                     candidate_count = 0
-                    for pack in open_packs:
-                        if max_length - pack.total_length >= sample_length:
+                    for pack in self.open_packs:
+                        if self.max_length - pack.total_length >= sample_length:
                             candidate_count += 1
-                            if rng.randrange(candidate_count) == 0:
+                            if self.rng.randrange(candidate_count) == 0:
                                 chosen_pack = pack
                 else:
                     chosen_index = bisect_left(self.open_pack_remaining, sample_length)
-                    if chosen_index < len(open_packs):
-                        chosen_pack = open_packs[chosen_index]
+                    if chosen_index < len(self.open_packs):
+                        chosen_pack = self.open_packs[chosen_index]
 
                 if chosen_pack is not None:
                     chosen_pack.samples.append(pending[idx].sample)
                     chosen_pack.total_length += sample_length
-                    if not is_random:
+                    if self.selection_strategy != "random":
                         self.open_pack_remaining[chosen_index] = self.max_length - chosen_pack.total_length
                         self._restore_best_fit_order(chosen_index)
                     assigned_indices.append(idx)
                     made_progress = True
-                elif len(open_packs) < open_pack_limit:
+                elif len(self.open_packs) < self.open_pack_limit:
                     self._add_open_pack(_OpenPack(samples=[pending[idx].sample], total_length=sample_length))
                     assigned_indices.append(idx)
                     made_progress = True
 
             for idx in sorted(assigned_indices, reverse=True):
                 del pending[idx]
-
             emitted.extend(self._flush_ready_packs())
 
         return emitted
@@ -192,7 +201,6 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any] | list[dict
         """Finalize and remove the most-filled currently open pack."""
         if not self.open_packs:
             raise RuntimeError("Cannot close a pack when no open packs exist.")
-
         if self.selection_strategy == "best_fit":
             return self._pack_samples(self._pop_open_pack(0).samples)
 
@@ -200,14 +208,12 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any] | list[dict
             range(len(self.open_packs)),
             key=lambda idx: self.max_length - self.open_packs[idx].total_length,
         )
-        pack = self._pop_open_pack(chosen_index)
-        return self._pack_samples(pack.samples)
+        return self._pack_samples(self._pop_open_pack(chosen_index).samples)
 
     def _open_pack_from_pending(self) -> None:
         """Start a new open pack from one pending sample."""
         if not self.pending_samples:
             raise RuntimeError("Cannot open a pack from an empty sample pool.")
-
         sample_index = self.rng.randrange(len(self.pending_samples)) if self.selection_strategy == "random" else 0
         pending = self.pending_samples.pop(sample_index)
         self._add_open_pack(_OpenPack(samples=[pending.sample], total_length=pending.length))
@@ -269,15 +275,15 @@ class PackedSampleAssembler(Assembler[dict[str, Any], dict[str, Any] | list[dict
         """Return deferred sample groups or a finalized packed sample."""
         if self.defer_finalize:
             return [dict(sample) for sample in samples]
-        return finalize_packed_sample_group(samples)
+        return finalize_packed_samples(samples)
 
 
-def finalize_packed_sample_group(samples: list[dict[str, Any]]) -> dict[str, Any]:
-    """Convert a packed sample group into the model-facing packed sample dict."""
+def finalize_packed_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    """Convert a packed sample group into token and packing metadata fields."""
     if not samples:
         raise ValueError("Cannot finalize an empty packed sample group.")
 
-    packed_sample: dict[str, Any] = {
+    return {
         "input_ids": torch.cat([sample["input_ids"] for sample in samples], dim=0),
         "attention_mask": torch.cat([sample["attention_mask"] for sample in samples], dim=0),
         "labels": torch.cat([sample["labels"] for sample in samples], dim=0),
@@ -288,40 +294,33 @@ def finalize_packed_sample_group(samples: list[dict[str, Any]]) -> dict[str, Any
             ],
             dim=0,
         ),
+        "source_sample_num": len(samples),
     }
 
-    pixel_values = [sample["pixel_values"] for sample in samples if sample.get("pixel_values") is not None]
-    if pixel_values:
-        packed_sample["pixel_values"] = torch.cat(pixel_values, dim=0)
-    else:
-        packed_sample["pixel_values"] = None
 
-    image_grid_thw = [sample["image_grid_thw"] for sample in samples if sample.get("image_grid_thw") is not None]
-    if image_grid_thw:
-        packed_sample["image_grid_thw"] = torch.cat(image_grid_thw, dim=0)
-    else:
-        packed_sample["image_grid_thw"] = None
-
-    packed_sample["source_sample_num"] = len(samples)
-
-    return packed_sample
-
-
-def build_packed_sample_assembler(
-    assemble_context: RuntimeContext,
+def build_packed_block_causal_mask(
+    pack_segment_ids: torch.Tensor,
     *,
-    max_length: int,
-    selection_strategy: str,
-    open_pack_limit: int,
-    pack_buffer_size: int,
-    defer_finalize: bool = False,
-) -> PackedSampleAssembler:
-    """Build one packing assembler instance for a dataset iterator."""
-    return PackedSampleAssembler(
-        max_length=max_length,
-        selection_strategy=selection_strategy,
-        open_pack_limit=open_pack_limit,
-        pack_buffer_size=pack_buffer_size,
-        seed=assemble_context.sample_shuffle_seed,
-        defer_finalize=defer_finalize,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    """Build a 4D additive mask that isolates packed samples for eager/SDPA backends."""
+    if pack_segment_ids.ndim != 2:
+        raise ValueError(f"Expected 2D pack_segment_ids, got shape {tuple(pack_segment_ids.shape)}.")
+
+    batch_size, sequence_length = pack_segment_ids.shape
+    token_positions = torch.arange(sequence_length, device=pack_segment_ids.device)
+    causal_mask = token_positions.unsqueeze(0) <= token_positions.unsqueeze(1)
+
+    valid_tokens = pack_segment_ids.ne(0)
+    same_segment = pack_segment_ids.unsqueeze(-1) == pack_segment_ids.unsqueeze(-2)
+    allowed = valid_tokens.unsqueeze(-1) & valid_tokens.unsqueeze(-2) & same_segment & causal_mask.unsqueeze(0)
+
+    min_dtype = torch.finfo(dtype).min
+    attention_mask = torch.full(
+        (batch_size, 1, sequence_length, sequence_length),
+        min_dtype,
+        dtype=dtype,
+        device=pack_segment_ids.device,
     )
+    attention_mask.masked_fill_(allowed.unsqueeze(1), 0)
+    return attention_mask

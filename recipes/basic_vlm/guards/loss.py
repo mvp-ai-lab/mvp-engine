@@ -20,10 +20,14 @@ class LossGuard:
         spike_multiplier: float | None,
         window_size: int,
         min_history: int,
+        group: dist.ProcessGroup | None = None,
+        group_world_size: int | None = None,
     ) -> None:
         """Initialize the scalar-loss spike detector."""
         self.spike_multiplier = spike_multiplier
         self.min_history = min_history
+        self.group = group
+        self.group_world_size = group_world_size
         self.loss_history: deque[float] = deque(maxlen=window_size)
 
     def check(self, loss: torch.Tensor | float, *, step: int, token_count: int | None = None) -> bool:
@@ -85,8 +89,9 @@ class PerTokenLossGuard(LossGuard):
                 torch.tensor(float(token_count), device=device, dtype=torch.float64),
             )
         )
-        if dist.is_available() and dist.is_initialized():
-            dist.all_reduce(loss_stats, op=dist.ReduceOp.SUM)
+        should_reduce = self.group_world_size is None or self.group_world_size > 1
+        if should_reduce and dist.is_available() and dist.is_initialized():
+            dist.all_reduce(loss_stats, op=dist.ReduceOp.SUM, group=self.group)
 
         global_token_count = int(loss_stats[1].item())
         if global_token_count <= 0:

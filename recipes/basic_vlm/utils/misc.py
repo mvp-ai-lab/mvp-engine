@@ -4,62 +4,11 @@ from __future__ import annotations
 
 import torch
 import torch.distributed as dist
-from mvp_dataset import TorchLoader
 
+from mvp_engine.kit.mllm import MLLMDataKit, PackingOptions
 from mvp_engine.utils.log import logger
 
 from ..configs.schema import BasicVLMConfig
-from ..dataset.collator import BasicVLMCollator
-from ..dataset.dataset import build_dataset
-
-
-def resolve_batching_config(config: BasicVLMConfig, *, data_parallel_world_size: int) -> None:
-    """Resolve Basic VLM global batch size into micro batch size or accumulation."""
-    target_global_batch_size = config.optim.global_batch_size
-    accumulation_steps = int(config.optim.gradient_accumulation_steps)
-    micro_batch_size = int(config.data.batch_size)
-
-    if target_global_batch_size is None:
-        if accumulation_steps == -1:
-            raise ValueError("`optim.gradient_accumulation_steps=-1` requires `optim.global_batch_size`.")
-        if micro_batch_size == -1:
-            raise ValueError("`data.batch_size=-1` requires `optim.global_batch_size`.")
-        return
-
-    if micro_batch_size == -1 and accumulation_steps == -1:
-        raise ValueError(
-            "`optim.global_batch_size` cannot infer both `data.batch_size` and "
-            "`optim.gradient_accumulation_steps` at the same time."
-        )
-
-    if micro_batch_size == -1:
-        batch_size_divisor = int(data_parallel_world_size) * accumulation_steps
-        if batch_size_divisor <= 0 or target_global_batch_size % batch_size_divisor != 0:
-            raise ValueError(
-                "`data.batch_size` cannot be inferred exactly: "
-                "`optim.global_batch_size` must be divisible by "
-                "`data_parallel_world_size * optim.gradient_accumulation_steps`."
-            )
-        config.data.batch_size = target_global_batch_size // batch_size_divisor
-        micro_batch_size = int(config.data.batch_size)
-    elif accumulation_steps == -1:
-        accumulation_divisor = int(data_parallel_world_size) * micro_batch_size
-        if accumulation_divisor <= 0 or target_global_batch_size % accumulation_divisor != 0:
-            raise ValueError(
-                "`optim.gradient_accumulation_steps` cannot be inferred exactly: "
-                "`optim.global_batch_size` must be divisible by "
-                "`data_parallel_world_size * data.batch_size`."
-            )
-        config.optim.gradient_accumulation_steps = target_global_batch_size // accumulation_divisor
-        accumulation_steps = int(config.optim.gradient_accumulation_steps)
-
-    effective_global_batch_size = int(data_parallel_world_size) * micro_batch_size * accumulation_steps
-    if effective_global_batch_size != target_global_batch_size:
-        raise ValueError(
-            "`optim.global_batch_size` does not match the configured batching: "
-            f"expected {effective_global_batch_size} from "
-            "`data_parallel_world_size * data.batch_size * optim.gradient_accumulation_steps`."
-        )
 
 
 def infer_total_steps(
@@ -68,31 +17,39 @@ def infer_total_steps(
     processor,
     device: torch.device,
     data_parallel_world_size: int,
+    data_parallel_group: dist.ProcessGroup | None = None,
 ) -> int:
     """Infer total optimization steps from one finite Basic VLM data pass."""
     inference_config = config.model_copy(deep=True)
+    data_kit = MLLMDataKit()
 
-    collate_fn = BasicVLMCollator(
+    collate_fn = data_kit.build_collator(
         pad_token_id=int(processor.tokenizer.pad_token_id),
         processor=processor,
     )
-    inference_dataset = build_dataset(
-        inference_config,
+    packing = PackingOptions(
+        selection_strategy=inference_config.data.packing_selection_strategy,
+        open_pack_limit=int(inference_config.data.packing_open_pack_limit),
+        buffer_size=int(inference_config.data.packing_buffer_size),
+    )
+    inference_dataset = data_kit.build_dataset(
+        dataset_path=inference_config.data.train_path,
         processor=processor,
+        max_seq_len=int(inference_config.data.max_seq_len),
         resample=False,
         resolve_refs=False,
+        ref_columns=inference_config.data.ref_columns,
+        seed=int(inference_config.seed),
+        packing=packing,
+        thinking_mode=inference_config.data.thinking_mode,
     )
-    inference_loader = TorchLoader(
+    inference_loader = data_kit.build_dataloader(
         inference_dataset,
+        batch_size=int(inference_config.data.batch_size),
         num_workers=int(inference_config.data.num_workers),
         pin_memory=device.type in ["cuda", "npu"],
-        persistent_workers=False,
-        drop_last=False,
-        multiprocessing_context="spawn",
-    ).batch(
-        batch_size=int(inference_config.data.batch_size),
-        drop_last=True,
         collate_fn=collate_fn,
+        drop_last=False,
     )
 
     local_packed_samples = 0
@@ -105,8 +62,8 @@ def infer_total_steps(
             logger.info(f"Step inference progress: {local_batches} local batches...")
 
     global_packed_samples_tensor = torch.tensor(local_packed_samples, device=device, dtype=torch.long)
-    if dist.is_available() and dist.is_initialized():
-        dist.all_reduce(global_packed_samples_tensor, op=dist.ReduceOp.SUM)
+    if dist.is_available() and dist.is_initialized() and data_parallel_world_size > 1:
+        dist.all_reduce(global_packed_samples_tensor, op=dist.ReduceOp.SUM, group=data_parallel_group)
 
     global_packed_samples = int(global_packed_samples_tensor.item())
     if global_packed_samples <= 0:

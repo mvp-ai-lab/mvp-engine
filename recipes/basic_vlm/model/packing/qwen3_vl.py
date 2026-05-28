@@ -1,7 +1,5 @@
 """Qwen3-VL packed position-id helpers."""
 
-from __future__ import annotations
-
 from typing import Any
 
 import torch
@@ -81,26 +79,25 @@ def _build_qwen3_vl_segment_position_ids(
     vision_start_token_id = int(model_config.vision_start_token_id)
 
     if bool((input_ids == video_token_id).any().item()):
-        raise NotImplementedError("Packed Basic VLM only supports text+image inputs, not video inputs.")
+        raise NotImplementedError("Packed Basic VLM training only supports text+image inputs, not video inputs.")
 
     vision_start_indices = torch.argwhere(input_ids == vision_start_token_id).squeeze(1)
     if vision_start_indices.numel() == 0:
-        return torch.arange(input_ids.shape[0], device=input_ids.device, dtype=torch.long).view(1, -1).expand(3, -1)
+        return _build_text_position_ids(input_ids)
 
     vision_start_indices = vision_start_indices[vision_start_indices + 1 < input_ids.shape[0]]
     vision_tokens = input_ids[vision_start_indices + 1]
     image_count = int((vision_tokens == image_token_id).sum().item())
     if image_count == 0:
-        return torch.arange(input_ids.shape[0], device=input_ids.device, dtype=torch.long).view(1, -1).expand(3, -1)
+        return _build_text_position_ids(input_ids)
     if image_grid_thw is None or int(image_grid_thw.shape[0]) != image_count:
+        grid_count = 0 if image_grid_thw is None else int(image_grid_thw.shape[0])
         raise ValueError(
             "Packed Qwen3-VL segment image metadata mismatch: "
-            f"expected {image_count} image grid rows, got {0 if image_grid_thw is None else int(image_grid_thw.shape[0])}."
+            f"expected {image_count} image grid rows, got {grid_count}."
         )
 
-    # Positions of the first image token for each image: immediately after each vision_start token.
     image_token_positions = (vision_start_indices + 1).tolist()
-
     llm_position_chunks: list[torch.Tensor] = []
     segment_start = 0
 
@@ -128,7 +125,6 @@ def _build_qwen3_vl_segment_position_ids(
         w_index = torch.arange(llm_grid_w, device=input_ids.device, dtype=torch.long).view(1, 1, -1)
         w_index = w_index.expand(llm_grid_t, llm_grid_h, -1).flatten()
         llm_position_chunks.append(torch.stack([t_index, h_index, w_index]) + next_position)
-
         segment_start = image_start + (llm_grid_t * llm_grid_h * llm_grid_w)
 
     if segment_start < input_ids.shape[0]:
@@ -140,3 +136,11 @@ def _build_qwen3_vl_segment_position_ids(
         )
 
     return torch.cat(llm_position_chunks, dim=1)
+
+
+def _build_text_position_ids(input_ids: torch.Tensor) -> torch.Tensor:
+    """Build text-only 3D position ids for one Qwen3-VL segment."""
+    return torch.arange(input_ids.shape[0], device=input_ids.device, dtype=torch.long).view(1, -1).expand(3, -1)
+
+
+__all__ = ["build_qwen3_vl_packed_position_ids"]

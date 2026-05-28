@@ -3,255 +3,157 @@
 from __future__ import annotations
 
 from types import MethodType
-from typing import Any
 
 import torch
 import torch.nn.functional as F
-from transformers import AutoModelForImageTextToText
-from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLCausalLMOutputWithPast
-
-# ---------------------------------------------------------------------------
-# Parameter-name prefixes for each logical sub-module
-# ---------------------------------------------------------------------------
-
-# Visual encoder (ViT): patch embedding + transformer blocks
-VIT_PREFIXES = (
-    "model.visual.patch_embed.",
-    "model.visual.blocks.",
-)
-
-# Projector / merger stack that maps visual tokens into the LLM embedding space
-MERGER_PREFIXES = (
-    "model.visual.merger.",
-    "model.visual.deepstack_merger_list.",
-)
-
-# Language model backbone and output head
-LLM_PREFIXES = (
-    "model.language_model.",
-    "lm_head.",
-)
 
 
-def _matches(name: str, prefixes: tuple[str, ...]) -> bool:
-    """Return whether a parameter name belongs to one configured prefix group."""
-    return any(name.startswith(p) for p in prefixes)
-
-
-def _slice_hidden(hidden_states: torch.Tensor, logits_to_keep: int | torch.Tensor) -> torch.Tensor:
-    """Slice trailing hidden states based on ``logits_to_keep``."""
-    sl = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
-    if hidden_states.dim() == 3:
-        return hidden_states[:, sl, :]
-    return hidden_states[sl, :]
-
-
-def _shift_labels(labels: torch.Tensor, ignore_index: int = -100) -> torch.Tensor:
-    """Pad-right by one token then shift left for causal LM loss."""
-    labels = F.pad(labels, (0, 1), value=ignore_index)
-    return labels[..., 1:].contiguous()
-
-
-def apply_freeze_policy(
-    model,
+def calculate_model_flops(
+    self,
     *,
-    freeze_vit: bool = True,
-    freeze_merger: bool = False,
+    batch_size: int,
+    seq_len: int,
+    attention_mask: torch.Tensor | None = None,
+    image_grid_thw: torch.Tensor | None = None,
+    is_training: bool = True,
+    freeze_vit: bool = False,
+    freeze_projector: bool = False,
     freeze_llm: bool = False,
-) -> dict[str, int]:
-    """Freeze sub-modules of a Qwen3-VL model according to the given flags.
+) -> float:
+    """Estimate local-rank logical Qwen3-VL FLOPs for one prepared batch."""
+    batch = int(batch_size)
+    tokens = int(seq_len)
+    if batch <= 0 or tokens <= 0:
+        raise ValueError("batch_size and seq_len must be > 0")
 
-    Args:
-        model: Loaded Qwen3-VL model instance.
-        freeze_vit: When ``True``, freeze the visual encoder (ViT blocks +
-            patch embedding).
-        freeze_merger: When ``True``, freeze the projector / merger modules
-            (``model.visual.merger`` and ``model.visual.deepstack_merger_list``).
-        freeze_llm: When ``True``, freeze the language model backbone and the
-            LM head (``model.language_model`` and ``lm_head``).
+    text_cfg = self.config.text_config
+    vision_cfg = self.config.vision_config
 
-    Returns:
-        A dict mapping sub-module name to the number of frozen parameters.
-    """
-    frozen_counts: dict[str, int] = {"vit": 0, "merger": 0, "llm": 0}
+    text_layers = int(text_cfg.num_hidden_layers)
+    text_hidden = int(text_cfg.hidden_size)
+    text_intermediate = int(text_cfg.intermediate_size)
+    vocab = int(text_cfg.vocab_size)
+    attention_token_pairs = _count_attention_token_pairs(
+        batch=batch,
+        tokens=tokens,
+        attention_mask=attention_mask,
+        attn_implementation=getattr(self.config, "_attn_implementation", None),
+    )
 
-    for name, parameter in model.named_parameters():
-        if freeze_vit and _matches(name, VIT_PREFIXES):
-            parameter.requires_grad = False
-            frozen_counts["vit"] += parameter.numel()
-        elif freeze_merger and _matches(name, MERGER_PREFIXES):
-            parameter.requires_grad = False
-            frozen_counts["merger"] += parameter.numel()
-        elif freeze_llm and _matches(name, LLM_PREFIXES):
-            parameter.requires_grad = False
-            frozen_counts["llm"] += parameter.numel()
+    language_per_layer = (
+        8 * batch * tokens * text_hidden * text_hidden
+        + 4 * attention_token_pairs * text_hidden
+        + 6 * batch * tokens * text_hidden * text_intermediate
+    )
+    language_flops = float(text_layers * language_per_layer + 2 * batch * tokens * text_hidden * vocab)
 
-    return frozen_counts
+    vit_flops, merger_flops = _calculate_vision_flops(
+        vision_cfg=vision_cfg,
+        image_grid_thw=image_grid_thw,
+    )
 
+    if not is_training:
+        return language_flops + vit_flops + merger_flops
 
-def apply_model_gradient_checkpointing(
-    model,
-    *,
-    enabled: bool = False,
-    use_reentrant: bool = False,
-):
-    """Enable the model's built-in gradient checkpointing when requested by the recipe."""
+    upstream_of_llm_is_trained = (not freeze_projector) or (not freeze_vit)
+    upstream_of_merger_is_trained = not freeze_vit
 
-    if not enabled:
-        return model
+    llm_mult = 3.0 if not freeze_llm else (2.0 if upstream_of_llm_is_trained else 1.0)
+    merger_mult = 3.0 if not freeze_projector else (2.0 if upstream_of_merger_is_trained else 1.0)
+    vit_mult = 3.0 if not freeze_vit else 1.0
 
-    if not hasattr(model, "gradient_checkpointing_enable"):
-        raise AttributeError(f"{model.__class__.__name__} does not support gradient checkpointing.")
-    model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": use_reentrant})
-    setattr(model.config, "use_cache", False)
-    return model
+    return language_flops * llm_mult + merger_flops * merger_mult + vit_flops * vit_mult
 
 
-def upcast_trainable_params_to_fp32(model):
-    """Storing trainable weights in fp32 master precision."""
-    for _, parameter in model.named_parameters():
-        if parameter.requires_grad and parameter.dtype != torch.float32:
-            parameter.data = parameter.data.to(dtype=torch.float32)
-    return model
-
-
-def inject_model_flops_calculation(model):
-    """Inject per-process FLOPs estimation onto the loaded Qwen3-VL model."""
-
-    def calculate_model_flops(
-        self,
-        *,
-        batch_size: int,
-        seq_len: int,
-        attention_mask: torch.Tensor | None = None,
-        image_grid_thw: torch.Tensor | None = None,
-        is_training: bool = True,
-        freeze_vit: bool = False,
-        freeze_merger: bool = False,
-        freeze_llm: bool = False,
-    ) -> float:
-        """Estimate local-rank training or inference FLOPs for one batch."""
-        batch = int(batch_size)
-        tokens = int(seq_len)
-        if batch <= 0 or tokens <= 0:
-            raise ValueError("batch_size and seq_len must be > 0")
-
-        text_cfg = self.config.text_config
-        vision_cfg = self.config.vision_config
-
-        text_layers = int(text_cfg.num_hidden_layers)
-        text_hidden = int(text_cfg.hidden_size)
-        text_intermediate = int(text_cfg.intermediate_size)
-        vocab = int(text_cfg.vocab_size)
-        attention_token_pairs = batch * tokens * tokens
-        if attention_mask is not None and attention_mask.ndim == 2:
-            mask = attention_mask.detach().to(device="cpu", dtype=torch.long)
-            max_mask_value = int(mask.max().item()) if mask.numel() > 0 else 0
-            if max_mask_value > 1:
-                attention_token_pairs = 0
-                for row in mask:
-                    segment_ids = row[row > 0]
-                    if segment_ids.numel() == 0:
-                        continue
-                    segment_lengths = torch.bincount(segment_ids, minlength=max_mask_value + 1)[1:]
-                    attention_token_pairs += int(torch.square(segment_lengths).sum().item())
-            elif getattr(self.config, "_attn_implementation", None) == "flash_attention_2":
-                valid_lengths = mask.ne(0).sum(dim=-1)
-                attention_token_pairs = int(torch.square(valid_lengths).sum().item())
-
-            if attention_token_pairs <= 0:
-                raise ValueError("attention_mask must contain at least one valid token")
-
-        language_per_layer = (
-            8 * batch * tokens * text_hidden * text_hidden
-            + 4 * attention_token_pairs * text_hidden
-            # SwiGLU has three matrices: gate_proj, up_proj (H→I each) and down_proj (I→H),
-            # so MLP FLOPs are 6×B×T×H×I, not 4× as in a standard two-layer FFN.
-            + 6 * batch * tokens * text_hidden * text_intermediate
-        )
-        language_flops = float(text_layers * language_per_layer + 2 * batch * tokens * text_hidden * vocab)
-
-        vit_flops = 0.0
-        merger_flops = 0.0
-        if image_grid_thw is not None and image_grid_thw.numel() > 0:
-            grid = image_grid_thw.detach().to(device="cpu", dtype=torch.long).reshape(-1, 3)
-            if torch.any(grid <= 0):
-                raise ValueError("image_grid_thw must contain positive temporal/height/width values")
-
-            temporal_tokens = grid[:, 0]
-            height_tokens = grid[:, 1]
-            width_tokens = grid[:, 2]
-
-            visual_seq_lens = temporal_tokens * height_tokens * width_tokens
-            merged_seq_lens = (
-                temporal_tokens
-                * (height_tokens // int(vision_cfg.spatial_merge_size))
-                * (width_tokens // int(vision_cfg.spatial_merge_size))
-            )
-
-            if torch.any(height_tokens % int(vision_cfg.spatial_merge_size) != 0) or torch.any(
-                width_tokens % int(vision_cfg.spatial_merge_size) != 0
-            ):
-                raise ValueError("image_grid_thw height/width must be divisible by spatial_merge_size")
-
-            vision_hidden = int(vision_cfg.hidden_size)
-            vision_layers = int(vision_cfg.depth)
-            vision_intermediate = int(vision_cfg.intermediate_size)
-            vision_out_hidden = int(vision_cfg.out_hidden_size)
-            channels = int(vision_cfg.in_channels)
-            patch_size = int(vision_cfg.patch_size)
-            temporal_patch_size = int(vision_cfg.temporal_patch_size)
-            spatial_merge_size = int(vision_cfg.spatial_merge_size)
-
-            patch_dim = channels * temporal_patch_size * patch_size * patch_size
-            patch_embed_flops = 2 * int(visual_seq_lens.sum().item()) * patch_dim * vision_hidden
-            attention_projection_flops = 8 * vision_hidden * vision_hidden * int(visual_seq_lens.sum().item())
-            attention_scores_flops = 4 * vision_hidden * int(torch.square(visual_seq_lens).sum().item())
-            mlp_flops = 4 * vision_hidden * vision_intermediate * int(visual_seq_lens.sum().item())
-            vision_encoder_flops = vision_layers * (attention_projection_flops + attention_scores_flops + mlp_flops)
-
-            merger_input_hidden = vision_hidden * (spatial_merge_size**2)
-            vit_flops = float(patch_embed_flops + vision_encoder_flops)
-            merger_flops = float(2 * int(merged_seq_lens.sum().item()) * merger_input_hidden * vision_out_hidden)
-
-        if not is_training:
-            return language_flops + vit_flops + merger_flops
-
-        # Per-component backward multipliers.
-        #
-        # Gradient flow order (backward): loss → LLM → merger → ViT → pixels
-        # Pixel values never require grad, so activation gradients always stop at ViT's input —
-        # even when ViT is trainable.
-        #
-        # Rules:
-        #   - Not frozen: weight grads + activation grads → 3× forward FLOPs
-        #   - Frozen, but upstream module is trainable: activation grads still flow through
-        #     this module so that upstream weight grads can be computed → 2× forward FLOPs
-        #   - Frozen, nothing upstream is trainable (or this is ViT whose input has no grad):
-        #     no backward at all → 1× forward FLOPs
-        upstream_of_llm_is_trained = (not freeze_merger) or (not freeze_vit)
-        upstream_of_merger_is_trained = not freeze_vit
-
-        llm_mult = 3.0 if not freeze_llm else (2.0 if upstream_of_llm_is_trained else 1.0)
-        merger_mult = 3.0 if not freeze_merger else (2.0 if upstream_of_merger_is_trained else 1.0)
-        # ViT: input (pixel values) never requires grad, so activation grad never propagates
-        # further back regardless of upstream modules.  Backward only happens for weight grads.
-        vit_mult = 3.0 if not freeze_vit else 1.0
-
-        return language_flops * llm_mult + merger_flops * merger_mult + vit_flops * vit_mult
-
+def patch_qwen3vl_model_flops(model):
+    """Inject Qwen3-VL FLOPs estimation into the runtime model instance."""
     model.calculate_model_flops = MethodType(calculate_model_flops, model)
     return model
 
 
-def apply_qwen3_vl_compat_patches(model):
+def _count_attention_token_pairs(
+    *,
+    batch: int,
+    tokens: int,
+    attention_mask: torch.Tensor | None,
+    attn_implementation: str | None,
+) -> int:
+    """Count logical attention token pairs for padded or packed text tokens."""
+    attention_token_pairs = batch * tokens * tokens
+    if attention_mask is None or attention_mask.ndim != 2:
+        return int(attention_token_pairs)
+
+    mask = attention_mask.detach().to(device="cpu", dtype=torch.long)
+    max_mask_value = int(mask.max().item()) if mask.numel() > 0 else 0
+    if max_mask_value > 1:
+        attention_token_pairs = 0
+        for row in mask:
+            segment_ids = row[row > 0]
+            if segment_ids.numel() == 0:
+                continue
+            segment_lengths = torch.bincount(segment_ids, minlength=max_mask_value + 1)[1:]
+            attention_token_pairs += int(torch.square(segment_lengths).sum().item())
+    elif attn_implementation == "flash_attention_2":
+        valid_lengths = mask.ne(0).sum(dim=-1)
+        attention_token_pairs = int(torch.square(valid_lengths).sum().item())
+
+    if attention_token_pairs <= 0:
+        raise ValueError("attention_mask must contain at least one valid token")
+    return int(attention_token_pairs)
+
+
+def _calculate_vision_flops(
+    *,
+    vision_cfg,
+    image_grid_thw: torch.Tensor | None,
+) -> tuple[float, float]:
+    """Estimate Qwen3-VL vision encoder and merger FLOPs."""
+    if image_grid_thw is None or image_grid_thw.numel() == 0:
+        return 0.0, 0.0
+
+    grid = image_grid_thw.detach().to(device="cpu", dtype=torch.long).reshape(-1, 3)
+    if torch.any(grid <= 0):
+        raise ValueError("image_grid_thw must contain positive temporal/height/width values")
+
+    temporal_tokens = grid[:, 0]
+    height_tokens = grid[:, 1]
+    width_tokens = grid[:, 2]
+    spatial_merge_size = int(vision_cfg.spatial_merge_size)
+
+    if torch.any(height_tokens % spatial_merge_size != 0) or torch.any(width_tokens % spatial_merge_size != 0):
+        raise ValueError("image_grid_thw height/width must be divisible by spatial_merge_size")
+
+    visual_seq_lens = temporal_tokens * height_tokens * width_tokens
+    merged_seq_lens = temporal_tokens * (height_tokens // spatial_merge_size) * (width_tokens // spatial_merge_size)
+
+    vision_hidden = int(vision_cfg.hidden_size)
+    vision_layers = int(vision_cfg.depth)
+    vision_intermediate = int(vision_cfg.intermediate_size)
+    vision_out_hidden = int(vision_cfg.out_hidden_size)
+    channels = int(vision_cfg.in_channels)
+    patch_size = int(vision_cfg.patch_size)
+    temporal_patch_size = int(vision_cfg.temporal_patch_size)
+
+    visual_tokens = int(visual_seq_lens.sum().item())
+    patch_dim = channels * temporal_patch_size * patch_size * patch_size
+    patch_embed_flops = 2 * visual_tokens * patch_dim * vision_hidden
+    attention_projection_flops = 8 * vision_hidden * vision_hidden * visual_tokens
+    attention_scores_flops = 4 * vision_hidden * int(torch.square(visual_seq_lens).sum().item())
+    mlp_flops = 4 * vision_hidden * vision_intermediate * visual_tokens
+    vision_encoder_flops = vision_layers * (attention_projection_flops + attention_scores_flops + mlp_flops)
+
+    merger_input_hidden = vision_hidden * (spatial_merge_size**2)
+    vit_flops = float(patch_embed_flops + vision_encoder_flops)
+    merger_flops = float(2 * int(merged_seq_lens.sum().item()) * merger_input_hidden * vision_out_hidden)
+    return vit_flops, merger_flops
+
+
+def patch_qwen3vl_conv3d(model):
     """Apply recipe-local Qwen3-VL vision/runtime compatibility patches.
 
     These are behavior patches, not optimizations:
     - run vision patch embedding as fp32 linear math instead of Conv3D
-    - use a vision RoPE helper compatible with the current Qwen3-VL tensor layout
     """
-    from transformers.models.qwen3_vl import modeling_qwen3_vl
 
     def patch_embed_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """Run Qwen3-VL vision patch projection in fp32 and cast back."""
@@ -268,137 +170,6 @@ def apply_qwen3_vl_compat_patches(model):
 
         return hidden_states.to(dtype=target_dtype)
 
-    def rotate_half(x: torch.Tensor) -> torch.Tensor:
-        """Rotate the last dimension halves for RoPE application."""
-        x1 = x[..., : x.shape[-1] // 2]
-        x2 = x[..., x.shape[-1] // 2 :]
-        return torch.cat((-x2, x1), dim=-1)
-
-    def apply_rotary_pos_emb_vision(
-        q: torch.Tensor,
-        k: torch.Tensor,
-        cos: torch.Tensor,
-        sin: torch.Tensor,
-        unsqueeze_dim: int = 1,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Apply vision RoPE embedding to query/key tensors."""
-        cos = cos.unsqueeze(unsqueeze_dim)
-        sin = sin.unsqueeze(unsqueeze_dim)
-        q_embed = (q * cos) + (rotate_half(q) * sin)
-        k_embed = (k * cos) + (rotate_half(k) * sin)
-        return q_embed, k_embed
-
     model.model.visual.patch_embed.forward = MethodType(patch_embed_forward, model.model.visual.patch_embed)
-    modeling_qwen3_vl.apply_rotary_pos_emb_vision = apply_rotary_pos_emb_vision
-
-    return model
-
-
-def inject_sum_loss_forward(model, *, chunk_size: int = 4096):
-    """Patch Qwen3-VL forward to return unreduced per-token CE loss."""
-
-    def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        position_ids=None,
-        past_key_values=None,
-        inputs_embeds=None,
-        labels=None,
-        pixel_values=None,
-        pixel_values_videos=None,
-        image_grid_thw=None,
-        video_grid_thw=None,
-        cache_position=None,
-        logits_to_keep=0,
-        **kwargs,
-    ):
-        """Forward Qwen3-VL with chunked per-token CE instead of mean loss."""
-        outputs = self.model(
-            input_ids=input_ids,
-            pixel_values=pixel_values,
-            pixel_values_videos=pixel_values_videos,
-            image_grid_thw=image_grid_thw,
-            video_grid_thw=video_grid_thw,
-            position_ids=position_ids,
-            attention_mask=attention_mask,
-            past_key_values=past_key_values,
-            inputs_embeds=inputs_embeds,
-            cache_position=cache_position,
-            **kwargs,
-        )
-        hidden_states = outputs[0]
-
-        loss = None
-        logits = None
-        if labels is not None:
-            hs = _slice_hidden(hidden_states, logits_to_keep)
-            shift_labels = _shift_labels(labels)
-            flat_hs = hs.reshape(-1, hs.size(-1))
-            flat_labels = shift_labels.reshape(-1)
-            lm_head_bias = getattr(self.lm_head, "bias", None)
-
-            loss_chunks: list[torch.Tensor] = []
-            for start in range(0, flat_hs.size(0), chunk_size):
-                end = min(start + chunk_size, flat_hs.size(0))
-                chunk_logits = F.linear(flat_hs[start:end], self.lm_head.weight, lm_head_bias)
-                loss_chunks.append(
-                    F.cross_entropy(
-                        chunk_logits,
-                        flat_labels[start:end],
-                        ignore_index=-100,
-                        reduction="none",
-                    )
-                )
-                del chunk_logits
-            loss = torch.cat(loss_chunks, dim=0)
-        else:
-            logits = self.lm_head(_slice_hidden(hidden_states, logits_to_keep))
-
-        return Qwen3VLCausalLMOutputWithPast(
-            loss=loss,
-            logits=logits,
-            past_key_values=outputs.past_key_values,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
-            rope_deltas=outputs.rope_deltas,
-        )
-
-    model.forward = MethodType(forward, model)
-    return model
-
-
-def build_qwen3_vl_model(model_config: Any):
-    """Load the Qwen3-VL model checkpoint and apply the configured freeze policy.
-
-    Args:
-        model_config: Recipe model config (``BasicVLMModelConfig``) with load
-            and freeze settings.
-
-    Returns:
-        The initialized Qwen3-VL model.
-    """
-    model = AutoModelForImageTextToText.from_pretrained(
-        model_config.pretrained_model_name_or_path,
-        trust_remote_code=True,
-        torch_dtype="auto",
-        attn_implementation=model_config.attn_implementation,
-    )
-    model = apply_qwen3_vl_compat_patches(model)
-    model = inject_model_flops_calculation(model)
-    model = apply_model_gradient_checkpointing(
-        model,
-        enabled=bool(model_config.gradient_checkpointing.enabled),
-        use_reentrant=bool(model_config.gradient_checkpointing.use_reentrant),
-    )
-    model = inject_sum_loss_forward(model)
-
-    apply_freeze_policy(
-        model,
-        freeze_vit=model_config.freeze_vit,
-        freeze_merger=model_config.freeze_merger,
-        freeze_llm=model_config.freeze_llm,
-    )
-    model = upcast_trainable_params_to_fp32(model)
 
     return model

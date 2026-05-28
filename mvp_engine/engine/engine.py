@@ -1,3 +1,5 @@
+"""Base training engine pipeline and hook definitions."""
+
 import logging
 import os
 import platform
@@ -111,6 +113,7 @@ class Engine(ABC):
     timer: Timer  # timer for tracking per-batch time and ETA
 
     def __init__(self, config: DictConfig):
+        """Validate config and initialize distributed, runtime, seed, and logging state."""
         self.config = self.prepare_config(config)
         self.prepare_parallel()
         self.prepare_runtime_info()
@@ -124,6 +127,7 @@ class Engine(ABC):
 
     @property
     def device(self) -> torch.device:
+        """Return the torch device assigned to the current local rank."""
         return get_device(index=get_local_rank())
 
     @property
@@ -179,6 +183,7 @@ class Engine(ABC):
 
     @_accumulate_step.setter
     def _accumulate_step(self, value: int) -> None:
+        """Set the current accumulation micro-step for backward compatibility."""
         self.ga_state.micro_step = int(value)
 
     @property
@@ -483,7 +488,17 @@ class Engine(ABC):
                     with self.timer.scope("exec_time"):
                         self.train_exec_step(ctx)
 
+                    if not ctx.optimizer_step_completed:
+                        continue
+
+                    assert ctx.outputs is not None, "The forward step must populate ctx.outputs."
+
+                    self.step += 1
+                    self.timer.tick()
+
                     self.train_post_step(ctx)
+
+                    self.save()
             except StopIteration:
                 self.epoch += 1
                 logger.info(f"Starting epoch {self.epoch}...")
@@ -543,14 +558,6 @@ class Engine(ABC):
 
     def train_post_step(self, ctx: TrainStepContext) -> None:
         """Log optimizer-step metrics and save checkpoints."""
-        if not ctx.optimizer_step_completed:
-            return
-
-        assert ctx.outputs is not None, "The forward step must populate ctx.outputs."
-
-        self.step += 1
-        self.timer.tick()
-
         other_logs = {
             "eta": self.timer.eta_string,
             "perf/data_time": self.timer.get_scope_time("data_time"),
@@ -566,8 +573,6 @@ class Engine(ABC):
             step=self.step,
             total_steps=self.total_steps,
         )
-
-        self.save()
 
     def after_train(self) -> None:
         """Finalize training with checkpoint save, evaluation, and cleanup."""
