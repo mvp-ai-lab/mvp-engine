@@ -67,7 +67,7 @@ Heavy media IO, such as video frame sampling, should happen in
 ### 4. Keep Packing Integrated
 
 The standard MLLM DataKit pipeline is always packed. Do not add a `data.packing`
-boolean for Basic VLM style recipes. Expose only active `PackingOptions` knobs.
+boolean for OpenBee-style recipes. Expose only active `PackingOptions` knobs.
 
 Use `skills/data/vlm-packing/SKILL.md` only for model-specific packed attention,
 position ids, or accounting behavior outside DataKit's generic packing.

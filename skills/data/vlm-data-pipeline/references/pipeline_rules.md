@@ -14,7 +14,7 @@ Primary kit references:
   behavior;
 - `mvp_engine/kit/mllm/data/guard.py`: staged raw and processed sample guards.
 
-`recipes/basic_vlm/engine/basic_vlm_engine.py` and `recipes/basic_vlm/utils/misc.py`
+`recipes/openbee/engine/openbee_engine.py` and `recipes/openbee/utils/misc.py`
 show one recipe's kit wiring and total-step inference.
 
 Use these as patterns, but replace processor-specific details for non-Qwen

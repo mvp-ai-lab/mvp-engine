@@ -8,7 +8,7 @@ to build a resampled parquet training dataset.
 
 This recipe intentionally does not use the kit layer in its implementation. It
 is kept as the smallest explicit Qwen3-VL training example; kit-based MLLM
-orchestration is demonstrated in `recipes/basic_vlm`.
+orchestration is demonstrated in `recipes/openbee`.
 
 ## What it does
 
