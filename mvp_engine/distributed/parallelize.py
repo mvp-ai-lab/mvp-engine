@@ -45,6 +45,7 @@ def parallelize_model(
                 - Additional kwargs passed to DistributedDataParallel constructor
 
             For FSDP2:
+                - sequence_parallel: Enables sequence parallel layouts on the tensor mesh before FSDP2 (default: False)
                 - target_classes: List of module class names to wrap with FSDP2 (default: [])
                 - mesh: DeviceMesh for data parallel dimension (auto-set from first two dims of the device_mesh)
                 - reshard_after_forward: Resharding strategy (default: None)
@@ -74,6 +75,14 @@ def parallelize_model(
     if OmegaConf.is_config(backend_kwargs):
         backend_kwargs = OmegaConf.to_container(backend_kwargs, resolve=True)
 
+    backend_kwargs = dict(backend_kwargs)
+    sequence_parallel = bool(backend_kwargs.pop("sequence_parallel", False))
+    tensor_size = device_mesh["tensor"].size()
+    shard_size = device_mesh["shard"].size()
+
+    if sequence_parallel and tensor_size <= 1:
+        raise ValueError("Sequence parallel requires an active tensor mesh with parallel.mesh.tensor > 1.")
+
     if device_mesh["shard"].shape[0] * device_mesh["tensor"].shape[0] == 1:
         # For Pure DDP: [N, 1, 1]
         from torch.nn.parallel import DistributedDataParallel
@@ -84,9 +93,10 @@ def parallelize_model(
         parallelized_model = DistributedDataParallel(model, **backend_kwargs)
     else:
         # For FSDP2: [N, M, ...]
-        if device_mesh["shard"].size() == 1 and device_mesh["tensor"].size() > 1:
+        if shard_size == 1 and tensor_size > 1:
             raise ValueError(
-                f"Invalid device mesh shape {device_mesh.shape}. Tensor parallel should be used with FSDP rather than the pure DDP"
+                f"Invalid device mesh shape {device_mesh.shape}. "
+                "Tensor/sequence parallel should be used with FSDP rather than the pure DDP"
             )
 
         from mvp_engine.distributed.fsdp2 import parallelize_model_with_fsdp2
@@ -102,6 +112,7 @@ def parallelize_model(
             applied = parallelize_model_with_tensor_parallel(
                 model,
                 tp_mesh,
+                sequence_parallel=sequence_parallel,
             )
             logger.info(f"Applied Tensor Parallel to {len(applied)} modules on {model.__class__.__name__}.")
 
