@@ -177,6 +177,7 @@ checkpoints/
 *.pth
 slurmlogs
 .ruff_cache
+.tmp_slurm/
 
 # macOS
 .DS_Store

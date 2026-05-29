@@ -1,0 +1,69 @@
+dev_mode: true
+engine: Qwen3LMEngine
+
+seed: 7
+deterministic: false
+
+project:
+  name: "qwen3_lm-smoke"
+  dir: "./outputs"
+
+log:
+  interval: 1
+  backends: ["terminal"]
+  accumulation_size: 1
+  timer_window_size: 4
+
+parallel:
+  mesh:
+    replicate: -1
+    shard: 1
+    tensor: 1
+
+data:
+  source_type: "jsonl"
+  source_format: "jsonl"
+  train_path: "./recipes/qwen3_lm/data/smoke.jsonl"
+  thinking_mode: "non-empty"
+  packing: true
+  packing_selection_strategy: "best_fit"
+  packing_open_pack_limit: 8
+  packing_buffer_size: 64
+  max_seq_len: 128
+  batch_size: 1
+  num_workers: 0
+
+model:
+  pretrained_model_name_or_path: "tiny-random-qwen3"
+  tokenizer_name_or_path: null
+  attn_implementation: "eager"
+  gradient_checkpointing:
+    enabled: false
+    use_reentrant: false
+  compile: false
+  loss_chunk_size: 512
+  upcast_trainable_params: true
+  tiny_random: true
+  tiny_vocab_size: 256
+  tiny_hidden_size: 64
+  tiny_intermediate_size: 128
+  tiny_num_hidden_layers: 2
+  tiny_num_attention_heads: 4
+  tiny_num_key_value_heads: 2
+
+optim:
+  lr: 1.0e-4
+  weight_decay: 0.0
+  gradient_accumulation_steps: 1
+  mixed_precision: "fp32"
+  warmup_ratio: 0.0
+  clip_grad_norm: 1.0
+
+loop:
+  policy: "iter"
+  total_steps: 2
+
+checkpoint:
+  interval: 100
+  keep_n: 1
+  hf_enable: false
