@@ -20,6 +20,7 @@ except Exception:
     _LigerCrossEntropyLoss = None
     _HAS_LIGER_CE = False
 
+_HAS_LIGER_CE = False
 # ---------------------------------------------------------------------------
 # Parameter-name prefixes for each logical sub-module
 # ---------------------------------------------------------------------------

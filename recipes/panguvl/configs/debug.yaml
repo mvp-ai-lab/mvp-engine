@@ -21,7 +21,7 @@ parallel:
     tensor: 1
 
 data:
-  train_path: "/home/k00885418/projects/mvp-engine/data/Open-Bee/Bee-Training-Data-Stage1-Stage2-mm-only/synthdog_zh_processed_new/**/*.parquet"
+  train_path: "/home/k00885418/projects/mvp-engine/data/Open-Bee/Bee-Training-Data-Stage1-Stage2-mm-only/stage1/**/*.parquet"
   enable_thinking: "non-empty"
   cache: false
   shuffle_buffer: 1000
@@ -57,7 +57,7 @@ optim:
 
 loop:
   policy: "iter"
-  total_steps: 100
+  total_steps: -1
 
 checkpoint:
   interval: 100

@@ -33,6 +33,8 @@ from ..model import build_qwen3_vl_model
 from ..model.packing import apply_packed_fa2_patch, prepare_packed_model_inputs
 from ..utils.log.mfu import build_mfu_log
 
+torch.set_float32_matmul_precision("high")
+
 
 @ENGINE_REGISTRY.register()
 class PanguvlEngine(Engine):

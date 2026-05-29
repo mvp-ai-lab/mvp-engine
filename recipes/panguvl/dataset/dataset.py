@@ -11,6 +11,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+import imagesize
 import torch
 from mvp_dataset import Dataset, set_logger
 from mvp_dataset.core import RuntimeContext
@@ -576,10 +577,10 @@ def lightweight_process_sample(
                 return resolve_image_size(image_path)
 
             raise ValueError("contains an invalid image record.")
-
         if isinstance(image, bytes):
-            with Image.open(io.BytesIO(image)) as decoded:
-                width, height = decoded.size
+            # with Image.open(io.BytesIO(image)) as decoded:
+            #     width, height = decoded.size
+            width, height = imagesize.get(io.BytesIO(image))
             return height, width
 
         if not isinstance(image, str):
