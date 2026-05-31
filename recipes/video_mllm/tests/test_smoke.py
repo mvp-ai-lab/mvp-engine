@@ -1,0 +1,113 @@
+"""Smoke tests for the video MLLM recipe.
+
+Runs the real ``engine.train()`` path in a spawned distributed worker. Requires
+a GPU/NPU, the ``av`` (PyAV) package, the Qwen3-VL checkpoint referenced by the
+config, and a small ``data.train_path`` dataset. Expected to be run on the
+training cluster, not in a CPU-only environment.
+"""
+
+import traceback
+from multiprocessing import get_context
+from pathlib import Path
+from queue import Empty
+
+from mvp_engine.testing.utils import (
+    distributed_env,
+    find_free_port,
+    inject_engine_assert_hooks,
+    load_recipe_skill_asserts,
+    load_smoke_test_config,
+)
+
+CONFIG_NAME = "smoke"
+WORLD_SIZE = 1
+CONFIG_OVERRIDES: tuple[str, ...] = ("loop.total_steps=2", "log.interval=1")
+PROCESS_TIMEOUT_SECONDS = 12000
+
+
+def smoke_process(
+    rank: int,
+    world_size: int,
+    master_port: int,
+    config_name: str,
+    output_dir: Path,
+    config_overrides: tuple[str, ...],
+    result_queue,
+) -> None:
+    """Run one distributed smoke worker and report its traceback to the parent."""
+    try:
+        with distributed_env(
+            rank=rank,
+            world_size=world_size,
+            local_rank=rank,
+            master_port=master_port,
+            master_addr="127.0.0.1",
+        ):
+            from mvp_engine.engine import ENGINE_REGISTRY
+            from mvp_engine.launch import _import_recipe_modules
+
+            recipe_root = Path(__file__).resolve().parent.parent
+            _import_recipe_modules(recipe_root)
+            config = load_smoke_test_config(
+                recipe_root,
+                config_name,
+                output_dir=output_dir,
+                config_overrides=config_overrides,
+            )
+
+            engine = ENGINE_REGISTRY.get(config.engine)(config)
+            inject_engine_assert_hooks(engine, load_recipe_skill_asserts(recipe_root))
+            engine.train()
+
+        result_queue.put((rank, True, ""))
+    except BaseException:
+        result_queue.put((rank, False, traceback.format_exc()))
+        raise
+
+
+def test_smoke(tmp_path: Path):
+    """Run recipe smoke validation across ``WORLD_SIZE`` spawned workers."""
+    master_port = find_free_port()
+    output_dir = tmp_path / "smoke_outputs"
+
+    context = get_context("spawn")
+    result_queue = context.Queue()
+
+    processes = [
+        context.Process(
+            target=smoke_process,
+            args=(
+                rank,
+                WORLD_SIZE,
+                master_port,
+                CONFIG_NAME,
+                output_dir,
+                CONFIG_OVERRIDES,
+                result_queue,
+            ),
+        )
+        for rank in range(WORLD_SIZE)
+    ]
+    for process in processes:
+        process.start()
+
+    for process in processes:
+        process.join(PROCESS_TIMEOUT_SECONDS)
+
+    errors = []
+    for process in processes:
+        if process.is_alive():
+            process.terminate()
+            errors.append(f"rank process {process.pid} timed out.")
+        elif process.exitcode != 0:
+            errors.append(f"rank process {process.pid} exited with code {process.exitcode}.")
+
+    while True:
+        try:
+            rank, passed, message = result_queue.get_nowait()
+        except Empty:
+            break
+        if not passed:
+            errors.append(f"rank {rank} failed:\n{message}")
+
+    assert not errors, "\n".join(errors)
