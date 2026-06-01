@@ -15,7 +15,7 @@ from mvp_engine.testing.utils import (
     load_smoke_test_config,
 )
 
-CONFIG_NAME = "stage1"
+CONFIG_NAME = "train"
 PROCESS_TIMEOUT_SECONDS = 12000
 
 
@@ -102,4 +102,3 @@ def test_smoke(
             errors.append(f"rank {rank} failed:\n{message}")
 
     assert not errors, "\n".join(errors)
-

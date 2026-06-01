@@ -5,12 +5,14 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .qwen2_5_vl import (
         calculate_model_flops,
+        disable_qwen2_5vl_cache,
         patch_qwen2_5vl_conv3d,
         patch_qwen2_5vl_model_flops,
     )
 
 __all__ = [
     "calculate_model_flops",
+    "disable_qwen2_5vl_cache",
     "patch_qwen2_5vl_conv3d",
     "patch_qwen2_5vl_model_flops",
 ]
@@ -24,4 +26,3 @@ def __getattr__(name: str):
     from . import qwen2_5_vl
 
     return getattr(qwen2_5_vl, name)
-

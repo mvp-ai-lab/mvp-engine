@@ -19,9 +19,7 @@ EXPECTED_FILES = [
     "__init__.py",
     "configs/__init__.py",
     "configs/schema.py",
-    "configs/stage1.yaml",
-    "configs/stage2.yaml",
-    "configs/stage3.yaml",
+    "configs/train.yaml",
     "engine/__init__.py",
     "engine/qwen2_5_vl_engine.py",
     "guards/__init__.py",
@@ -55,6 +53,7 @@ def test_file_structure():
         assert (recipe_root / relative_path).exists(), f"{relative_path} does not exist in the recipe root."
 
     assert not (recipe_root / "dataset").exists(), "image-only recipe should use MLLMDataKit defaults."
+    assert not list((recipe_root / "configs").glob("stage*.yaml")), "single-config recipe should not keep stage YAMLs."
     for asserts_module in load_recipe_skill_asserts(recipe_root):
         if hasattr(asserts_module, "test_file_structure"):
             asserts_module.test_file_structure(recipe_root)
@@ -187,4 +186,3 @@ def test_vision_flops_uses_patch_size_from_config():
     flops_14, _ = _calculate_vision_flops(vision_cfg=SimpleNamespace(**base, patch_size=14), image_grid_thw=grid)
     flops_16, _ = _calculate_vision_flops(vision_cfg=SimpleNamespace(**base, patch_size=16), image_grid_thw=grid)
     assert flops_14 != flops_16
-

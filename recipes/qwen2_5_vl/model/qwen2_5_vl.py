@@ -43,6 +43,22 @@ def patch_qwen2_5vl_model_flops(model: torch.nn.Module) -> torch.nn.Module:
     return model
 
 
+def disable_qwen2_5vl_cache(model: torch.nn.Module) -> torch.nn.Module:
+    """Disable generation KV cache before enabling gradient checkpointing."""
+    for target in (
+        model,
+        getattr(model, "model", None),
+        getattr(getattr(model, "model", None), "language_model", None),
+    ):
+        config = getattr(target, "config", None)
+        if config is not None and hasattr(config, "use_cache"):
+            setattr(config, "use_cache", False)
+    generation_config = getattr(model, "generation_config", None)
+    if generation_config is not None and hasattr(generation_config, "use_cache"):
+        setattr(generation_config, "use_cache", False)
+    return model
+
+
 def calculate_model_flops(
     self,
     *,
@@ -165,7 +181,7 @@ def _estimate_vision_attention_pairs(vision_cfg, grid: torch.Tensor, visual_seq_
 
 __all__ = [
     "calculate_model_flops",
+    "disable_qwen2_5vl_cache",
     "patch_qwen2_5vl_conv3d",
     "patch_qwen2_5vl_model_flops",
 ]
-

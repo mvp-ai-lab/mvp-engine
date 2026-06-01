@@ -24,7 +24,7 @@ from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
 from ..configs.schema import Qwen2_5VLConfig
 from ..guards.loss import PerTokenLossGuard
-from ..model import patch_qwen2_5vl_conv3d, patch_qwen2_5vl_model_flops
+from ..model import disable_qwen2_5vl_cache, patch_qwen2_5vl_conv3d, patch_qwen2_5vl_model_flops
 from ..model.packing import prepare_packed_model_inputs
 from ..utils.misc import infer_total_steps
 
@@ -134,10 +134,12 @@ class Qwen2_5VLEngine(Engine):
                 parameter.data = parameter.data.to(dtype=torch.float32)
 
         if self.config.model.gradient_checkpointing.enabled:
+            model = disable_qwen2_5vl_cache(model)
             model = self.model_kit.apply_gradient_checkpointing(
                 model,
                 use_reentrant=self.config.model.gradient_checkpointing.use_reentrant,
             )
+            model = disable_qwen2_5vl_cache(model)
         if self.config.model.compile.enabled:
             model = self.model_kit.apply_model_compile(
                 model,

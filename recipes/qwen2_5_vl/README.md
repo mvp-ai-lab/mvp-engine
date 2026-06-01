@@ -21,7 +21,7 @@ hf download mvp-lab/mvp-engine-vlm-dev-data \
   --local-dir data/mvp-engine-vlm-dev-data
 ```
 
-The default stage configs read:
+The default config reads:
 
 ```text
 data/mvp-engine-vlm-dev-data/meta.json
@@ -30,18 +30,38 @@ data/mvp-engine-vlm-dev-data/meta.json
 Rows should provide multimodal chat data with image references under `images`
 and image sizes under `image_size` or `img_size`.
 
-## Stages
+## Default Config
 
-- `configs/stage1.yaml`: projector alignment, with ViT and LLM frozen.
-- `configs/stage2.yaml`: full pretraining.
-- `configs/stage3.yaml`: full SFT with the loss spike guard enabled.
+`configs/train.yaml` runs full image-text SFT:
+
+- model: `Qwen/Qwen2.5-VL-7B-Instruct`
+- attention: `flash_attention_2`
+- trainable modules: ViT, projector, and LLM
+- parallelism: 8-way shard mesh by default
+- steps: `loop.total_steps=-1`, inferred from the packed dataset
+
+FlashAttention 2 must be installed for the default attention backend. Use
+`model.attn_implementation=sdpa` as a runtime override when FlashAttention 2 is
+not available.
+
+For projector-only alignment, use overrides such as:
+
+```bash
+model.freeze_vit=true model.freeze_llm=true model.freeze_projector=false
+```
 
 ## Run
 
 ```bash
-torchrun --nproc_per_node=8 -m mvp_engine.launch --config ./recipes/qwen2_5_vl/configs/stage1.yaml
-torchrun --nproc_per_node=8 -m mvp_engine.launch --config ./recipes/qwen2_5_vl/configs/stage2.yaml
-torchrun --nproc_per_node=8 -m mvp_engine.launch --config ./recipes/qwen2_5_vl/configs/stage3.yaml
+torchrun --nproc_per_node=8 -m mvp_engine.launch --config ./recipes/qwen2_5_vl/configs/train.yaml
+```
+
+Short smoke run:
+
+```bash
+torchrun --nproc_per_node=8 -m mvp_engine.launch \
+  --config ./recipes/qwen2_5_vl/configs/train.yaml \
+  loop.total_steps=20
 ```
 
 For one-GPU smoke validation on the cluster:
@@ -50,4 +70,3 @@ For one-GPU smoke validation on the cluster:
 srun -p gpu -A proj_agent --gres gpu:h200:1 \
   pytest recipes/qwen2_5_vl/tests/test_smoke.py -q --run-smoke --world-size=1
 ```
-
