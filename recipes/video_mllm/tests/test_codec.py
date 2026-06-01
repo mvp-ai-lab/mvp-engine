@@ -36,7 +36,6 @@ def test_codec_smoke_config_validates_against_schema():
     assert config.data.cv_reader_required is False
     grid = config.data.codec_frame_size // config.data.codec_patch_size
     assert config.data.codec_k_keep == config.data.codec_packed_frames * grid * grid
-    assert config.model.vision_encoder_backend == "onevision"
     assert config.model.vision_encoder_name_or_path
     assert config.model.freeze_vision_encoder is True
 
@@ -49,20 +48,64 @@ def test_codec_schema_rejects_mismatched_k_keep():
         VideoMLLMConfig.model_validate(container)
 
 
-def test_codec_schema_rejects_native_vision_backend():
-    container = OmegaConf.to_container(OmegaConf.load(CODEC_SMOKE_CONFIG), resolve=True)
-    container["model"]["vision_encoder_backend"] = "qwen3_vl"
-
-    with pytest.raises(ValueError, match="codec_patch"):
-        VideoMLLMConfig.model_validate(container)
-
-
 def test_schema_rejects_unimplemented_keyframe_lowres():
     container = OmegaConf.to_container(OmegaConf.load(CODEC_SMOKE_CONFIG), resolve=True)
     container["data"]["video_encoding_strategy"] = "keyframe_lowres"
 
     with pytest.raises(ValueError, match="keyframe_lowres"):
         VideoMLLMConfig.model_validate(container)
+
+
+def test_build_uniform_sample_expands_dense_video_pads_and_masks_labels(monkeypatch):
+    from recipes.video_mllm.dataset import preprocess as preprocess_module
+    from recipes.video_mllm.dataset.video_encoding import DenseVideoConfig
+
+    config = DenseVideoConfig(num_frames=2, frame_size=4, patch_size=2)
+
+    fake_outputs = {
+        "pixel_values_videos": torch.zeros(1, 3, 2, 4, 4),
+        "video_grid_thw": torch.tensor([[2, 2, 2]], dtype=torch.long),
+    }
+    monkeypatch.setattr(preprocess_module, "process_video_with_dense_frames", lambda *a, **k: fake_outputs)
+
+    class FakeTokenizer:
+        def __call__(self, text, add_special_tokens=False):
+            ids = [200 if ch == "V" else ord(ch) for ch in text]
+            return {"input_ids": ids}
+
+    class FakeProcessor:
+        video_token = "V"
+        video_token_id = 200
+        tokenizer = FakeTokenizer()
+
+        def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False):
+            has_assistant = any(m["role"] == "assistant" for m in messages)
+            text = "P" + FakeProcessor.video_token
+            if has_assistant and not add_generation_prompt:
+                text += "ANS"
+            return text
+
+    sample = {
+        "messages": [
+            {"role": "user", "content": "<video>describe"},
+            {"role": "assistant", "content": "ANS"},
+        ],
+        "video": "demo.mp4",
+    }
+
+    out = preprocess_module._build_uniform_sample(
+        sample, processor=FakeProcessor(), max_length=64, dense_config=config
+    )
+
+    input_ids = out["input_ids"]
+    labels = out["labels"]
+    assert int((input_ids == 200).sum().item()) == 8
+    assert torch.all(labels[input_ids == 200] == -100)
+    assert int((labels != -100).sum().item()) == len("ANS")
+    assert out["video_grid_thw"].tolist() == [[2, 2, 2]]
+    assert out["pixel_values_videos"].shape == (1, 3, 2, 4, 4)
+    assert torch.equal(out["attention_mask"], torch.ones_like(input_ids))
+    assert "patch_positions" not in out
 
 
 def test_build_codec_sample_expands_video_pads_and_masks_labels(monkeypatch):

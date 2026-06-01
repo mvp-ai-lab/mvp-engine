@@ -23,7 +23,7 @@ from ..dataset.collator import VideoMLLMCollator
 from ..dataset.dataset import build_dataset
 from ..dataset.processor import build_qwen3_vl_processor
 from ..guards.loss import PerTokenLossGuard
-from ..model import patch_qwen3vl_conv3d, patch_qwen3vl_model_flops
+from ..model import patch_qwen3vl_model_flops
 from ..model.onevision import apply_onevision_swap
 
 
@@ -37,7 +37,7 @@ class VideoMLLMEngine(Engine):
     ``mm_token_type_ids``, so ``compute_3d_position_ids`` returns None and the LLM
     falls back to default **1-D** positions (M-RoPE is not active). Proper M-RoPE
     (expanding ``video_grid_thw`` into ``grid_t`` rows of ``(1, h, w)``) is a
-    tracked follow-up; see the NOTE in ``dataset/preprocess.py``.
+    tracked follow-up.
     """
 
     ConfigClass = VideoMLLMConfig
@@ -80,11 +80,7 @@ class VideoMLLMEngine(Engine):
             logger.warning(f"Video MLLM engine does not support workflow '{workflow}'.")
             return
 
-        self.processor = build_qwen3_vl_processor(
-            self.config.model,
-            video_encoding_strategy=self.config.data.video_encoding_strategy,
-            vision_encoder_backend=self.config.model.vision_encoder_backend,
-        )
+        self.processor = build_qwen3_vl_processor(self.config.model)
 
         dataset = build_dataset(self.config, processor=self.processor)
         collate_fn = VideoMLLMCollator(pad_token_id=int(self.processor.tokenizer.pad_token_id))
@@ -114,21 +110,17 @@ class VideoMLLMEngine(Engine):
         ).to(self.device)
         logger.info(f"Model name: {model.__class__.__name__}")
 
-        # Data strategy and visual backend are separate axes. The native Qwen3-VL
-        # backend needs the conv3d compatibility patch; OneVision replaces the
-        # visual tower and routes codec patch positions.
-        model_patches = [patch_qwen3vl_model_flops]
-        if self.config.model.uses_onevision_encoder:
-            model_patches.append(
-                partial(
-                    apply_onevision_swap,
-                    vision_encoder_name_or_path=self.config.model.vision_encoder_name_or_path,
-                    attn_implementation="eager",
-                    freeze_vision_encoder=bool(self.config.model.freeze_vision_encoder),
-                )
-            )
-        else:
-            model_patches.insert(0, patch_qwen3vl_conv3d)
+        # All video encoding strategies feed the OneVision visual tower. Strategy-specific
+        # preprocessing changes the pixels/grid/patch positions, not the model backend.
+        model_patches = [
+            patch_qwen3vl_model_flops,
+            partial(
+                apply_onevision_swap,
+                vision_encoder_name_or_path=self.config.model.vision_encoder_name_or_path,
+                attn_implementation="eager",
+                freeze_vision_encoder=bool(self.config.model.freeze_vision_encoder),
+            ),
+        ]
         model = self.model_kit.apply_model_patches(model, model_patches)
         model = self.token_loss_kit.apply_chunked_token_loss_patch(model)
 
@@ -204,7 +196,7 @@ class VideoMLLMEngine(Engine):
         Video samples are unpacked, so this only relocates tensors and casts
         ``pixel_values_videos`` to the mixed-precision dtype. ``mm_token_type_ids``
         is not provided, so the LLM uses default **1-D** positions (M-RoPE is not
-        active); see the class docstring and ``dataset/preprocess.py``.
+        active); see the class docstring.
         """
         device_batch = {}
         for key, value in ctx.data.items():
@@ -214,11 +206,9 @@ class VideoMLLMEngine(Engine):
         if pixel_values_videos is not None and pixel_values_videos.is_floating_point():
             device_batch["pixel_values_videos"] = pixel_values_videos.to(self.dtype)
 
-        # Codec-patch path: hand the OneVision tower this micro-batch's patch positions via the
-        # hidden attribute its routing patch reads. patch_positions is not a model kwarg, so it
-        # must be popped from the batch (it would otherwise be forwarded into model(**inputs)).
-        if self.config.data.uses_codec_patches:
-            self.unwrapped_model.model._video_vlm_patch_positions = device_batch.pop("patch_positions", None)
+        # Codec-patch path provides sparse patch positions; dense strategies set None.
+        # patch_positions is not a model kwarg, so it must be popped before model(**inputs).
+        self.unwrapped_model.model._video_vlm_patch_positions = device_batch.pop("patch_positions", None)
 
         ctx.data = device_batch
         return ctx

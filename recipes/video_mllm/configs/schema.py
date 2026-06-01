@@ -7,15 +7,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from mvp_engine.config.schema import BaseEngineConfig, BaseLoopConfig, BaseOptimConfig
 
 VideoEncodingStrategy = Literal["uniform", "codec_patch", "keyframe_lowres"]
-VisionEncoderBackend = Literal["qwen3_vl", "onevision"]
 
 
 class VideoMLLMDataConfig(BaseModel):
     """Dataset and batching options for the video MLLM recipe.
 
     Video samples are kept unpacked. ``video_encoding_strategy`` selects the
-    recipe-local video preprocessing path; model-side visual tower selection is
-    configured separately by ``model.vision_encoder_backend``.
+    recipe-local video preprocessing path; all strategies feed the OneVision
+    visual encoder.
     """
 
     model_config = ConfigDict(frozen=False, extra="forbid")
@@ -28,6 +27,7 @@ class VideoMLLMDataConfig(BaseModel):
     num_workers: int = Field(0, ge=0)
     # Uniform frame-sampling budget; the swappable seam lives in dataset/sampling.py.
     num_frames: int = Field(16, ge=1)
+    video_frame_size: int = Field(224, ge=1)
     video_encoding_strategy: VideoEncodingStrategy = "uniform"
 
     # Codec video strategy (OneVision encoder + residual-selected patches).
@@ -123,9 +123,8 @@ class VideoMLLMModelConfig(BaseModel):
     freeze_projector: bool = True
     freeze_llm: bool = False
 
-    # Visual tower backend. OneVision currently supports the codec_patch data path.
-    vision_encoder_backend: VisionEncoderBackend = "qwen3_vl"
-    vision_encoder_name_or_path: str | None = None
+    # OneVision visual tower used by every video encoding strategy.
+    vision_encoder_name_or_path: str = "./pretrained/onevision-encoder-large-lang"
     freeze_vision_encoder: bool = True
 
     compile: VideoMLLMCompileConfig = Field(default_factory=VideoMLLMCompileConfig)
@@ -142,17 +141,16 @@ class VideoMLLMModelConfig(BaseModel):
             raise ValueError("`model.pretrained_model_name_or_path` must not be empty.")
         return normalized
 
-    @model_validator(mode="after")
-    def validate_vision_encoder_backend(self) -> "VideoMLLMModelConfig":
-        """Validate backend-local requirements."""
-        if self.uses_onevision_encoder and not self.vision_encoder_name_or_path:
-            raise ValueError("`model.vision_encoder_name_or_path` is required for OneVision.")
-        return self
-
-    @property
-    def uses_onevision_encoder(self) -> bool:
-        """Return whether the Qwen3-VL visual tower should be swapped for OneVision."""
-        return self.vision_encoder_backend == "onevision"
+    @field_validator("vision_encoder_name_or_path", mode="before")
+    @classmethod
+    def validate_vision_encoder_name_or_path(cls, value: str) -> str:
+        """Normalize the OneVision encoder path."""
+        if not isinstance(value, str):
+            raise TypeError("`model.vision_encoder_name_or_path` must be a string.")
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("`model.vision_encoder_name_or_path` must not be empty.")
+        return normalized
 
 
 class VideoMLLMOptimConfig(BaseOptimConfig):
@@ -201,15 +199,6 @@ class VideoMLLMConfig(BaseEngineConfig):
     model: VideoMLLMModelConfig = Field(default_factory=VideoMLLMModelConfig)
     optim: VideoMLLMOptimConfig = Field(default_factory=VideoMLLMOptimConfig)
     loop: VideoMLLMLoopConfig = Field(default_factory=VideoMLLMLoopConfig)
-
-    @model_validator(mode="after")
-    def validate_video_strategy_backend_pair(self) -> "VideoMLLMConfig":
-        """Reject unsupported data-strategy and visual-backend combinations."""
-        if self.data.uses_codec_patches and not self.model.uses_onevision_encoder:
-            raise ValueError("`data.video_encoding_strategy=codec_patch` currently requires OneVision.")
-        if self.model.uses_onevision_encoder and not self.data.uses_codec_patches:
-            raise ValueError("`model.vision_encoder_backend=onevision` currently requires codec_patch.")
-        return self
 
     def resolve_batching_config(self, *, data_parallel_world_size: int) -> None:
         """Resolve global batch size into micro batch size or accumulation steps."""

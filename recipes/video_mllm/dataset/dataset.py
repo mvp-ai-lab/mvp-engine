@@ -12,6 +12,7 @@ from mvp_engine.kit.mllm.data.guard import DataGuard
 
 from .codec import CodecPatchConfig
 from .preprocess import process_sample
+from .video_encoding import DenseVideoConfig
 
 
 def _drop_empty_samples(assemble_context: Any = None) -> DataGuard:
@@ -41,8 +42,15 @@ def build_dataset(config: Any, *, processor: Any):
     dataset = Dataset.from_source(str(config.data.source), dataset_path, context=context, resample=True)
 
     # Build strategy-local geometry once and thread it into process_sample.
+    dense_config = None
     codec_config = None
-    if config.data.uses_codec_patches:
+    if config.data.video_encoding_strategy == "uniform":
+        dense_config = DenseVideoConfig(
+            num_frames=int(config.data.num_frames),
+            frame_size=int(config.data.video_frame_size),
+            patch_size=int(getattr(processor, "onevision_patch_size", 14)),
+        )
+    elif config.data.uses_codec_patches:
         codec_config = CodecPatchConfig(
             num_frames=int(config.data.codec_num_frames),
             packed_frames=int(config.data.codec_packed_frames),
@@ -56,10 +64,10 @@ def build_dataset(config: Any, *, processor: Any):
         partial(
             process_sample,
             processor=processor,
-            num_frames=int(config.data.num_frames),
             max_length=int(config.data.max_seq_len),
             video_root=config.data.video_root,
             video_encoding_strategy=config.data.video_encoding_strategy,
+            dense_config=dense_config,
             codec_config=codec_config,
         )
     )

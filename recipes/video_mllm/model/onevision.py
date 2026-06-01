@@ -1,9 +1,8 @@
-"""OneVision visual-tower swap for the codec video strategy.
+"""OneVision visual-tower swap for video MLLM strategies.
 
-When the codec strategy is enabled, the recipe replaces Qwen3-VL's native vision
-tower with the OneVision encoder and routes codec-selected ``patch_positions``
-through the video feature path. Ported from the colleague's ``video_vlm`` recipe
-and adapted to load the encoder from a configurable path.
+The recipe replaces Qwen3-VL's native vision tower with the OneVision encoder.
+Dense strategies pass only pixels and grids; sparse codec-patch strategy also
+routes selected ``patch_positions`` through the video feature path.
 
 Apply via ``MLLMModelKit.apply_model_patches`` with a partial that binds the
 encoder config, e.g.::
@@ -108,9 +107,9 @@ def replace_visual_tower_with_onevision(
 
 
 def patch_visual_feature_routing(model):
-    """Route image/video tensors through OneVision and thread codec patch positions.
+    """Route image/video tensors through OneVision and thread optional patch positions.
 
-    ``get_video_features`` reads codec ``patch_positions`` off the hidden
+    ``get_video_features`` reads optional codec ``patch_positions`` off the hidden
     ``model.model._video_vlm_patch_positions`` attribute, which the engine sets
     per micro-batch before the forward pass.
     """
@@ -152,7 +151,7 @@ def apply_onevision_swap(
     attn_implementation: str = "eager",
     freeze_vision_encoder: bool = True,
 ):
-    """Recipe model patch: swap in OneVision and wire codec patch-position routing."""
+    """Recipe model patch: swap in OneVision and wire optional patch-position routing."""
     model = replace_visual_tower_with_onevision(
         model,
         vision_encoder_name_or_path=vision_encoder_name_or_path,

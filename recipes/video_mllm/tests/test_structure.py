@@ -24,6 +24,7 @@ EXPECTED_FILES = [
     "dataset/sampling.py",
     "dataset/preprocess.py",
     "dataset/processor.py",
+    "dataset/video_encoding.py",
     "dataset/collator.py",
     "dataset/dataset.py",
     "dataset/codec.py",
