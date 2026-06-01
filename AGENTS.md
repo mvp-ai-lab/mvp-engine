@@ -15,11 +15,21 @@ This repository contains the core engine, shared utilities, and experiment-speci
 
 - `mvp_engine/` for stable, generic, reusable training infrastructure, including:
   - Launch entrypoints, default configs, basic training engine, distributed initialization tools, logging tools, and checkpoint infrastructure.
+  - `mvp_engine/kit/` contains stable callable kit APIs. A kit is a small user/agent-facing suite of functions/classes that recipes can call from engines for reusable capabilities.
   - Treat it as stable core by default; do not change it casually
 - `recipes/` for experiment-specific logic, including:
   - Configs, datasets, and training workflows for specific experiments
 - `skills/` for structured agent-facing instructions, including:
-  - Instructions for how to add new capabilities to the system, and how to maintain the repository
+  - Instructions for how to use and extend kits, add recipe-specific glue, and maintain the repository
+
+## Kit Design
+
+- Kits are code interfaces, not documentation. They should expose stable APIs that a user or agent can call from recipe engines.
+- A kit should group related capabilities that are commonly used together, for example data orchestration, model setup, token loss, MFU, or optimizer construction.
+- Keep kit public APIs small, semantic, and boundary-focused. Avoid per-model or per-experiment details in generic kits.
+- Put model-family or modality-specific variability behind explicit kit extension points.
+- Do not duplicate behavior in recipes when a kit already provides a suitable API. Recipes should call the kit and keep only experiment-specific wiring or patches.
+- Skills should explain how to use kit APIs, what they do, and where to extend or override them. A skill should not ask an agent to reimplement a stable kit capability unless the kit does not fit the task.
 
 ## Code Styles
 
@@ -47,12 +57,12 @@ This repository contains the core engine, shared utilities, and experiment-speci
 ## High-priority working rules:
 - Must put experiment-specific logic in `recipes/<experiment>/`
 - Try not to modify `mvp_engine/`. If you need to, ask the user for confirmation first.
-- Check whether the repository already provides the needed capability/infrastructure before writing new code. The provided capability may be in `skills/` as a skill, or in `mvp_engine/` as a core component.
+- Check whether the repository already provides the needed capability/infrastructure before writing new code. Prefer existing kit APIs in `mvp_engine/kit/` first, then relevant `skills/`, then recipe-local implementation.
 - If the correct entrypoint, config, workflow, or module is unclear, inspect the repository first and then confirm with the user.
 
 ## A usual workflow
 
-1. After the user states a need, the very first step is to check whether `skills/` and `mvp_engine/` already contains a matching skill/component by searching for keywords or concepts from the user’s request. If an exact match exists, confirm with the user to reuse it.
+1. After the user states a need, the very first step is to check whether `mvp_engine/kit/`, `mvp_engine/`, and `skills/` already contain a matching kit/component/skill by searching for keywords or concepts from the user’s request. If an exact match exists, confirm with the user to reuse it.
 2. If it is a recipe-local need, check the corresponding recipe directory for existing configs, datasets, or training workflows that can be used.
 3. Once you implement a change, you can start a new subagent with a clean context to do a code review of your own change, and then fix any issues found.
 4. If user prefer, run the relevant tests and linters locally. If you need GPU/NPU resources, first check `CUSTOM.md` for any instructions on how to access them, check the local environment, or ask the user for help if you cannot access them.

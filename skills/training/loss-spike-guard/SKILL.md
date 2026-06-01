@@ -26,6 +26,8 @@ Identify these before editing:
 - engine `prepare_optimizer()` or initialization path;
 - engine `forward_step()` and `backward_step()` loss shape;
 - whether `outputs["loss"]` is scalar or unreduced per-token loss;
+- if using token-normalized training, where `TokenNormedLossKit` accumulates the
+  micro-batch loss sum;
 - distributed context used for scalar reductions;
 - recipe-local `tests/test_structure.py` and `tests/test_smoke.py`.
 
@@ -46,6 +48,7 @@ Find:
 
 - where optimizer-related state is initialized;
 - where micro-batch loss is converted into `ctx.loss`;
+- whether token loss is accumulated through `TokenNormedLossKit`;
 - where metrics consume loss sums or scalar loss values;
 - where distributed token/loss reductions already happen;
 - which YAML stage should enable the guard, if any.
@@ -109,6 +112,11 @@ For per-token loss, call the guard with local loss sum and local supervised toke
 count, then zero the local loss sum and backward loss when the guard returns
 `True`. Do not set token count to zero unless the recipe already treats skipped
 samples as removed from denominators.
+
+When the recipe uses `TokenNormedLossKit`, zero `local_micro_loss_sum` before
+calling `TokenNormedLossKit.accumulate_microbatch(...)`; keep token counts
+unchanged unless the recipe explicitly removes skipped samples from the
+normalization denominator.
 
 ### 5. Preserve Training Semantics
 

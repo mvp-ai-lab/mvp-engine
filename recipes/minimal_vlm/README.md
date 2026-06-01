@@ -6,6 +6,10 @@ The default demo dataset is at `data/minimal_vlm/demo.parquet`.
 `mvp_dataset` must be importable in the runtime environment. The recipe uses it
 to build a resampled parquet training dataset.
 
+This recipe intentionally does not use the kit layer in its implementation. It
+is kept as the smallest explicit Qwen3-VL training example; kit-based MLLM
+orchestration is demonstrated in `recipes/openbee`.
+
 ## What it does
 
 - Loads multimodal chat data from parquet.

@@ -1,19 +1,22 @@
 # VLM Packing Rules
 
-Use this reference when implementing or reviewing recipe-local VLM sample
-packing.
+Use this reference when implementing or reviewing VLM sample packing around the
+standard MLLM data kit.
 
 ## Reference Shape
 
-`recipes/basic_vlm` is the main local reference:
+Primary kit references:
 
-- `configs/schema.py`: packing knobs and validators;
-- `configs/stage*.yaml`: active packing settings;
-- `dataset/dataset.py`: transform order and materialization placement;
-- `dataset/packing.py`: grouping, finalization, segment metadata;
-- `dataset/collator.py`: packed metadata padding and mixed-batch rejection;
+- `mvp_engine/kit/mllm/data/data.py`: DataKit packing lifecycle;
+- `mvp_engine/kit/mllm/data/packing.py`: `PackingOptions`,
+  `PackingAssembler`, finalization, segment metadata, and block causal masks;
+- `mvp_engine/kit/mllm/data/media.py`: packed media merge and collation hooks;
+
+`recipes/openbee` shows one concrete integration:
+
+- `configs/schema.py` and `configs/stage*.yaml`: active packing knobs;
 - `model/packing/`: packed model-input preparation and attention backend patches;
-- `engine/basic_vlm_engine.py`: packed preparation, token accounting, logging;
+- `engine/openbee_engine.py`: packed preparation, token accounting, logging;
 - `utils/misc.py`: packed total-step inference.
 
 Use these files as patterns, but adapt model-specific attention and position
@@ -34,12 +37,12 @@ Choose placement deliberately:
 - define flush, finish, and `drop_last` behavior for the active backend.
 
 For non-`mvp_dataset` backends, do not assume `Assembler`, `RuntimeContext`,
-`resolve_ref`, worker slots, or `TorchLoader` exist. Define equivalent lifecycle
-and seed behavior explicitly.
+`resolve_ref`, worker slots, or `TorchLoader` exist. Either adapt `MLLMDataKit`
+or define equivalent lifecycle and seed behavior explicitly.
 
 ## Packer Rules
 
-The packer owns grouping. It should:
+The DataKit packer owns grouping. It should:
 
 - use tokenized length, not raw text length;
 - respect `max_seq_len`;

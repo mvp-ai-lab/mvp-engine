@@ -1,0 +1,1 @@
+"""openbee recipe."""
