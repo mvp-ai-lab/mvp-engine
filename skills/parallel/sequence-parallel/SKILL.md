@@ -206,11 +206,55 @@ pytest recipes/<recipe>/tests/test_smoke.py -q \
 Also pass `--world-size 4` or another compatible value when the recipe smoke test
 requires the world size to match `replicate * shard * tensor`.
 
-Add optional impact validation when the task requires proof that norm/dropout
-modules receive sequence-local tensors or that loss/logit parity is preserved.
-Also add a dataloader identity impact test when changing recipe data loading:
-within one TP/SP group, assert sample ids or a stable batch fingerprint are
-identical across tensor ranks, while data-parallel ranks receive distinct slots.
+Add optional sequence-layout impact validation when the task requires proof that
+norm/dropout modules receive sequence-local tensors. Use a recipe-local file
+such as:
+
+```text
+recipes/<recipe>/tests/skills/sequence-parallel/test_sequence_layout_impact.py
+```
+
+The impact test should run with `parallel.backend_kwargs.sequence_parallel=true`
+and inspect a stable hook point before/after SP-planned modules. Assert local
+hidden-state sequence length is divided across the tensor mesh, while batch and
+hidden dimensions remain compatible with the recipe's model layout. If the
+recipe uses `[seq, batch, hidden]`, assert that `SEQUENCE_PARALLEL_SEQUENCE_DIM`
+is `0`; otherwise assert against the default `[batch, seq, hidden]` layout.
+
+Add optional numerical impact validation when the task requires proof that SP
+preserves model semantics. Use a recipe-local file such as:
+
+```text
+recipes/<recipe>/tests/skills/sequence-parallel/test_loss_parity_impact.py
+```
+
+The impact test should run the same deterministic batch through TP/SP-off and
+TP/SP-on models and compare loss or logits within recipe-appropriate tolerances.
+Use eval mode, fixed seeds, no optimizer step, identical weights, identical
+packing/collation, and the same mixed precision policy where feasible. Gather or
+reduce global token counts before loss/metric normalization when the loss path
+consumes sequence-local tensors.
+
+Add optional replicated-gradient impact validation when replicated parameters
+consume sequence-sharded activations, especially norms or dropout-adjacent
+modules. Use a recipe-local file such as:
+
+```text
+recipes/<recipe>/tests/skills/sequence-parallel/test_replicated_grad_impact.py
+```
+
+The impact test should compare TP/SP-off and TP/SP-on gradients for replicated
+parameters, and should cover at least two backward calls before `zero_grad` when
+post-accumulate hooks are used.
+
+Add a dataloader identity impact test when changing recipe data loading. Within
+one TP/SP group, assert sample ids or a stable batch fingerprint are identical
+across tensor ranks, while data-parallel ranks receive distinct slots. Use a
+recipe-local file such as:
+
+```text
+recipes/<recipe>/tests/skills/sequence-parallel/test_dataloader_identity_impact.py
+```
 
 ## Output
 

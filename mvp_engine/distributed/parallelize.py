@@ -45,7 +45,6 @@ def parallelize_model(
                 - Additional kwargs passed to DistributedDataParallel constructor
 
             For FSDP2:
-                - sequence_parallel: Enables sequence parallel layouts on the tensor mesh before FSDP2 (default: False)
                 - target_classes: List of module class names to wrap with FSDP2 (default: [])
                 - mesh: DeviceMesh for data parallel dimension (auto-set from first two dims of the device_mesh)
                 - reshard_after_forward: Resharding strategy (default: None)
@@ -53,6 +52,9 @@ def parallelize_model(
                 - high_precision_modules / high_precision_mp_policy:
                   parsed and handled inside fsdp2.py
                 - Additional kwargs passed to fully_shard()
+
+            For Tensor Parallel and Sequence Parallel (if tensor mesh is active):
+                - sequence_parallel: Enables sequence parallel layouts on the tensor mesh before FSDP2 (default: False)
 
     Returns:
         The parallelized model wrapped with the specified backend.
@@ -76,10 +78,10 @@ def parallelize_model(
         backend_kwargs = OmegaConf.to_container(backend_kwargs, resolve=True)
 
     backend_kwargs = dict(backend_kwargs)
-    sequence_parallel = bool(backend_kwargs.pop("sequence_parallel", False))
     tensor_size = device_mesh["tensor"].size()
     shard_size = device_mesh["shard"].size()
 
+    sequence_parallel = bool(backend_kwargs.pop("sequence_parallel", False))
     if sequence_parallel and tensor_size <= 1:
         raise ValueError("Sequence parallel requires an active tensor mesh with parallel.mesh.tensor > 1.")
 
@@ -109,12 +111,11 @@ def parallelize_model(
 
             logger.info(f"Wrapping {model.__class__.__name__} with Tensor Parallel...")
 
-            applied = parallelize_model_with_tensor_parallel(
+            parallelize_model_with_tensor_parallel(
                 model,
                 tp_mesh,
                 sequence_parallel=sequence_parallel,
             )
-            logger.info(f"Applied Tensor Parallel to {len(applied)} modules on {model.__class__.__name__}.")
 
         parallelized_model = model
         if fsdp2_mesh is not None and fsdp2_mesh.size() > 1:
