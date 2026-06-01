@@ -81,7 +81,9 @@ class VideoMLLMEngine(Engine):
             return
 
         self.processor = build_qwen3_vl_processor(
-            self.config.model, codec_enabled=bool(self.config.data.codec_enabled)
+            self.config.model,
+            video_encoding_strategy=self.config.data.video_encoding_strategy,
+            vision_encoder_backend=self.config.model.vision_encoder_backend,
         )
 
         dataset = build_dataset(self.config, processor=self.processor)
@@ -112,21 +114,21 @@ class VideoMLLMEngine(Engine):
         ).to(self.device)
         logger.info(f"Model name: {model.__class__.__name__}")
 
-        # Uniform path patches Qwen3-VL's native conv3d patch-embed. The codec path swaps the
-        # whole visual tower for OneVision (which has no patch_embed), so it skips that patch and
-        # appends the OneVision swap + codec patch-position routing instead.
-        if bool(self.config.data.codec_enabled):
-            model_patches = [
-                patch_qwen3vl_model_flops,
+        # Data strategy and visual backend are separate axes. The native Qwen3-VL
+        # backend needs the conv3d compatibility patch; OneVision replaces the
+        # visual tower and routes codec patch positions.
+        model_patches = [patch_qwen3vl_model_flops]
+        if self.config.model.uses_onevision_encoder:
+            model_patches.append(
                 partial(
                     apply_onevision_swap,
                     vision_encoder_name_or_path=self.config.model.vision_encoder_name_or_path,
                     attn_implementation="eager",
                     freeze_vision_encoder=bool(self.config.model.freeze_vision_encoder),
-                ),
-            ]
+                )
+            )
         else:
-            model_patches = [patch_qwen3vl_conv3d, patch_qwen3vl_model_flops]
+            model_patches.insert(0, patch_qwen3vl_conv3d)
         model = self.model_kit.apply_model_patches(model, model_patches)
         model = self.token_loss_kit.apply_chunked_token_loss_patch(model)
 
@@ -212,10 +214,10 @@ class VideoMLLMEngine(Engine):
         if pixel_values_videos is not None and pixel_values_videos.is_floating_point():
             device_batch["pixel_values_videos"] = pixel_values_videos.to(self.dtype)
 
-        # Codec path: hand the OneVision tower this micro-batch's patch positions via the
+        # Codec-patch path: hand the OneVision tower this micro-batch's patch positions via the
         # hidden attribute its routing patch reads. patch_positions is not a model kwarg, so it
         # must be popped from the batch (it would otherwise be forwarded into model(**inputs)).
-        if bool(self.config.data.codec_enabled):
+        if self.config.data.uses_codec_patches:
             self.unwrapped_model.model._video_vlm_patch_positions = device_batch.pop("patch_positions", None)
 
         ctx.data = device_batch

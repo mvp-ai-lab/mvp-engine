@@ -332,18 +332,25 @@ def process_sample(
     max_length: int,
     video_root: str | None = None,
     ignore_index: int = -100,
+    video_encoding_strategy: str = "uniform",
     codec_config: CodecPatchConfig | None = None,
 ):
     """Process one row into training inputs, dropping bad rows instead of crashing.
 
-    Selects the codec path when ``codec_config`` is provided, otherwise the
-    uniform decode-then-expand path. Returns an empty sentinel (filtered out
-    downstream by ``build_dataset``) when a row is malformed or its tokenized
-    length exceeds ``max_length``, so a single bad or over-length sample never
-    kills the data worker.
+    Selects the preprocessing path by ``video_encoding_strategy``. Returns an
+    empty sentinel (filtered out downstream by ``build_dataset``) when a row is
+    malformed or its tokenized length exceeds ``max_length``, so a single bad or
+    over-length sample never kills the data worker.
     """
+    if video_encoding_strategy == "codec_patch" and codec_config is None:
+        raise ValueError("`codec_config` is required for `video_encoding_strategy=codec_patch`.")
+    if video_encoding_strategy == "keyframe_lowres":
+        raise NotImplementedError("`video_encoding_strategy=keyframe_lowres` is not implemented yet.")
+    if video_encoding_strategy not in {"uniform", "codec_patch"}:
+        raise ValueError(f"unsupported video encoding strategy: {video_encoding_strategy!r}")
+
     try:
-        if codec_config is not None:
+        if video_encoding_strategy == "codec_patch":
             return _build_codec_sample(
                 sample,
                 processor=processor,

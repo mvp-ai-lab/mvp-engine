@@ -7,19 +7,23 @@ from typing import Any
 from transformers import AutoConfig, AutoImageProcessor, AutoProcessor
 
 
-def build_qwen3_vl_processor(model_config: Any, *, codec_enabled: bool = False):
+def build_qwen3_vl_processor(
+    model_config: Any,
+    *,
+    video_encoding_strategy: str = "uniform",
+    vision_encoder_backend: str = "qwen3_vl",
+):
     """Load the Qwen3-VL processor (image + video) and normalize tokenizer padding.
 
-    When the codec strategy is enabled (``data.codec_enabled``), the OneVision
-    image processor and its patch/image geometry are attached as
+    When the OneVision backend is active, the OneVision image processor and its patch/image geometry are attached as
     ``processor.onevision_image_processor`` / ``onevision_patch_size`` /
-    ``onevision_image_size`` so codec preprocessing pixel-normalizes packed
-    frames with the encoder's own statistics. The uniform path is untouched.
+    ``onevision_image_size`` so supported video strategies can pixel-normalize
+    frames with the encoder's own statistics. The native Qwen3-VL path is untouched.
 
     Args:
-        model_config: Recipe model config with the pretrained model reference and,
-            for codec, ``vision_encoder_name_or_path``.
-        codec_enabled: Whether the codec video strategy is active.
+        model_config: Recipe model config with the pretrained model reference and optional visual encoder reference.
+        video_encoding_strategy: Recipe-local data encoding strategy name.
+        vision_encoder_backend: Visual tower backend name.
 
     Returns:
         The initialized Hugging Face processor for Qwen3-VL.
@@ -29,10 +33,14 @@ def build_qwen3_vl_processor(model_config: Any, *, codec_enabled: bool = False):
         trust_remote_code=True,
     )
 
-    if codec_enabled:
+    if vision_encoder_backend == "onevision":
         vision_encoder_name = getattr(model_config, "vision_encoder_name_or_path", None)
         if not vision_encoder_name:
-            raise ValueError("codec preprocessing requires `model.vision_encoder_name_or_path`.")
+            raise ValueError("OneVision preprocessing requires `model.vision_encoder_name_or_path`.")
+        if video_encoding_strategy != "codec_patch":
+            raise ValueError(
+                "OneVision preprocessing currently supports only `data.video_encoding_strategy=codec_patch`."
+            )
         vision_config = AutoConfig.from_pretrained(vision_encoder_name, trust_remote_code=True)
         processor.onevision_image_processor = AutoImageProcessor.from_pretrained(
             vision_encoder_name,
@@ -40,6 +48,8 @@ def build_qwen3_vl_processor(model_config: Any, *, codec_enabled: bool = False):
         )
         processor.onevision_patch_size = int(getattr(vision_config, "patch_size", 14))
         processor.onevision_image_size = int(getattr(vision_config, "image_size", 448))
+    elif vision_encoder_backend != "qwen3_vl":
+        raise ValueError(f"unsupported vision encoder backend: {vision_encoder_backend!r}")
 
     tokenizer = getattr(processor, "tokenizer", None)
     if tokenizer is not None:

@@ -40,10 +40,9 @@ def build_dataset(config: Any, *, processor: Any):
     context = RuntimeContext.from_runtime(seed=int(config.seed))
     dataset = Dataset.from_source(str(config.data.source), dataset_path, context=context, resample=True)
 
-    # When codec is enabled, build the OneVision codec geometry once and thread it into
-    # process_sample so it picks the codec path over the uniform decode-then-expand path.
+    # Build strategy-local geometry once and thread it into process_sample.
     codec_config = None
-    if bool(config.data.codec_enabled):
+    if config.data.uses_codec_patches:
         codec_config = CodecPatchConfig(
             num_frames=int(config.data.codec_num_frames),
             packed_frames=int(config.data.codec_packed_frames),
@@ -60,6 +59,7 @@ def build_dataset(config: Any, *, processor: Any):
             num_frames=int(config.data.num_frames),
             max_length=int(config.data.max_seq_len),
             video_root=config.data.video_root,
+            video_encoding_strategy=config.data.video_encoding_strategy,
             codec_config=codec_config,
         )
     )

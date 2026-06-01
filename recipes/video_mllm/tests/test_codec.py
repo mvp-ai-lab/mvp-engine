@@ -32,10 +32,11 @@ def _load_codec_smoke_config() -> VideoMLLMConfig:
 def test_codec_smoke_config_validates_against_schema():
     config = _load_codec_smoke_config()
 
-    assert config.data.codec_enabled is True
+    assert config.data.video_encoding_strategy == "codec_patch"
     assert config.data.cv_reader_required is False
     grid = config.data.codec_frame_size // config.data.codec_patch_size
     assert config.data.codec_k_keep == config.data.codec_packed_frames * grid * grid
+    assert config.model.vision_encoder_backend == "onevision"
     assert config.model.vision_encoder_name_or_path
     assert config.model.freeze_vision_encoder is True
 
@@ -45,6 +46,22 @@ def test_codec_schema_rejects_mismatched_k_keep():
     container["data"]["codec_k_keep"] = 255  # one off from the required packed-frame budget.
 
     with pytest.raises(ValueError):
+        VideoMLLMConfig.model_validate(container)
+
+
+def test_codec_schema_rejects_native_vision_backend():
+    container = OmegaConf.to_container(OmegaConf.load(CODEC_SMOKE_CONFIG), resolve=True)
+    container["model"]["vision_encoder_backend"] = "qwen3_vl"
+
+    with pytest.raises(ValueError, match="codec_patch"):
+        VideoMLLMConfig.model_validate(container)
+
+
+def test_schema_rejects_unimplemented_keyframe_lowres():
+    container = OmegaConf.to_container(OmegaConf.load(CODEC_SMOKE_CONFIG), resolve=True)
+    container["data"]["video_encoding_strategy"] = "keyframe_lowres"
+
+    with pytest.raises(ValueError, match="keyframe_lowres"):
         VideoMLLMConfig.model_validate(container)
 
 

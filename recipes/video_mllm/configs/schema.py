@@ -6,19 +6,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from mvp_engine.config.schema import BaseEngineConfig, BaseLoopConfig, BaseOptimConfig
 
+VideoEncodingStrategy = Literal["uniform", "codec_patch", "keyframe_lowres"]
+VisionEncoderBackend = Literal["qwen3_vl", "onevision"]
+
 
 class VideoMLLMDataConfig(BaseModel):
     """Dataset and batching options for the video MLLM recipe.
 
-    Video samples are kept unpacked: uniform frame sampling (the swappable seam
-    in ``dataset/sampling.py``) plus decode-then-expand preprocessing. There are
-    no packing options.
-
-    Setting ``codec_enabled`` switches the build-time video strategy to OneVision
-    codec patches: residual-selected patches are packed into ``codec_packed_frames``
-    dense frames and the language side is expanded with exactly ``codec_k_keep``
-    video-pad tokens. The codec geometry fields are only consumed when codec is
-    enabled.
+    Video samples are kept unpacked. ``video_encoding_strategy`` selects the
+    recipe-local video preprocessing path; model-side visual tower selection is
+    configured separately by ``model.vision_encoder_backend``.
     """
 
     model_config = ConfigDict(frozen=False, extra="forbid")
@@ -31,9 +28,9 @@ class VideoMLLMDataConfig(BaseModel):
     num_workers: int = Field(0, ge=0)
     # Uniform frame-sampling budget; the swappable seam lives in dataset/sampling.py.
     num_frames: int = Field(16, ge=1)
+    video_encoding_strategy: VideoEncodingStrategy = "uniform"
 
     # Codec video strategy (OneVision encoder + residual-selected patches).
-    codec_enabled: bool = False
     codec_num_frames: int = Field(64, ge=1)
     codec_packed_frames: int = Field(8, ge=1)
     codec_frame_size: int = Field(224, ge=1)
@@ -42,9 +39,14 @@ class VideoMLLMDataConfig(BaseModel):
     cv_reader_required: bool = False
 
     @model_validator(mode="after")
-    def validate_codec_geometry(self) -> "VideoMLLMDataConfig":
-        """Enforce the packed-frame token budget when the codec strategy is enabled."""
-        if not self.codec_enabled:
+    def validate_video_encoding_strategy(self) -> "VideoMLLMDataConfig":
+        """Validate strategy-specific geometry without silently falling back."""
+        if self.video_encoding_strategy == "keyframe_lowres":
+            raise ValueError(
+                "`data.video_encoding_strategy=keyframe_lowres` is reserved for dense variable-resolution "
+                "frames but is not implemented yet."
+            )
+        if not self.uses_codec_patches:
             return self
         if self.codec_frame_size % self.codec_patch_size != 0:
             raise ValueError("`data.codec_frame_size` must be divisible by `data.codec_patch_size`.")
@@ -54,9 +56,14 @@ class VideoMLLMDataConfig(BaseModel):
             raise ValueError(
                 "`data.codec_k_keep` must equal "
                 "`codec_packed_frames * (codec_frame_size / codec_patch_size) ** 2` "
-                f"({expected}) when codec is enabled, got {self.codec_k_keep}."
+                f"({expected}) for codec_patch, got {self.codec_k_keep}."
             )
         return self
+
+    @property
+    def uses_codec_patches(self) -> bool:
+        """Return whether the sparse codec-patch data path is active."""
+        return self.video_encoding_strategy == "codec_patch"
 
     @field_validator("train_path", mode="before")
     @classmethod
@@ -116,8 +123,8 @@ class VideoMLLMModelConfig(BaseModel):
     freeze_projector: bool = True
     freeze_llm: bool = False
 
-    # OneVision codec swap (only used when data.codec_enabled): the visual tower is
-    # replaced by the encoder loaded from this path, optionally frozen.
+    # Visual tower backend. OneVision currently supports the codec_patch data path.
+    vision_encoder_backend: VisionEncoderBackend = "qwen3_vl"
     vision_encoder_name_or_path: str | None = None
     freeze_vision_encoder: bool = True
 
@@ -134,6 +141,18 @@ class VideoMLLMModelConfig(BaseModel):
         if not normalized:
             raise ValueError("`model.pretrained_model_name_or_path` must not be empty.")
         return normalized
+
+    @model_validator(mode="after")
+    def validate_vision_encoder_backend(self) -> "VideoMLLMModelConfig":
+        """Validate backend-local requirements."""
+        if self.uses_onevision_encoder and not self.vision_encoder_name_or_path:
+            raise ValueError("`model.vision_encoder_name_or_path` is required for OneVision.")
+        return self
+
+    @property
+    def uses_onevision_encoder(self) -> bool:
+        """Return whether the Qwen3-VL visual tower should be swapped for OneVision."""
+        return self.vision_encoder_backend == "onevision"
 
 
 class VideoMLLMOptimConfig(BaseOptimConfig):
@@ -182,6 +201,15 @@ class VideoMLLMConfig(BaseEngineConfig):
     model: VideoMLLMModelConfig = Field(default_factory=VideoMLLMModelConfig)
     optim: VideoMLLMOptimConfig = Field(default_factory=VideoMLLMOptimConfig)
     loop: VideoMLLMLoopConfig = Field(default_factory=VideoMLLMLoopConfig)
+
+    @model_validator(mode="after")
+    def validate_video_strategy_backend_pair(self) -> "VideoMLLMConfig":
+        """Reject unsupported data-strategy and visual-backend combinations."""
+        if self.data.uses_codec_patches and not self.model.uses_onevision_encoder:
+            raise ValueError("`data.video_encoding_strategy=codec_patch` currently requires OneVision.")
+        if self.model.uses_onevision_encoder and not self.data.uses_codec_patches:
+            raise ValueError("`model.vision_encoder_backend=onevision` currently requires codec_patch.")
+        return self
 
     def resolve_batching_config(self, *, data_parallel_world_size: int) -> None:
         """Resolve global batch size into micro batch size or accumulation steps."""
