@@ -2,9 +2,7 @@
 # Qwen2.5-VL
 
 `qwen2_5_vl` is a minimal image-text training recipe for
-`Qwen/Qwen2.5-VL-7B-Instruct`. Its training flow follows the same engine and kit
-boundaries used by `recipes/qwen3_vl`, while model-specific packed positions and
-vision FLOPs are implemented locally for Qwen2.5-VL.
+`Qwen/Qwen2.5-VL-7B-Instruct`.
 
 This first version intentionally supports image data only. It uses the shared
 `MLLMDataKit` default `MLLMSampleKit` and `MLLMMediaKit`; video fields are
@@ -64,9 +62,3 @@ torchrun --nproc_per_node=8 -m mvp_engine.launch \
   loop.total_steps=20
 ```
 
-For one-GPU smoke validation on the cluster:
-
-```bash
-srun -p gpu -A proj_agent --gres gpu:h200:1 \
-  pytest recipes/qwen2_5_vl/tests/test_smoke.py -q --run-smoke --world-size=1
-```
