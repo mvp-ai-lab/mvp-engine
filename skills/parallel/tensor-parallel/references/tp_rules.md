@@ -150,6 +150,25 @@ Rules:
   by TP size unless the recipe has a specialized sharding strategy.
 - Preserve global batch semantics when changing `replicate`.
 
+## Data-Loading Rules
+
+Tensor-parallel ranks cooperate on the same logical model replica. They must not
+consume different samples.
+
+- All ranks in the same `tensor` group must receive identical samples and
+  micro-batches.
+- `tensor` is not data-parallel and must not contribute to dataset sharding,
+  dataloader slots, or global batch size.
+- Shard data over data-parallel dimensions only, normally `replicate` and FSDP2
+  `shard`.
+- Exclude `tensor` and other non-data-parallel dimensions such as `context` from
+  sampler or `RuntimeContext` sharding.
+- For `mvp_dataset`, construct `RuntimeContext` with `device_mesh` and `dp_dims`
+  that include only data-parallel dimensions, or provide an equivalent
+  recipe-local sampler guarantee.
+- Validate recipe loaders with a stable sample id or batch fingerprint when
+  changing mesh-aware data loading.
+
 ## Sharding Impact Validation
 
 Structure checks can prove the plan exists. Smoke checks can prove the TP-active
@@ -191,6 +210,7 @@ Common failure signals:
 - wrong `"col"` versus `"row"` placement;
 - sharded router input that expected full hidden states;
 - output projection missing the row-parallel reduction;
+- tensor-group ranks reading different samples or different packed-batch layouts;
 - TP-on run using a different precision, dropout state, or packed batch layout.
 
 Loss parity proves semantic preservation for the tested path. It does not prove

@@ -87,6 +87,7 @@ Training:
 Parallel:
 
 - `parallel/fsdp2-prefetching`: [parallel/fsdp2-prefetching/SKILL.md](parallel/fsdp2-prefetching/SKILL.md)
+- `parallel/sequence-parallel`: [parallel/sequence-parallel/SKILL.md](parallel/sequence-parallel/SKILL.md)
 - `parallel/tensor-parallel`: [parallel/tensor-parallel/SKILL.md](parallel/tensor-parallel/SKILL.md)
 
 Recipe, experiment, and git:
