@@ -76,4 +76,3 @@ def infer_total_steps(
         f"samples_per_optimization_step={samples_per_step}, inferred_total_steps={total_steps}"
     )
     return int(total_steps)
-

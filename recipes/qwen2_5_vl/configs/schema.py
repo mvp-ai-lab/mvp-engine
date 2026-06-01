@@ -207,4 +207,3 @@ class Qwen2_5VLConfig(BaseEngineConfig):
                 f"expected {effective_global_batch_size} from "
                 "`data_parallel_world_size * data.batch_size * optim.gradient_accumulation_steps`."
             )
-

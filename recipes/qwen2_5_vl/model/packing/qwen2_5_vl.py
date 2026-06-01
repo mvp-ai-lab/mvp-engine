@@ -155,8 +155,7 @@ def _build_segment_position_ids(
         actual_tokens = image_end - image_start
         if actual_tokens != expected_tokens:
             raise ValueError(
-                "Image token span does not match image_grid_thw: "
-                f"expected {expected_tokens}, got {actual_tokens}."
+                f"Image token span does not match image_grid_thw: expected {expected_tokens}, got {actual_tokens}."
             )
 
         t_index = torch.arange(llm_grid_t, device=input_ids.device, dtype=torch.long).view(-1, 1)
@@ -216,4 +215,3 @@ __all__ = [
     "build_qwen2_5_vl_packed_position_ids",
     "prepare_packed_model_inputs",
 ]
-

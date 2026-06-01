@@ -16,4 +16,3 @@ def __getattr__(name: str):
     from .qwen2_5_vl_engine import Qwen2_5VLEngine
 
     return Qwen2_5VLEngine
-

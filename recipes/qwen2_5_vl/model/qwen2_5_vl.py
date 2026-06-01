@@ -84,9 +84,7 @@ def calculate_model_flops(
     vocab = int(text_cfg.vocab_size)
     attention_pairs = _count_attention_token_pairs(batch=batch, tokens=tokens, attention_mask=attention_mask)
     language_per_layer = (
-        8 * batch * tokens * hidden * hidden
-        + 4 * attention_pairs * hidden
-        + 6 * batch * tokens * hidden * intermediate
+        8 * batch * tokens * hidden * hidden + 4 * attention_pairs * hidden + 6 * batch * tokens * hidden * intermediate
     )
     language_flops = float(text_layers * language_per_layer + 2 * batch * tokens * hidden * vocab)
 

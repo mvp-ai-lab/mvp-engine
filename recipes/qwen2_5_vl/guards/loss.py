@@ -47,7 +47,11 @@ class PerTokenLossGuard:
                 torch.tensor(float(token_count), device=device, dtype=torch.float64),
             )
         )
-        if (self.group_world_size is None or self.group_world_size > 1) and dist.is_available() and dist.is_initialized():
+        if (
+            (self.group_world_size is None or self.group_world_size > 1)
+            and dist.is_available()
+            and dist.is_initialized()
+        ):
             dist.all_reduce(stats, op=dist.ReduceOp.SUM, group=self.group)
 
         global_tokens = int(stats[1].item())
@@ -78,4 +82,3 @@ def _to_scalar_tensor(value: torch.Tensor | float, *, device: torch.device) -> t
     if isinstance(value, torch.Tensor):
         return value.detach().to(device=device, dtype=torch.float64)
     return torch.tensor(float(value), device=device, dtype=torch.float64)
-

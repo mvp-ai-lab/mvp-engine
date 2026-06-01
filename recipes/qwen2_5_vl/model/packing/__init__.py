@@ -24,4 +24,3 @@ def __getattr__(name: str):
     from . import qwen2_5_vl
 
     return getattr(qwen2_5_vl, name)
-

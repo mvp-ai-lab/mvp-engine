@@ -8,7 +8,10 @@ from typing import TYPE_CHECKING
 import torch
 
 from mvp_engine.distributed.parallelize import parallelize_model
-from mvp_engine.distributed.utils import get_data_parallel_group, get_data_parallel_world_size
+from mvp_engine.distributed.utils import (
+    get_data_parallel_group,
+    get_data_parallel_world_size,
+)
 from mvp_engine.engine import ENGINE_REGISTRY, Engine, TrainStepContext
 from mvp_engine.kit import (
     MFUKit,
@@ -24,7 +27,11 @@ from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
 from ..configs.schema import Qwen2_5VLConfig
 from ..guards.loss import PerTokenLossGuard
-from ..model import disable_qwen2_5vl_cache, patch_qwen2_5vl_conv3d, patch_qwen2_5vl_model_flops
+from ..model import (
+    disable_qwen2_5vl_cache,
+    patch_qwen2_5vl_conv3d,
+    patch_qwen2_5vl_model_flops,
+)
 from ..model.packing import prepare_packed_model_inputs
 from ..utils.misc import infer_total_steps
 
