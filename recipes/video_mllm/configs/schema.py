@@ -20,7 +20,6 @@ class VideoMLLMDataConfig(BaseModel):
     train_path: str = "./data/video_mllm/smoke.jsonl"
     source: Literal["jsonl", "parquet"] = "jsonl"
     video_root: str | None = None
-    thinking_mode: bool | None | Literal["non-empty"] = "non-empty"
     max_seq_len: int = Field(8192, ge=1)
     batch_size: int = 1
     num_workers: int = Field(0, ge=0)
@@ -48,26 +47,6 @@ class VideoMLLMDataConfig(BaseModel):
         if value == 0 or value < -1:
             raise ValueError("`data.batch_size` must be positive or exactly -1.")
         return value
-
-    @field_validator("thinking_mode", mode="before")
-    @classmethod
-    def validate_thinking_mode(cls, value: bool | str | None) -> bool | None | Literal["non-empty"]:
-        """Normalize string forms of the assistant thinking-block policy."""
-        if value is None or isinstance(value, bool):
-            return value
-        if not isinstance(value, str):
-            raise TypeError("`data.thinking_mode` must be a bool, null, or 'non-empty'.")
-
-        normalized = value.strip().lower()
-        if normalized == "true":
-            return True
-        if normalized == "false":
-            return False
-        if normalized in {"none", "null"}:
-            return None
-        if normalized == "non-empty":
-            return "non-empty"
-        raise ValueError("`data.thinking_mode` only accepts true, false, null, or 'non-empty'.")
 
 
 class VideoMLLMGradientCheckpointingConfig(BaseModel):
@@ -147,14 +126,14 @@ class VideoMLLMLoopConfig(BaseLoopConfig):
 
     model_config = ConfigDict(frozen=False)
 
-    total_steps: int = -1
+    total_steps: int = 1000
 
     @field_validator("total_steps")
     @classmethod
     def validate_total_steps(cls, value: int) -> int:
-        """Allow a positive step count or ``-1`` for dataset-based inference."""
-        if value == 0 or value < -1:
-            raise ValueError("`loop.total_steps` must be positive or exactly -1.")
+        """Require an explicit positive step budget (this recipe has no total_steps auto-inference)."""
+        if value < 1:
+            raise ValueError("`loop.total_steps` must be >= 1 (video_mllm does not auto-infer total_steps).")
         return value
 
 
