@@ -8,7 +8,14 @@ from typing import Any
 from mvp_dataset import Dataset
 from mvp_dataset.core import RuntimeContext
 
+from mvp_engine.kit.mllm.data.guard import DataGuard
+
 from .preprocess import process_sample
+
+
+def _drop_empty_samples(assemble_context: Any = None) -> DataGuard:
+    """Assembler factory that drops empty sentinels left by failed preprocessing."""
+    return DataGuard(check_basic_formats=False, check_input_ids=True, check_image_sizes=False)
 
 
 def build_dataset(config: Any, *, processor: Any):
@@ -41,4 +48,8 @@ def build_dataset(config: Any, *, processor: Any):
             video_root=config.data.video_root,
         )
     )
+    # Drop rows that failed preprocessing (over-length or malformed): process_sample
+    # returns an empty sentinel on error, and this guard filters it out instead of
+    # letting the exception crash the data worker.
+    dataset = dataset.assemble(_drop_empty_samples)
     return dataset

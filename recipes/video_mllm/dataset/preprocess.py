@@ -16,6 +16,9 @@ from typing import Any
 import torch
 from transformers.video_utils import VideoMetadata
 
+from mvp_engine.kit.mllm.data.media import build_empty_sample
+from mvp_engine.utils.log import simple_info
+
 from .decoder import decode_frames, probe_video
 from .sampling import sample_frame_indices
 
@@ -65,7 +68,7 @@ def _to_chat_blocks(content: str) -> tuple[list[dict[str, Any]], int]:
     return blocks, video_count
 
 
-def process_sample(
+def _build_sample(
     sample: dict[str, Any],
     *,
     processor: Any,
@@ -210,3 +213,32 @@ def process_sample(
         "pixel_values_videos": full["pixel_values_videos"],
         "video_grid_thw": full["video_grid_thw"],
     }
+
+
+def process_sample(
+    sample: dict[str, Any],
+    *,
+    processor: Any,
+    num_frames: int,
+    max_length: int,
+    video_root: str | None = None,
+    ignore_index: int = -100,
+):
+    """Process one row into training inputs, dropping bad rows instead of crashing.
+
+    Returns an empty sentinel (filtered out downstream by ``build_dataset``) when a
+    row is malformed or its tokenized length exceeds ``max_length``, so a single
+    bad or over-length sample never kills the data worker.
+    """
+    try:
+        return _build_sample(
+            sample,
+            processor=processor,
+            num_frames=num_frames,
+            max_length=max_length,
+            video_root=video_root,
+            ignore_index=ignore_index,
+        )
+    except Exception as exc:
+        simple_info(f"video_mllm: dropping sample ({exc})", level="debug")
+        return build_empty_sample()
