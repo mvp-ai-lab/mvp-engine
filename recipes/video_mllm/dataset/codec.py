@@ -172,13 +172,34 @@ def _load_video_frames(video_path: str | os.PathLike[str], config: CodecPatchCon
     return tensor
 
 
-def _load_frame_difference_residuals(video_path: str | os.PathLike[str], config: CodecPatchConfig) -> torch.Tensor:
-    """Build fallback residuals from grayscale frame differences."""
-    frames = _load_video_frames(video_path, config).to(dtype=torch.float32)
-    gray = frames.mean(dim=1)
+def _frame_difference_residuals_from_frames(frames: torch.Tensor) -> torch.Tensor:
+    """Build fallback residuals as grayscale inter-frame differences of decoded frames.
+
+    Args:
+        frames: Decoded RGB frame tensor shaped ``[T, C, H, W]``.
+
+    Returns:
+        Residual tensor shaped ``[1, 1, T, H, W]``.
+    """
+    gray = frames.to(dtype=torch.float32).mean(dim=1)
     residuals = torch.zeros_like(gray)
     residuals[1:] = gray[1:] - gray[:-1]
     return residuals.unsqueeze(0).unsqueeze(0)
+
+
+def _load_frame_difference_residuals(
+    video_path: str | os.PathLike[str],
+    config: CodecPatchConfig,
+    frames: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Build fallback residuals from grayscale frame differences.
+
+    When ``frames`` is provided (the already-decoded clip), it is reused to avoid a
+    second decode; otherwise the clip is decoded here.
+    """
+    if frames is None:
+        frames = _load_video_frames(video_path, config)
+    return _frame_difference_residuals_from_frames(frames)
 
 
 def _probe_video_codec(video_path: str | os.PathLike[str]) -> str | None:
@@ -349,8 +370,17 @@ def _residual_arrays_to_tensor(residual_arrays: list[Any], config: CodecPatchCon
     return stacked.unsqueeze(0).unsqueeze(0)
 
 
-def _load_residuals(video_path: str | os.PathLike[str], config: CodecPatchConfig) -> torch.Tensor:
-    """Load codec residuals as ``[1, 1, T, H, W]`` for saliency scoring."""
+def _load_residuals(
+    video_path: str | os.PathLike[str],
+    config: CodecPatchConfig,
+    frames: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Load codec residuals as ``[1, 1, T, H, W]`` for saliency scoring.
+
+    ``frames`` is the already-decoded clip (``[T, C, H, W]``); when provided it is
+    reused by the frame-difference fallback to avoid a second decode. The cv_reader
+    (true-residual) path is unaffected and always reads its own residual stream.
+    """
     codec_name = _probe_video_codec(video_path)
     if codec_name is not None and codec_name not in {"h264", "hevc", "h265"}:
         if config.cv_reader_required:
@@ -358,7 +388,7 @@ def _load_residuals(video_path: str | os.PathLike[str], config: CodecPatchConfig
                 "cv_reader codec residuals require an H.264 or H.265/HEVC video, "
                 f"but {video_path} uses codec '{codec_name}'."
             )
-        return _load_frame_difference_residuals(video_path, config)
+        return _load_frame_difference_residuals(video_path, config, frames=frames)
 
     try:
         frame_indices = _sample_frame_indices(_probe_video_frame_count(video_path), config.num_frames)
@@ -371,7 +401,7 @@ def _load_residuals(video_path: str | os.PathLike[str], config: CodecPatchConfig
                 f"video={video_path}, codec={codec_name or '<unknown>'}. "
                 "Install/verify OneVision-Encoder/llava_next/Compressed_Video_Reader in the active venv."
             ) from exc
-        return _load_frame_difference_residuals(video_path, config)
+        return _load_frame_difference_residuals(video_path, config, frames=frames)
 
 
 def process_video_with_codec(
@@ -384,7 +414,9 @@ def process_video_with_codec(
     config.validate()
     video_path = str(Path(video).expanduser().resolve())
     frames = _load_video_frames(video_path, config)
-    residuals = _load_residuals(video_path, config)
+    # Reuse the already-decoded frames for the frame-difference fallback residuals
+    # (no second decode); the cv_reader true-residual path reads its own stream.
+    residuals = _load_residuals(video_path, config, frames=frames)
     visible_indices = mask_by_residual_topk(residuals, config.k_keep, config.patch_size)[0].cpu()
     packed_frames = pack_video_patches(frames, visible_indices, config)
     positions = indices_to_patch_positions(visible_indices, grid_h=config.grid_size, grid_w=config.grid_size)

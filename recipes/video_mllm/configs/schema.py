@@ -107,7 +107,6 @@ class VideoMLLMModelConfig(BaseModel):
 
     pretrained_model_name_or_path: str = "./pretrained/Qwen3-VL-8B-Base-woDS-stage0"
     attn_implementation: Literal["eager", "sdpa", "flash_attention_2"] = "flash_attention_2"
-    image_max_pixels: int | None = Field(None, ge=1)
     gradient_checkpointing: VideoMLLMGradientCheckpointingConfig = Field(
         default_factory=VideoMLLMGradientCheckpointingConfig
     )

@@ -17,6 +17,8 @@ EXPECTED_FILES = [
     "configs/__init__.py",
     "configs/schema.py",
     "configs/train.yaml",
+    "configs/codec_smoke.yaml",
+    "configs/codec_train.yaml",
     "dataset/__init__.py",
     "dataset/decoder.py",
     "dataset/sampling.py",
@@ -24,6 +26,7 @@ EXPECTED_FILES = [
     "dataset/processor.py",
     "dataset/collator.py",
     "dataset/dataset.py",
+    "dataset/codec.py",
     "dataset/types.py",
     "engine/__init__.py",
     "engine/video_mllm_engine.py",
@@ -31,6 +34,10 @@ EXPECTED_FILES = [
     "guards/loss.py",
     "model/__init__.py",
     "model/qwen3_vl.py",
+    "model/onevision.py",
+    "run_smoke_8gpu.sbatch",
+    "run_train_8gpu.sbatch",
+    "run_codec_smoke_8gpu.sbatch",
 ]
 
 

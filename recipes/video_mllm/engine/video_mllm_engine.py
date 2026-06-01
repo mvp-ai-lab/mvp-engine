@@ -33,8 +33,11 @@ class VideoMLLMEngine(Engine):
 
     Mirrors the Qwen3-VL recipe engine but keeps video samples unpacked: uniform
     frame sampling and decode-then-expand preprocessing live in the recipe-local
-    dataset, and the model computes its own M-RoPE positions from
-    ``video_grid_thw``.
+    dataset. Both the uniform and codec paths deliberately omit
+    ``mm_token_type_ids``, so ``compute_3d_position_ids`` returns None and the LLM
+    falls back to default **1-D** positions (M-RoPE is not active). Proper M-RoPE
+    (expanding ``video_grid_thw`` into ``grid_t`` rows of ``(1, h, w)``) is a
+    tracked follow-up; see the NOTE in ``dataset/preprocess.py``.
     """
 
     ConfigClass = VideoMLLMConfig
@@ -197,8 +200,9 @@ class VideoMLLMEngine(Engine):
         """Move one micro-batch to device and cast visual tensors to the active dtype.
 
         Video samples are unpacked, so this only relocates tensors and casts
-        ``pixel_values_videos`` to the mixed-precision dtype. The model computes
-        its own M-RoPE positions from ``video_grid_thw``.
+        ``pixel_values_videos`` to the mixed-precision dtype. ``mm_token_type_ids``
+        is not provided, so the LLM uses default **1-D** positions (M-RoPE is not
+        active); see the class docstring and ``dataset/preprocess.py``.
         """
         device_batch = {}
         for key, value in ctx.data.items():
