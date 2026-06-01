@@ -51,6 +51,11 @@ class VideoMLLMCollator:
         if video_grid_thw:
             model_inputs["video_grid_thw"] = torch.cat(video_grid_thw, dim=0)
 
+        # Codec path only: concat per-sample [1, k_keep, 3] patch positions into [B, k_keep, 3].
+        patch_positions = [sample["patch_positions"] for sample in batch if sample.get("patch_positions") is not None]
+        if patch_positions:
+            model_inputs["patch_positions"] = torch.cat(patch_positions, dim=0)
+
         # Token counts required by the engine's per-token loss normalization.
         shifted_labels = F.pad(model_inputs["labels"], (0, 1), value=self.ignore_index)[..., 1:]
         model_inputs["total_tokens"] = int(model_inputs["attention_mask"].sum().item())

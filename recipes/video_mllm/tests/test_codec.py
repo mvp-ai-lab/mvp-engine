@@ -1,10 +1,14 @@
 """Codec patchification tests for the video MLLM recipe."""
 
 from functools import partial
+from pathlib import Path
 
+import pytest
 import torch
 from mvp_dataset.cache.fingerprint import callable_fingerprint
+from omegaconf import OmegaConf
 
+from recipes.video_mllm.configs.schema import VideoMLLMConfig
 from recipes.video_mllm.dataset import codec as codec_module
 from recipes.video_mllm.dataset.codec import (
     CodecPatchConfig,
@@ -16,6 +20,89 @@ from recipes.video_mllm.dataset.codec import (
     pack_video_patches,
     process_video_with_codec,
 )
+
+CODEC_SMOKE_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "codec_smoke.yaml"
+
+
+def _load_codec_smoke_config() -> VideoMLLMConfig:
+    container = OmegaConf.to_container(OmegaConf.load(CODEC_SMOKE_CONFIG), resolve=True)
+    return VideoMLLMConfig.model_validate(container)
+
+
+def test_codec_smoke_config_validates_against_schema():
+    config = _load_codec_smoke_config()
+
+    assert config.data.codec_enabled is True
+    assert config.data.cv_reader_required is False
+    grid = config.data.codec_frame_size // config.data.codec_patch_size
+    assert config.data.codec_k_keep == config.data.codec_packed_frames * grid * grid
+    assert config.model.vision_encoder_name_or_path
+    assert config.model.freeze_vision_encoder is True
+
+
+def test_codec_schema_rejects_mismatched_k_keep():
+    container = OmegaConf.to_container(OmegaConf.load(CODEC_SMOKE_CONFIG), resolve=True)
+    container["data"]["codec_k_keep"] = 255  # one off from the required packed-frame budget.
+
+    with pytest.raises(ValueError):
+        VideoMLLMConfig.model_validate(container)
+
+
+def test_build_codec_sample_expands_video_pads_and_masks_labels(monkeypatch):
+    from recipes.video_mllm.dataset import preprocess as preprocess_module
+
+    config = CodecPatchConfig(num_frames=2, packed_frames=1, frame_size=4, patch_size=2, k_keep=4)
+
+    fake_outputs = {
+        "pixel_values_videos": torch.zeros(1, 3, 1, 4, 4),
+        "video_grid_thw": torch.tensor([[1, 2, 2]], dtype=torch.long),
+        "patch_positions": torch.zeros(1, 4, 3, dtype=torch.long),
+    }
+    monkeypatch.setattr(preprocess_module, "process_video_with_codec", lambda *a, **k: fake_outputs)
+
+    class FakeTokenizer:
+        def __call__(self, text, add_special_tokens=False):
+            # Tokenize char-by-char, mapping the (single-char stand-in) video pad to its id.
+            ids = [200 if ch == "V" else ord(ch) for ch in text]
+            return {"input_ids": ids}
+
+    class FakeProcessor:
+        # Single-char video token keeps the char tokenizer trivial; one pad per video block.
+        video_token = "V"
+        video_token_id = 200
+        tokenizer = FakeTokenizer()
+
+        def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False):
+            # One leading prompt char + the single video pad, then the assistant answer when present.
+            has_assistant = any(m["role"] == "assistant" for m in messages)
+            text = "P" + FakeProcessor.video_token
+            if has_assistant and not add_generation_prompt:
+                text += "ANS"
+            return text
+
+    sample = {
+        "messages": [
+            {"role": "user", "content": "<video>describe"},
+            {"role": "assistant", "content": "ANS"},
+        ],
+        "video": "demo.mp4",
+    }
+
+    out = preprocess_module._build_codec_sample(
+        sample, processor=FakeProcessor(), max_length=64, codec_config=config
+    )
+
+    input_ids = out["input_ids"]
+    labels = out["labels"]
+    assert int((input_ids == 200).sum().item()) == config.k_keep
+    # All video pads masked out of the loss.
+    assert torch.all(labels[input_ids == 200] == -100)
+    # Prompt prefix (leading "P" + 4 pads) masked; "ANS" supervised.
+    assert int((labels != -100).sum().item()) == len("ANS")
+    assert out["patch_positions"].shape == (1, config.k_keep, 3)
+    assert out["video_grid_thw"].tolist() == [[1, 2, 2]]
+    assert out["pixel_values_videos"].shape == (1, 3, 1, 4, 4)
+    assert torch.equal(out["attention_mask"], torch.ones_like(input_ids))
 
 
 def test_residual_topk_is_sorted_and_in_bounds():

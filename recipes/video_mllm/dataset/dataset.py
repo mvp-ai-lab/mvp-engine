@@ -10,6 +10,7 @@ from mvp_dataset.core import RuntimeContext
 
 from mvp_engine.kit.mllm.data.guard import DataGuard
 
+from .codec import CodecPatchConfig
 from .preprocess import process_sample
 
 
@@ -39,6 +40,19 @@ def build_dataset(config: Any, *, processor: Any):
     context = RuntimeContext.from_runtime(seed=int(config.seed))
     dataset = Dataset.from_source(str(config.data.source), dataset_path, context=context, resample=True)
 
+    # When codec is enabled, build the OneVision codec geometry once and thread it into
+    # process_sample so it picks the codec path over the uniform decode-then-expand path.
+    codec_config = None
+    if bool(config.data.codec_enabled):
+        codec_config = CodecPatchConfig(
+            num_frames=int(config.data.codec_num_frames),
+            packed_frames=int(config.data.codec_packed_frames),
+            frame_size=int(config.data.codec_frame_size),
+            patch_size=int(config.data.codec_patch_size),
+            k_keep=int(config.data.codec_k_keep),
+            cv_reader_required=bool(config.data.cv_reader_required),
+        )
+
     dataset = dataset.map(
         partial(
             process_sample,
@@ -46,6 +60,7 @@ def build_dataset(config: Any, *, processor: Any):
             num_frames=int(config.data.num_frames),
             max_length=int(config.data.max_seq_len),
             video_root=config.data.video_root,
+            codec_config=codec_config,
         )
     )
     # Drop rows that failed preprocessing (over-length or malformed): process_sample

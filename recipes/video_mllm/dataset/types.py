@@ -15,5 +15,6 @@ class ModelInputs(TypedDict):
     labels: torch.Tensor
     pixel_values_videos: NotRequired[torch.Tensor]
     video_grid_thw: NotRequired[torch.Tensor]
+    patch_positions: NotRequired[torch.Tensor]
     total_tokens: NotRequired[int]
     effective_tokens: NotRequired[int]

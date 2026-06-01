@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from mvp_engine.config.schema import BaseEngineConfig, BaseLoopConfig, BaseOptimConfig
 
@@ -13,6 +13,12 @@ class VideoMLLMDataConfig(BaseModel):
     Video samples are kept unpacked: uniform frame sampling (the swappable seam
     in ``dataset/sampling.py``) plus decode-then-expand preprocessing. There are
     no packing options.
+
+    Setting ``codec_enabled`` switches the build-time video strategy to OneVision
+    codec patches: residual-selected patches are packed into ``codec_packed_frames``
+    dense frames and the language side is expanded with exactly ``codec_k_keep``
+    video-pad tokens. The codec geometry fields are only consumed when codec is
+    enabled.
     """
 
     model_config = ConfigDict(frozen=False, extra="forbid")
@@ -25,6 +31,32 @@ class VideoMLLMDataConfig(BaseModel):
     num_workers: int = Field(0, ge=0)
     # Uniform frame-sampling budget; the swappable seam lives in dataset/sampling.py.
     num_frames: int = Field(16, ge=1)
+
+    # Codec video strategy (OneVision encoder + residual-selected patches).
+    codec_enabled: bool = False
+    codec_num_frames: int = Field(64, ge=1)
+    codec_packed_frames: int = Field(8, ge=1)
+    codec_frame_size: int = Field(224, ge=1)
+    codec_patch_size: int = Field(14, ge=1)
+    codec_k_keep: int = Field(2048, ge=1)
+    cv_reader_required: bool = False
+
+    @model_validator(mode="after")
+    def validate_codec_geometry(self) -> "VideoMLLMDataConfig":
+        """Enforce the packed-frame token budget when the codec strategy is enabled."""
+        if not self.codec_enabled:
+            return self
+        if self.codec_frame_size % self.codec_patch_size != 0:
+            raise ValueError("`data.codec_frame_size` must be divisible by `data.codec_patch_size`.")
+        grid = self.codec_frame_size // self.codec_patch_size
+        expected = self.codec_packed_frames * grid * grid
+        if self.codec_k_keep != expected:
+            raise ValueError(
+                "`data.codec_k_keep` must equal "
+                "`codec_packed_frames * (codec_frame_size / codec_patch_size) ** 2` "
+                f"({expected}) when codec is enabled, got {self.codec_k_keep}."
+            )
+        return self
 
     @field_validator("train_path", mode="before")
     @classmethod
@@ -84,6 +116,11 @@ class VideoMLLMModelConfig(BaseModel):
     freeze_vit: bool = True
     freeze_projector: bool = True
     freeze_llm: bool = False
+
+    # OneVision codec swap (only used when data.codec_enabled): the visual tower is
+    # replaced by the encoder loaded from this path, optionally frozen.
+    vision_encoder_name_or_path: str | None = None
+    freeze_vision_encoder: bool = True
 
     compile: VideoMLLMCompileConfig = Field(default_factory=VideoMLLMCompileConfig)
 
