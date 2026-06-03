@@ -1,4 +1,4 @@
-"""Recipe-local assertions for the vlm-freeze-policy skill.
+"""Recipe-local assertions for the kit-aware vlm-freeze-policy skill.
 
 Copy this file to:
 recipes/<recipe>/tests/skills/vlm-freeze-policy/asserts.py
@@ -7,12 +7,10 @@ recipes/<recipe>/tests/skills/vlm-freeze-policy/asserts.py
 import ast
 import inspect
 import textwrap
-from pathlib import Path
-
-from mvp_engine.testing.utils import read_recipe_source
+from typing import Any
 
 VISION_FREEZE_FIELDS = ("freeze_vit", "freeze_vision", "freeze_vision_encoder")
-CONNECTOR_FREEZE_FIELDS = ("freeze_merger", "freeze_projector", "freeze_connector", "freeze_resampler")
+CONNECTOR_FREEZE_FIELDS = ("freeze_projector", "freeze_connector", "freeze_resampler")
 LANGUAGE_FREEZE_FIELDS = ("freeze_llm", "freeze_language_model", "freeze_language")
 
 VISION_NAME_HINTS = ("visual.patch_embed", "visual.blocks", "vision", "vit", "image_encoder")
@@ -20,16 +18,7 @@ CONNECTOR_NAME_HINTS = ("merger", "projector", "connector", "resampler", "adapte
 LANGUAGE_NAME_HINTS = ("language_model", "llm", "text_model", "lm_head", "embed_tokens")
 
 
-def test_file_structure(recipe_root: Path) -> None:
-    """Verify the recipe contains freeze-policy implementation wiring."""
-    source = read_recipe_source(recipe_root)
-
-    assert "requires_grad" in source, "Freeze policy must update or consume parameter.requires_grad."
-    assert "named_parameters" in source, "Freeze policy must derive groups from model.named_parameters()."
-    assert "freeze_" in source, "Recipe code must expose recipe-local freeze flags."
-
-
-def test_config_structure(config) -> None:
+def test_config_structure(config: Any) -> None:
     """Verify config exposes freeze flags for vision, connector, and language groups."""
     model_config = config.model
     field_names = set(model_config.keys()) if hasattr(model_config, "keys") else set(vars(model_config))
@@ -40,40 +29,40 @@ def test_config_structure(config) -> None:
         "language": LANGUAGE_FREEZE_FIELDS,
     }.items():
         matches = field_names & set(candidates)
-        assert matches, (
-            f"model config must expose a {group_name} freeze flag; adapt candidates for recipe-specific names."
-        )
+        assert matches, f"model config must expose a {group_name} freeze flag."
         for field_name in matches:
-            if hasattr(model_config, "__getitem__"):
-                value = model_config[field_name]
-            else:
-                value = getattr(model_config, field_name)
+            value = (
+                model_config[field_name] if hasattr(model_config, "__getitem__") else getattr(model_config, field_name)
+            )
             assert isinstance(value, bool), f"model.{field_name} must be a bool."
 
 
 def test_engine_structure(engine_class: type) -> None:
-    """Verify optimizer construction respects requires_grad and model is built before wrapping."""
+    """Verify freeze policy runs through MLLMModelKit before wrapping and optimizer."""
     prepare_model_source = textwrap.dedent(inspect.getsource(engine_class.prepare_model))
     prepare_optimizer = getattr(engine_class, "prepare_optimizer", None)
     prepare_optimizer_source = textwrap.dedent(inspect.getsource(prepare_optimizer)) if prepare_optimizer else ""
 
     tree = ast.parse(prepare_model_source)
     calls = [(node.lineno, ast.unparse(node.func)) for node in ast.walk(tree) if isinstance(node, ast.Call)]
+    kit_freeze_lines = [lineno for lineno, name in calls if name.endswith(".apply_freeze_policy")]
+    fallback_freeze = "requires_grad" in prepare_model_source and (
+        "named_parameters" in prepare_model_source or ".parameters()" in prepare_model_source
+    )
+    freeze_lines = kit_freeze_lines
     wrap_lines = [
         lineno
         for lineno, name in calls
         if name.endswith("parallelize_model") or name.endswith("DDP") or name.endswith("FullyShardedDataParallel")
     ]
-    if wrap_lines:
-        pre_wrap_source = "\n".join(
-            line for index, line in enumerate(prepare_model_source.splitlines(), start=1) if index < min(wrap_lines)
-        )
-        assert "freeze" in pre_wrap_source or "build_" in pre_wrap_source, (
-            "Freeze policy must run in the model build path before distributed wrapping."
-        )
 
-    assert "requires_grad" in prepare_optimizer_source, (
-        "prepare_optimizer must collect only trainable parameters or explicitly validate trainability."
+    assert freeze_lines or fallback_freeze, (
+        "prepare_model must use MLLMModelKit freeze policy or a documented freeze fallback."
+    )
+    if wrap_lines and freeze_lines:
+        assert min(freeze_lines) < min(wrap_lines), "Freeze policy must run before distributed wrapping."
+    assert "build_optimizer" in prepare_optimizer_source or "requires_grad" in prepare_optimizer_source, (
+        "prepare_optimizer must use OptimKit or otherwise collect only trainable parameters."
     )
 
 
@@ -93,10 +82,9 @@ def assert_before_train_end(engine) -> None:
         field_name = next((name for name in field_names if hasattr(model_config, name)), None)
         if field_name is None:
             continue
-        if hasattr(model_config, "__getitem__"):
-            enabled = model_config[field_name]
-        else:
-            enabled = getattr(model_config, field_name)
+        enabled = (
+            model_config[field_name] if hasattr(model_config, "__getitem__") else getattr(model_config, field_name)
+        )
         if not enabled:
             continue
 

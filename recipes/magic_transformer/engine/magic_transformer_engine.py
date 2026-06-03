@@ -6,12 +6,12 @@ from typing import TypedDict
 
 import torch
 import torch.nn.functional as F
-from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader, DistributedSampler
 
 from mvp_engine.distributed.parallelize import parallelize_model
 from mvp_engine.distributed.utils import get_rank, get_world_size
 from mvp_engine.engine import ENGINE_REGISTRY, Engine, TrainStepContext
+from mvp_engine.kit import OptimKit
 from mvp_engine.utils.log import logger
 
 from ..configs.schema import MagicTransformerConfig
@@ -32,6 +32,11 @@ class MagicTransformerEngine(Engine):
 
     ConfigClass = MagicTransformerConfig
     config: MagicTransformerConfig
+
+    def __init__(self, config: MagicTransformerConfig):
+        """Initialize recipe-local reusable kits."""
+        super().__init__(config)
+        self.optim_kit = OptimKit()
 
     def prepare_dataloader(self, workflow: str = "train") -> DataLoader:
         """Build the requested split with distributed-aware sampling."""
@@ -79,30 +84,22 @@ class MagicTransformerEngine(Engine):
 
     def prepare_optimizer(self) -> torch.optim.Optimizer:
         """Build the AdamW optimizer for all trainable parameters."""
-        model_parameters = [parameter for parameter in self.model.parameters() if parameter.requires_grad]
-        return torch.optim.AdamW(
-            model_parameters,
+        return self.optim_kit.build_optimizer(
+            self.model,
+            optimizer="AdamW",
             lr=float(self.config.optim.lr),
             weight_decay=float(self.config.optim.weight_decay),
         )
 
-    def prepare_scheduler(self) -> SequentialLR | CosineAnnealingLR:
+    def prepare_scheduler(self) -> torch.optim.lr_scheduler.LRScheduler:
         """Build the warmup-plus-cosine learning-rate schedule."""
         warmup_steps = int(self.total_steps * float(self.config.optim.warmup_ratio))
-        if warmup_steps <= 0:
-            return CosineAnnealingLR(self.optimizer, T_max=max(self.total_steps, 1))
-
-        scheduler_warmup = LinearLR(
-            self.optimizer,
-            start_factor=1e-3,
-            end_factor=1.0,
-            total_iters=warmup_steps,
+        return self.optim_kit.build_lr_scheduler(
+            optimizer=self.optimizer,
+            lr_scheduler="cosine",
+            num_warmup_steps=warmup_steps,
+            num_training_steps=self.total_steps,
         )
-        scheduler_main = CosineAnnealingLR(
-            self.optimizer,
-            T_max=max(self.total_steps - warmup_steps, 1),
-        )
-        return SequentialLR(self.optimizer, [scheduler_warmup, scheduler_main], milestones=[warmup_steps])
 
     def train_pre_step(self, ctx: TrainStepContext) -> TrainStepContext:
         """Move the fake token batch to the active device."""

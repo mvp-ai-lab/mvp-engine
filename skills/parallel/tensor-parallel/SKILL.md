@@ -32,6 +32,8 @@ Identify these before editing:
 - repeated module classes containing TP-covered linears;
 - direct child names of target `nn.Linear` modules;
 - forward code that reshapes, splits, indexes, or caches head/expert metadata;
+- dataset or dataloader sharding code, including any `RuntimeContext`,
+  `DataLoadMesh`, sampler, or rank/world-size logic;
 - current `parallel.mesh` values and intended TP size;
 - recipe-local `tests/test_structure.py` and `tests/test_smoke.py`.
 
@@ -46,6 +48,7 @@ Search the recipe first:
 
 ```bash
 rg -n "TP_MODULE_CONFIG|TP_MODULE_POSTPROCESSORS|parallelize_model|parallel.mesh" recipes/<recipe>
+rg -n "RuntimeContext|DataLoadMesh|device_mesh|dp_dims|DistributedSampler|rank|world_size" recipes/<recipe>
 rg -n "q_proj|k_proj|v_proj|out_proj|fc1|fc2|gate_proj|up_proj|down_proj" recipes/<recipe>
 ```
 
@@ -55,6 +58,8 @@ Find:
 - where `parallelize_model(...)` is called;
 - which repeated block classes contain attention, MLP, projector, expert, or
   head linears;
+- whether dataloading shards samples by all global ranks or only by data-parallel
+  mesh dimensions;
 - whether FSDP2 prefetching or other runtime class attributes already live on
   the same top-level class.
 
@@ -122,6 +127,19 @@ parallel:
     tensor: <T>
 ```
 
+Data-loading rules:
+
+- all ranks in the same `tensor` group must read the same samples and
+  micro-batches;
+- `tensor` is model-parallel, not data-parallel, and must not multiply global
+  batch size or dataset slots;
+- shard data only over data-parallel dimensions, normally `replicate` and
+  FSDP2 `shard`;
+- exclude `tensor` and any other non-data-parallel dimensions such as `context`
+  from dataloader sharding;
+- when using `mvp_dataset`, pass a `device_mesh` plus `dp_dims` that excludes
+  `tensor`, or provide an equivalent sampler/loader guarantee.
+
 ## Validation
 
 ### Soft Validation
@@ -139,6 +157,10 @@ Review the modified recipe without running tests:
   top-level class when used together;
 - mesh `replicate`, `shard`, and `tensor` are compatible with the intended world
   size;
+- dataloading uses identical samples for ranks that differ only on the `tensor`
+  mesh dimension;
+- global batch accounting excludes `tensor` and includes only data-parallel
+  dimensions such as `replicate` and `shard`;
 - no generic TP DSL, YAML plan, or `mvp_engine/` runtime change was added;
 - structure or smoke checks are not reported as completed sharding-impact
   validation.
@@ -185,12 +207,17 @@ TP-on models and compare loss or logits within recipe-appropriate tolerances.
 Use eval mode, fixed seeds, no optimizer step, identical weights, and the same
 mixed precision policy where feasible.
 
+Add a dataloader identity impact test when changing recipe data loading: within
+one `tensor` group, assert sample ids or a stable batch fingerprint are identical
+across tensor ranks, while data-parallel ranks receive distinct slots.
+
 ## Output
 
 - State which model and config files changed.
 - Summarize the TP plan by runtime module class.
 - State whether TP postprocessors were added and why.
 - State final mesh settings.
+- State how dataloader sharding preserves identical batches within tensor groups.
 - Report soft validation and hard validation status.
 - Call out any remaining gap, such as no TP-active smoke run, no local-shape
   impact validation, or no loss-parity validation.
