@@ -234,12 +234,16 @@ class VideoMLLMEngine(Engine):
             }
             outputs = self.model(**model_inputs)
 
+        # `video_grid_thw` here is a synthetic [1, visual_token_count, 1] placeholder row, not a
+        # real spatial grid, and the visual tower is the (frozen) OneVision encoder rather than the
+        # native Qwen3-VL ViT that the FLOPs estimator models. Skip the vision-FLOPs term instead of
+        # feeding a placeholder grid into the native-ViT formula; the dominant trained-LLM FLOPs are unaffected.
         self.mfu_kit.accumulate_microbatch(
             model=self.unwrapped_model,
             batch_size=int(data["input_ids"].shape[0]),
             seq_len=int(data["input_ids"].shape[1]),
             attention_mask=data.get("attention_mask"),
-            image_grid_thw=data.get("video_grid_thw"),
+            image_grid_thw=None,
             is_training=True,
             freeze_vit=bool(self.config.model.freeze_vit),
             freeze_projector=bool(self.config.model.freeze_projector),

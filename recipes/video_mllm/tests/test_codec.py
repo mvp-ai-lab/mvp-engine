@@ -308,8 +308,9 @@ def test_onevision_patch_sequence_uses_per_sample_token_positions():
             self.position_shapes = []
 
         def forward_from_positions(self, positions):
+            # Real OneVision video_rope takes [batch, seq, 3] and returns [batch, seq, half].
             self.position_shapes.append(tuple(positions.shape))
-            return torch.zeros(positions.shape[0], 2, device=positions.device)
+            return torch.zeros(positions.shape[0], positions.shape[1], 2, device=positions.device)
 
     class FakeEncoderBlock(nn.Module):
         def __init__(self):
@@ -346,7 +347,7 @@ def test_onevision_patch_sequence_uses_per_sample_token_positions():
     )
 
     assert outputs.pooler_output.shape == (5, 4)
-    assert tower.encoder.video_rope.position_shapes == [(2, 3), (3, 3)]
+    assert tower.encoder.video_rope.position_shapes == [(1, 2, 3), (1, 3, 3)]
     assert tower.encoder.encoder.rotary_shapes == [(1, 2, 4), (1, 3, 4)]
 
 

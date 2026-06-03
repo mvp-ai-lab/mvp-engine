@@ -122,10 +122,11 @@ class OneVisionVisualTower(nn.Module):
             count = int(count_tensor)
             end = start + count
             hidden_states = embeddings[start:end].unsqueeze(0)
-            positions = token_positions[start:end]
+            # OneVision video_rope expects positions as [batch, seq, 3] and returns
+            # [batch, seq, half]; add the batch axis so the einsum sees 2-D t/h/w.
+            positions = token_positions[start:end].unsqueeze(0)
             freqs = self.encoder.video_rope.forward_from_positions(positions)
             freqs = torch.cat([freqs, freqs], dim=-1)
-            freqs = freqs.unsqueeze(0)
 
             hidden_states = self.encoder.layernorm_pre(hidden_states)
             encoder_outputs = self.encoder.encoder(
