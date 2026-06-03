@@ -206,9 +206,12 @@ class VideoMLLMEngine(Engine):
         if pixel_values_videos is not None and pixel_values_videos.is_floating_point():
             device_batch["pixel_values_videos"] = pixel_values_videos.to(self.dtype)
 
-        # Codec-patch path provides sparse patch positions; dense strategies set None.
-        # patch_positions is not a model kwarg, so it must be popped before model(**inputs).
-        self.unwrapped_model.model._video_vlm_patch_positions = device_batch.pop("patch_positions", None)
+        # Visual layout metadata is consumed by the OneVision adapter, not Qwen3-VL's forward kwargs.
+        self.unwrapped_model.model._video_vlm_token_positions = device_batch.pop("video_token_positions", None)
+        self.unwrapped_model.model._video_vlm_token_counts = device_batch.pop("video_token_counts", None)
+        self.unwrapped_model.model._video_vlm_frame_grid_thw = device_batch.pop("video_frame_grid_thw", None)
+        self.unwrapped_model.model._video_vlm_merge_sizes = device_batch.pop("video_merge_sizes", None)
+        self.unwrapped_model.model._video_vlm_frame_counts = device_batch.pop("video_frame_counts", None)
 
         ctx.data = device_batch
         return ctx

@@ -30,6 +30,10 @@ class VideoMLLMDataConfig(BaseModel):
     video_frame_size: int = Field(224, ge=1)
     video_encoding_strategy: VideoEncodingStrategy = "uniform"
 
+    # Keyframe-lowres video strategy: every Nth sampled frame is high-res, all others are dense low-res frames.
+    keyframe_interval: int = Field(4, ge=1)
+    keyframe_lowres_frame_size: int = Field(112, ge=1)
+
     # Codec video strategy (OneVision encoder + residual-selected patches).
     codec_num_frames: int = Field(64, ge=1)
     codec_packed_frames: int = Field(8, ge=1)
@@ -41,11 +45,8 @@ class VideoMLLMDataConfig(BaseModel):
     @model_validator(mode="after")
     def validate_video_encoding_strategy(self) -> "VideoMLLMDataConfig":
         """Validate strategy-specific geometry without silently falling back."""
-        if self.video_encoding_strategy == "keyframe_lowres":
-            raise ValueError(
-                "`data.video_encoding_strategy=keyframe_lowres` is reserved for dense variable-resolution "
-                "frames but is not implemented yet."
-            )
+        if self.uses_keyframe_lowres and self.keyframe_lowres_frame_size > self.video_frame_size:
+            raise ValueError("`data.keyframe_lowres_frame_size` must be <= `data.video_frame_size`.")
         if not self.uses_codec_patches:
             return self
         if self.codec_frame_size % self.codec_patch_size != 0:
@@ -64,6 +65,11 @@ class VideoMLLMDataConfig(BaseModel):
     def uses_codec_patches(self) -> bool:
         """Return whether the sparse codec-patch data path is active."""
         return self.video_encoding_strategy == "codec_patch"
+
+    @property
+    def uses_keyframe_lowres(self) -> bool:
+        """Return whether the dense keyframe/low-res data path is active."""
+        return self.video_encoding_strategy == "keyframe_lowres"
 
     @field_validator("train_path", mode="before")
     @classmethod

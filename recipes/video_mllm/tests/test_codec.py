@@ -2,14 +2,17 @@
 
 from functools import partial
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
+import torch.nn as nn
 from mvp_dataset.cache.fingerprint import callable_fingerprint
 from omegaconf import OmegaConf
 
 from recipes.video_mllm.configs.schema import VideoMLLMConfig
 from recipes.video_mllm.dataset import codec as codec_module
+from recipes.video_mllm.dataset.collator import VideoMLLMCollator
 from recipes.video_mllm.dataset.codec import (
     CodecPatchConfig,
     _load_cv_reader_residual_arrays,
@@ -20,6 +23,12 @@ from recipes.video_mllm.dataset.codec import (
     pack_video_patches,
     process_video_with_codec,
 )
+from recipes.video_mllm.dataset.video_encoding import (
+    KeyframeLowresVideoConfig,
+    VideoEncodingResult,
+    process_video_with_keyframe_lowres,
+)
+from recipes.video_mllm.model.onevision import OneVisionVisualTower
 
 CODEC_SMOKE_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "codec_smoke.yaml"
 
@@ -48,11 +57,26 @@ def test_codec_schema_rejects_mismatched_k_keep():
         VideoMLLMConfig.model_validate(container)
 
 
-def test_schema_rejects_unimplemented_keyframe_lowres():
+def test_schema_accepts_keyframe_lowres_strategy():
     container = OmegaConf.to_container(OmegaConf.load(CODEC_SMOKE_CONFIG), resolve=True)
     container["data"]["video_encoding_strategy"] = "keyframe_lowres"
+    container["data"]["keyframe_interval"] = 2
+    container["data"]["keyframe_lowres_frame_size"] = 112
 
-    with pytest.raises(ValueError, match="keyframe_lowres"):
+    config = VideoMLLMConfig.model_validate(container)
+
+    assert config.data.uses_keyframe_lowres is True
+    assert config.data.keyframe_interval == 2
+    assert config.data.keyframe_lowres_frame_size == 112
+
+
+def test_schema_rejects_keyframe_lowres_larger_than_full_resolution():
+    container = OmegaConf.to_container(OmegaConf.load(CODEC_SMOKE_CONFIG), resolve=True)
+    container["data"]["video_encoding_strategy"] = "keyframe_lowres"
+    container["data"]["video_frame_size"] = 112
+    container["data"]["keyframe_lowres_frame_size"] = 224
+
+    with pytest.raises(ValueError, match="keyframe_lowres_frame_size"):
         VideoMLLMConfig.model_validate(container)
 
 
@@ -62,10 +86,14 @@ def test_build_uniform_sample_expands_dense_video_pads_and_masks_labels(monkeypa
 
     config = DenseVideoConfig(num_frames=2, frame_size=4, patch_size=2)
 
-    fake_outputs = {
-        "pixel_values_videos": torch.zeros(1, 3, 2, 4, 4),
-        "video_grid_thw": torch.tensor([[2, 2, 2]], dtype=torch.long),
-    }
+    fake_outputs = VideoEncodingResult(
+        patch_values=torch.zeros(8, 3, 2, 2),
+        token_positions=torch.tensor(
+            [[0, 0, 0], [0, 0, 1], [0, 1, 0], [0, 1, 1], [1, 0, 0], [1, 0, 1], [1, 1, 0], [1, 1, 1]]
+        ),
+        frame_grid_thw=torch.tensor([[1, 2, 2], [1, 2, 2]], dtype=torch.long),
+        merge_sizes=torch.ones(2, dtype=torch.long),
+    )
     monkeypatch.setattr(preprocess_module, "process_video_with_dense_frames", lambda *a, **k: fake_outputs)
 
     class FakeTokenizer:
@@ -102,10 +130,11 @@ def test_build_uniform_sample_expands_dense_video_pads_and_masks_labels(monkeypa
     assert int((input_ids == 200).sum().item()) == 8
     assert torch.all(labels[input_ids == 200] == -100)
     assert int((labels != -100).sum().item()) == len("ANS")
-    assert out["video_grid_thw"].tolist() == [[2, 2, 2]]
-    assert out["pixel_values_videos"].shape == (1, 3, 2, 4, 4)
+    assert out["video_grid_thw"].tolist() == [[1, 8, 1]]
+    assert out["pixel_values_videos"].shape == (8, 3, 2, 2)
+    assert out["video_token_positions"].shape == (8, 3)
+    assert int(out["visual_token_count"].item()) == 8
     assert torch.equal(out["attention_mask"], torch.ones_like(input_ids))
-    assert "patch_positions" not in out
 
 
 def test_build_codec_sample_expands_video_pads_and_masks_labels(monkeypatch):
@@ -113,11 +142,12 @@ def test_build_codec_sample_expands_video_pads_and_masks_labels(monkeypatch):
 
     config = CodecPatchConfig(num_frames=2, packed_frames=1, frame_size=4, patch_size=2, k_keep=4)
 
-    fake_outputs = {
-        "pixel_values_videos": torch.zeros(1, 3, 1, 4, 4),
-        "video_grid_thw": torch.tensor([[1, 2, 2]], dtype=torch.long),
-        "patch_positions": torch.zeros(1, 4, 3, dtype=torch.long),
-    }
+    fake_outputs = VideoEncodingResult(
+        patch_values=torch.zeros(4, 3, 2, 2),
+        token_positions=torch.zeros(4, 3, dtype=torch.long),
+        frame_grid_thw=torch.tensor([[1, 2, 2], [1, 2, 2]], dtype=torch.long),
+        merge_sizes=torch.ones(2, dtype=torch.long),
+    )
     monkeypatch.setattr(preprocess_module, "process_video_with_codec", lambda *a, **k: fake_outputs)
 
     class FakeTokenizer:
@@ -159,10 +189,208 @@ def test_build_codec_sample_expands_video_pads_and_masks_labels(monkeypatch):
     assert torch.all(labels[input_ids == 200] == -100)
     # Prompt prefix (leading "P" + 4 pads) masked; "ANS" supervised.
     assert int((labels != -100).sum().item()) == len("ANS")
-    assert out["patch_positions"].shape == (1, config.k_keep, 3)
-    assert out["video_grid_thw"].tolist() == [[1, 2, 2]]
-    assert out["pixel_values_videos"].shape == (1, 3, 1, 4, 4)
+    assert out["video_token_positions"].shape == (config.k_keep, 3)
+    assert out["video_grid_thw"].tolist() == [[1, config.k_keep, 1]]
+    assert out["pixel_values_videos"].shape == (config.k_keep, 3, 2, 2)
+    assert int(out["visual_token_count"].item()) == config.k_keep
     assert torch.equal(out["attention_mask"], torch.ones_like(input_ids))
+
+
+def test_build_keyframe_lowres_sample_expands_actual_visual_tokens(monkeypatch):
+    from recipes.video_mllm.dataset import preprocess as preprocess_module
+
+    config = KeyframeLowresVideoConfig(
+        num_frames=3,
+        full_frame_size=4,
+        lowres_frame_size=2,
+        patch_size=1,
+        keyframe_interval=2,
+    )
+    fake_outputs = VideoEncodingResult(
+        patch_values=torch.zeros(36, 3, 1, 1),
+        token_positions=torch.zeros(36, 3),
+        frame_grid_thw=torch.tensor([[1, 4, 4], [1, 2, 2], [1, 4, 4]], dtype=torch.long),
+        merge_sizes=torch.ones(3, dtype=torch.long),
+    )
+    monkeypatch.setattr(preprocess_module, "process_video_with_keyframe_lowres", lambda *a, **k: fake_outputs)
+
+    class FakeTokenizer:
+        def __call__(self, text, add_special_tokens=False):
+            ids = [200 if ch == "V" else ord(ch) for ch in text]
+            return {"input_ids": ids}
+
+    class FakeProcessor:
+        video_token = "V"
+        video_token_id = 200
+        tokenizer = FakeTokenizer()
+
+        def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False):
+            has_assistant = any(m["role"] == "assistant" for m in messages)
+            text = "P" + FakeProcessor.video_token
+            if has_assistant and not add_generation_prompt:
+                text += "ANS"
+            return text
+
+    sample = {
+        "messages": [
+            {"role": "user", "content": "<video>describe"},
+            {"role": "assistant", "content": "ANS"},
+        ],
+        "video": "demo.mp4",
+    }
+
+    out = preprocess_module._build_keyframe_lowres_sample(
+        sample,
+        processor=FakeProcessor(),
+        max_length=128,
+        keyframe_config=config,
+    )
+
+    input_ids = out["input_ids"]
+    labels = out["labels"]
+    assert int((input_ids == 200).sum().item()) == 36
+    assert torch.all(labels[input_ids == 200] == -100)
+    assert int((labels != -100).sum().item()) == len("ANS")
+    assert out["video_grid_thw"].tolist() == [[1, 36, 1]]
+    assert out["video_frame_grid_thw"].tolist() == [[1, 4, 4], [1, 2, 2], [1, 4, 4]]
+
+
+def test_collator_concats_visual_token_layout_and_counts():
+    first_video = VideoEncodingResult(
+        patch_values=torch.zeros(2, 3, 2, 2),
+        token_positions=torch.tensor([[0, 0, 0], [0, 0, 1]], dtype=torch.long),
+        frame_grid_thw=torch.tensor([[1, 1, 2]], dtype=torch.long),
+        merge_sizes=torch.ones(1, dtype=torch.long),
+    ).to_model_inputs()
+    second_video = VideoEncodingResult(
+        patch_values=torch.ones(3, 3, 2, 2),
+        token_positions=torch.tensor([[0, 0, 0], [0, 1, 0], [1, 0, 0]], dtype=torch.long),
+        frame_grid_thw=torch.tensor([[1, 2, 1], [1, 1, 1]], dtype=torch.long),
+        merge_sizes=torch.ones(2, dtype=torch.long),
+    ).to_model_inputs()
+    batch = [
+        {
+            "input_ids": torch.tensor([1, 200, 200, 2]),
+            "attention_mask": torch.ones(4, dtype=torch.long),
+            "labels": torch.tensor([-100, -100, -100, 2]),
+            **first_video,
+        },
+        {
+            "input_ids": torch.tensor([1, 200, 200, 200, 3]),
+            "attention_mask": torch.ones(5, dtype=torch.long),
+            "labels": torch.tensor([-100, -100, -100, -100, 3]),
+            **second_video,
+        },
+    ]
+
+    out = VideoMLLMCollator(pad_token_id=0)(batch)
+
+    assert out["pixel_values_videos"].shape == (5, 3, 2, 2)
+    assert out["video_token_positions"].tolist() == [
+        [0, 0, 0],
+        [0, 0, 1],
+        [0, 0, 0],
+        [0, 1, 0],
+        [1, 0, 0],
+    ]
+    assert out["video_token_counts"].tolist() == [2, 3]
+    assert out["video_grid_thw"].tolist() == [[1, 2, 1], [1, 3, 1]]
+    assert out["video_frame_grid_thw"].tolist() == [[1, 1, 2], [1, 2, 1], [1, 1, 1]]
+    assert out["video_frame_counts"].tolist() == [1, 2]
+    assert out["video_merge_sizes"].tolist() == [1, 1, 1]
+    assert out["total_tokens"] == 9
+    assert out["effective_tokens"] == 2
+
+
+def test_onevision_patch_sequence_uses_per_sample_token_positions():
+    class FakeRope:
+        def __init__(self):
+            self.position_shapes = []
+
+        def forward_from_positions(self, positions):
+            self.position_shapes.append(tuple(positions.shape))
+            return torch.zeros(positions.shape[0], 2, device=positions.device)
+
+    class FakeEncoderBlock(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.rotary_shapes = []
+
+        def forward(self, hidden_states, *, attention_mask, rotary_pos_emb, **kwargs):
+            self.rotary_shapes.append(tuple(rotary_pos_emb.shape))
+            return SimpleNamespace(last_hidden_state=hidden_states)
+
+    class FakeEncoder(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.embeddings = SimpleNamespace(
+                patch_embedding=nn.Conv2d(3, 4, kernel_size=2, stride=2, bias=False)
+            )
+            self.video_rope = FakeRope()
+            self.layernorm_pre = nn.Identity()
+            self.encoder = FakeEncoderBlock()
+            self.layernorm_post = None
+
+    tower = OneVisionVisualTower.__new__(OneVisionVisualTower)
+    nn.Module.__init__(tower)
+    tower.encoder = FakeEncoder()
+    tower.projection = nn.Identity()
+
+    outputs = tower(
+        torch.zeros(5, 3, 2, 2),
+        token_positions=torch.tensor(
+            [[0, 0, 0], [0, 0, 1], [2, 1, 0], [2, 1, 1], [3, 0, 0]],
+            dtype=torch.long,
+        ),
+        token_counts=torch.tensor([2, 3], dtype=torch.long),
+    )
+
+    assert outputs.pooler_output.shape == (5, 4)
+    assert tower.encoder.video_rope.position_shapes == [(2, 3), (3, 3)]
+    assert tower.encoder.encoder.rotary_shapes == [(1, 2, 4), (1, 3, 4)]
+
+
+def test_keyframe_lowres_video_processor_outputs_dense_variable_resolution_tokens(monkeypatch):
+    from recipes.video_mllm.dataset import video_encoding as video_encoding_module
+
+    config = KeyframeLowresVideoConfig(
+        num_frames=3,
+        full_frame_size=4,
+        lowres_frame_size=2,
+        patch_size=1,
+        keyframe_interval=2,
+    )
+    frames = [
+        torch.zeros(3, 4, 4, dtype=torch.uint8),
+        torch.zeros(3, 2, 2, dtype=torch.uint8),
+        torch.zeros(3, 4, 4, dtype=torch.uint8),
+    ]
+    monkeypatch.setattr(
+        video_encoding_module,
+        "load_keyframe_lowres_video_frames",
+        lambda *_args, **_kwargs: (frames, [True, False, True]),
+    )
+
+    class FakeImageProcessor:
+        def __call__(self, *, images, return_tensors, do_resize, do_center_crop):
+            assert len(images) == 1
+            assert return_tensors == "pt"
+            assert do_resize is False
+            assert do_center_crop is False
+            height, width = images[0].height, images[0].width
+            return {"pixel_values": torch.zeros(1, 3, height, width)}
+
+    class FakeProcessor:
+        onevision_image_processor = FakeImageProcessor()
+
+    outputs = process_video_with_keyframe_lowres("demo.mp4", processor=FakeProcessor(), config=config)
+
+    assert outputs.patch_values.shape == (36, 3, 1, 1)
+    assert outputs.model_video_grid_thw.tolist() == [[1, 36, 1]]
+    assert outputs.frame_grid_thw.tolist() == [[1, 4, 4], [1, 2, 2], [1, 4, 4]]
+    assert outputs.merge_sizes.tolist() == [1, 1, 1]
+    assert outputs.token_positions.shape == (36, 3)
+    assert torch.allclose(outputs.token_positions[16:20, 1:], torch.tensor([[0.0, 0.0], [0.0, 3.0], [3.0, 0.0], [3.0, 3.0]]))
 
 
 def test_residual_topk_is_sorted_and_in_bounds():
@@ -254,9 +482,9 @@ def test_codec_video_processor_keeps_packed_frame_size(monkeypatch, tmp_path):
 
     outputs = process_video_with_codec(video_path, processor=FakeProcessor(), config=config)
 
-    assert outputs["pixel_values_videos"].shape == (1, 3, 1, 4, 4)
-    assert outputs["video_grid_thw"].tolist() == [[1, 2, 2]]
-    assert outputs["patch_positions"].shape == (1, 4, 3)
+    assert outputs.patch_values.shape == (4, 3, 2, 2)
+    assert outputs.model_video_grid_thw.tolist() == [[1, 4, 1]]
+    assert outputs.token_positions.shape == (4, 3)
 
 
 def test_cv_reader_callback_requests_selected_frame_ids():

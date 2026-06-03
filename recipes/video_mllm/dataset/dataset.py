@@ -12,7 +12,7 @@ from mvp_engine.kit.mllm.data.guard import DataGuard
 
 from .codec import CodecPatchConfig
 from .preprocess import process_sample
-from .video_encoding import DenseVideoConfig
+from .video_encoding import DenseVideoConfig, KeyframeLowresVideoConfig
 
 
 def _drop_empty_samples(assemble_context: Any = None) -> DataGuard:
@@ -44,11 +44,20 @@ def build_dataset(config: Any, *, processor: Any):
     # Build strategy-local geometry once and thread it into process_sample.
     dense_config = None
     codec_config = None
+    keyframe_config = None
     if config.data.video_encoding_strategy == "uniform":
         dense_config = DenseVideoConfig(
             num_frames=int(config.data.num_frames),
             frame_size=int(config.data.video_frame_size),
             patch_size=int(getattr(processor, "onevision_patch_size", 14)),
+        )
+    elif config.data.uses_keyframe_lowres:
+        keyframe_config = KeyframeLowresVideoConfig(
+            num_frames=int(config.data.num_frames),
+            full_frame_size=int(config.data.video_frame_size),
+            lowres_frame_size=int(config.data.keyframe_lowres_frame_size),
+            patch_size=int(getattr(processor, "onevision_patch_size", 14)),
+            keyframe_interval=int(config.data.keyframe_interval),
         )
     elif config.data.uses_codec_patches:
         codec_config = CodecPatchConfig(
@@ -69,6 +78,7 @@ def build_dataset(config: Any, *, processor: Any):
             video_encoding_strategy=config.data.video_encoding_strategy,
             dense_config=dense_config,
             codec_config=codec_config,
+            keyframe_config=keyframe_config,
         )
     )
     # Drop rows that failed preprocessing (over-length or malformed): process_sample

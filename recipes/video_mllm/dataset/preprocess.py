@@ -16,7 +16,12 @@ from mvp_engine.kit.mllm.data.media import build_empty_sample
 from mvp_engine.utils.log import simple_info
 
 from .codec import CodecPatchConfig, process_video_with_codec
-from .video_encoding import DenseVideoConfig, process_video_with_dense_frames
+from .video_encoding import (
+    DenseVideoConfig,
+    KeyframeLowresVideoConfig,
+    process_video_with_dense_frames,
+    process_video_with_keyframe_lowres,
+)
 
 ROLE_MAP = {
     "assistant": "assistant",
@@ -208,13 +213,11 @@ def _build_uniform_sample(
     prompt_messages, target_messages = _render_chat_with_single_video(sample)
 
     video_outputs = process_video_with_dense_frames(video_path, processor=processor, config=dense_config)
-    video_grid_thw = video_outputs["video_grid_thw"]
-    video_token_count = int(video_grid_thw.prod(dim=-1).sum().item())
     input_ids, attention_mask, labels = _build_text_tensors_with_expanded_video(
         prompt_messages=prompt_messages,
         target_messages=target_messages,
         processor=processor,
-        video_token_count=video_token_count,
+        video_token_count=video_outputs.visual_token_count,
         max_length=max_length,
         overlength_hint="reduce data.num_frames, data.video_frame_size, or max_seq_len.",
         ignore_index=ignore_index,
@@ -224,8 +227,7 @@ def _build_uniform_sample(
         "input_ids": input_ids,
         "attention_mask": attention_mask,
         "labels": labels,
-        "pixel_values_videos": video_outputs["pixel_values_videos"],
-        "video_grid_thw": video_grid_thw,
+        **video_outputs.to_model_inputs(),
     }
 
 
@@ -240,12 +242,9 @@ def _build_codec_sample(
 ):
     """Convert one raw row into OneVision codec training inputs.
 
-    Codec patchification owns ``pixel_values_videos``/``video_grid_thw`` and the
-    language side is expanded by hand to exactly ``codec_k_keep`` video-pad
-    tokens. The OneVision tower uses ``spatial_merge_size == 1``, so the
-    language-side video-token count equals ``codec_k_keep == prod(video_grid_thw)``.
-    The single ``patch_positions`` tensor is returned for the engine to route
-    through the encoder.
+    Codec patchification emits the same visual-token layout as dense strategies:
+    ``patch_values`` carry selected patch pixels, and ``token_positions`` preserve
+    the original ``[t, h, w]`` coordinates for OneVision RoPE.
     """
     video_path = _resolve_video_path(sample, video_root=video_root)
 
@@ -254,19 +253,16 @@ def _build_codec_sample(
 
     # 2. Codec-patchify the video (residual-selected patches packed into dense frames).
     codec_outputs = process_video_with_codec(video_path, processor=processor, config=codec_config)
-    patch_positions = codec_outputs["patch_positions"]
-    video_grid_thw = codec_outputs["video_grid_thw"]
-    expected_tokens = int(video_grid_thw.prod(dim=-1).sum().item())
-    if expected_tokens != int(codec_config.k_keep):
+    if codec_outputs.visual_token_count != int(codec_config.k_keep):
         raise ValueError(
-            f"codec video_grid_thw implies {expected_tokens} tokens but k_keep={codec_config.k_keep}."
+            f"codec output contains {codec_outputs.visual_token_count} tokens but k_keep={codec_config.k_keep}."
         )
 
     input_ids, attention_mask, labels = _build_text_tensors_with_expanded_video(
         prompt_messages=prompt_messages,
         target_messages=target_messages,
         processor=processor,
-        video_token_count=int(codec_config.k_keep),
+        video_token_count=codec_outputs.visual_token_count,
         max_length=max_length,
         overlength_hint="reduce codec geometry or max_seq_len.",
         ignore_index=ignore_index,
@@ -276,9 +272,42 @@ def _build_codec_sample(
         "input_ids": input_ids,
         "attention_mask": attention_mask,
         "labels": labels,
-        "pixel_values_videos": codec_outputs["pixel_values_videos"],
-        "video_grid_thw": video_grid_thw,
-        "patch_positions": patch_positions,
+        **codec_outputs.to_model_inputs(),
+    }
+
+
+def _build_keyframe_lowres_sample(
+    sample: dict[str, Any],
+    *,
+    processor: Any,
+    max_length: int,
+    keyframe_config: KeyframeLowresVideoConfig,
+    video_root: str | None = None,
+    ignore_index: int = -100,
+):
+    """Convert one raw row into dense variable-resolution OneVision video inputs."""
+    video_path = _resolve_video_path(sample, video_root=video_root)
+    prompt_messages, target_messages = _render_chat_with_single_video(sample)
+
+    video_outputs = process_video_with_keyframe_lowres(video_path, processor=processor, config=keyframe_config)
+    input_ids, attention_mask, labels = _build_text_tensors_with_expanded_video(
+        prompt_messages=prompt_messages,
+        target_messages=target_messages,
+        processor=processor,
+        video_token_count=video_outputs.visual_token_count,
+        max_length=max_length,
+        overlength_hint=(
+            "reduce data.num_frames, data.video_frame_size, data.keyframe_lowres_frame_size, "
+            "or max_seq_len."
+        ),
+        ignore_index=ignore_index,
+    )
+
+    return {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+        "labels": labels,
+        **video_outputs.to_model_inputs(),
     }
 
 
@@ -292,6 +321,7 @@ def process_sample(
     video_encoding_strategy: str = "uniform",
     dense_config: DenseVideoConfig | None = None,
     codec_config: CodecPatchConfig | None = None,
+    keyframe_config: KeyframeLowresVideoConfig | None = None,
 ):
     """Process one row into training inputs, dropping bad rows instead of crashing.
 
@@ -304,12 +334,21 @@ def process_sample(
         raise ValueError("`dense_config` is required for `video_encoding_strategy=uniform`.")
     if video_encoding_strategy == "codec_patch" and codec_config is None:
         raise ValueError("`codec_config` is required for `video_encoding_strategy=codec_patch`.")
-    if video_encoding_strategy == "keyframe_lowres":
-        raise NotImplementedError("`video_encoding_strategy=keyframe_lowres` is not implemented yet.")
-    if video_encoding_strategy not in {"uniform", "codec_patch"}:
+    if video_encoding_strategy == "keyframe_lowres" and keyframe_config is None:
+        raise ValueError("`keyframe_config` is required for `video_encoding_strategy=keyframe_lowres`.")
+    if video_encoding_strategy not in {"uniform", "codec_patch", "keyframe_lowres"}:
         raise ValueError(f"unsupported video encoding strategy: {video_encoding_strategy!r}")
 
     try:
+        if video_encoding_strategy == "keyframe_lowres":
+            return _build_keyframe_lowres_sample(
+                sample,
+                processor=processor,
+                max_length=max_length,
+                keyframe_config=keyframe_config,
+                video_root=video_root,
+                ignore_index=ignore_index,
+            )
         if video_encoding_strategy == "codec_patch":
             return _build_codec_sample(
                 sample,

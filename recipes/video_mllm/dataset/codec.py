@@ -21,6 +21,7 @@ import torchvision.transforms.v2.functional as tvF
 from torchvision.transforms import InterpolationMode
 
 from .decoder import decode_frames, probe_video
+from .video_encoding import VideoEncodingResult, frames_to_patch_values
 
 
 @dataclass(frozen=True)
@@ -409,8 +410,8 @@ def process_video_with_codec(
     *,
     processor: Any,
     config: CodecPatchConfig,
-) -> dict[str, torch.Tensor]:
-    """Decode one video and return OneVision-ready codec tensors."""
+) -> VideoEncodingResult:
+    """Decode one video and return a sparse codec visual-token sequence."""
     config.validate()
     video_path = str(Path(video).expanduser().resolve())
     frames = _load_video_frames(video_path, config)
@@ -431,10 +432,12 @@ def process_video_with_codec(
         do_resize=False,
         do_center_crop=False,
     )
-    pixel_values = processed["pixel_values"].unsqueeze(0).permute(0, 2, 1, 3, 4).contiguous()
+    packed_pixel_values = processed["pixel_values"].contiguous()
+    patch_values = frames_to_patch_values(packed_pixel_values, patch_size=config.patch_size)
 
-    return {
-        "pixel_values_videos": pixel_values,
-        "video_grid_thw": torch.tensor([[config.packed_frames, config.grid_size, config.grid_size]], dtype=torch.long),
-        "patch_positions": positions.unsqueeze(0),
-    }
+    return VideoEncodingResult(
+        patch_values=patch_values,
+        token_positions=positions,
+        frame_grid_thw=torch.tensor([[1, config.grid_size, config.grid_size]] * config.num_frames, dtype=torch.long),
+        merge_sizes=torch.ones(config.num_frames, dtype=torch.long),
+    )
