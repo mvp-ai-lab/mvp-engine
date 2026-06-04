@@ -74,6 +74,7 @@ Data:
 Model:
 
 - `model/gradient-checkpointing`: [model/gradient-checkpointing/SKILL.md](model/gradient-checkpointing/SKILL.md)
+- `model/liger-kernel`: [model/liger-kernel/SKILL.md](model/liger-kernel/SKILL.md)
 - `model/model-compile`: [model/model-compile/SKILL.md](model/model-compile/SKILL.md)
 - `model/model-migration`: [model/model-migration/SKILL.md](model/model-migration/SKILL.md)
 - `model/vlm-freeze-policy`: [model/vlm-freeze-policy/SKILL.md](model/vlm-freeze-policy/SKILL.md)

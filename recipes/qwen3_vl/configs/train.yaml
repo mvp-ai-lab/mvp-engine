@@ -41,6 +41,10 @@ model:
   freeze_vit: false
   freeze_projector: false
   freeze_llm: false
+  liger_kernel:
+    enabled: false
+    stage: "pre_build"
+    modules: "auto"
   compile:
     enabled: false
     backend: "inductor"

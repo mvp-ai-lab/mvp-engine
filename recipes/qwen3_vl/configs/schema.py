@@ -84,6 +84,32 @@ class Qwen3VLCompileConfig(BaseModel):
     mode: str = "default"
 
 
+class Qwen3VLLigerKernelConfig(BaseModel):
+    """Liger Kernel replacement options for the Qwen3-VL recipe."""
+
+    model_config = ConfigDict(frozen=False, extra="forbid")
+
+    enabled: bool = False
+    stage: Literal["pre_build", "post_build"] = "pre_build"
+    modules: Literal["auto"] | dict[str, bool] = "auto"
+
+    @field_validator("modules")
+    @classmethod
+    def validate_modules(cls, value: Literal["auto"] | dict[str, bool]) -> Literal["auto"] | dict[str, bool]:
+        """Validate semantic Liger module selections."""
+        if value == "auto":
+            return value
+        for name, enabled in value.items():
+            normalized = name.strip()
+            if not normalized:
+                raise ValueError("`model.liger_kernel.modules` keys must not be empty.")
+            if normalized != name:
+                raise ValueError("`model.liger_kernel.modules` keys must not have surrounding whitespace.")
+            if not isinstance(enabled, bool):
+                raise TypeError(f"`model.liger_kernel.modules.{name}` must be a bool.")
+        return value
+
+
 class Qwen3VLModelConfig(BaseModel):
     """Model loading, precision compatibility, and freeze-policy options."""
 
@@ -101,6 +127,7 @@ class Qwen3VLModelConfig(BaseModel):
     freeze_projector: bool = False
     freeze_llm: bool = False
 
+    liger_kernel: Qwen3VLLigerKernelConfig = Field(default_factory=Qwen3VLLigerKernelConfig)
     compile: Qwen3VLCompileConfig = Field(default_factory=Qwen3VLCompileConfig)
 
     @field_validator("pretrained_model_name_or_path", mode="before")
