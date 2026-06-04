@@ -20,10 +20,11 @@ SUPPORTED_MODULES = {
     "fused_linear_cross_entropy",
 }
 LOSS_MODULES = {"cross_entropy", "fused_linear_cross_entropy"}
+QWEN3_VL_UNSUPPORTED_MODULES = {"swiglu"}
 PRE_BUILD_AUTO_MODULES = {
     "rms_norm": True,
     "rope": True,
-    "swiglu": True,
+    "swiglu": False,
     "layer_norm": False,
     "geglu": False,
     "cross_entropy": False,
@@ -103,7 +104,9 @@ def _resolve_modules(
     stage: str,
 ) -> tuple[dict[str, bool], bool]:
     if config.modules == "auto":
-        return dict(PRE_BUILD_AUTO_MODULES if stage == "pre_build" else POST_BUILD_AUTO_MODULES), False
+        modules = dict(PRE_BUILD_AUTO_MODULES if stage == "pre_build" else POST_BUILD_AUTO_MODULES)
+        _reject_unsupported_qwen3_vl_modules(modules)
+        return modules, False
 
     unknown = sorted(set(config.modules) - SUPPORTED_MODULES)
     if unknown:
@@ -111,7 +114,18 @@ def _resolve_modules(
 
     modules = {name: False for name in SUPPORTED_MODULES}
     modules.update(config.modules)
+    _reject_unsupported_qwen3_vl_modules(modules)
     return modules, True
+
+
+def _reject_unsupported_qwen3_vl_modules(modules: dict[str, bool]) -> None:
+    unsupported = sorted(name for name in QWEN3_VL_UNSUPPORTED_MODULES if modules.get(name, False))
+    if unsupported:
+        raise ValueError(
+            "Qwen3-VL Liger integration does not currently support enabled module(s): "
+            f"{unsupported}. The upstream Qwen3-VL helper accepts these kwargs but does not replace dense "
+            "Qwen3-VL modules."
+        )
 
 
 def _reject_loss_kernels(modules: dict[str, bool]) -> None:
