@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import torch
 
@@ -150,7 +150,9 @@ def _filter_patch_kwargs(
     return {name: enabled for name, enabled in modules.items() if name in accepted_names}
 
 
-def _replace_rms_norm_modules(model: torch.nn.Module, liger_rms_norm_cls: type[torch.nn.Module]) -> list[dict[str, str]]:
+def _replace_rms_norm_modules(
+    model: torch.nn.Module, liger_rms_norm_cls: type[torch.nn.Module]
+) -> list[dict[str, str]]:
     replacements: list[dict[str, str]] = []
     for module_path, parent, child_name, child in _iter_replaceable_children(model):
         if _is_liger_module(child) or "rmsnorm" not in child.__class__.__name__.lower():

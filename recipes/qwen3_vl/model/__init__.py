@@ -3,10 +3,7 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .liger import (
-        apply_liger_kernel_pre_build,
-        patch_liger_kernel_post_build,
-    )
+    from .liger import apply_liger_kernel_pre_build, patch_liger_kernel_post_build
     from .qwen3_vl import (
         calculate_model_flops,
         patch_qwen3vl_conv3d,

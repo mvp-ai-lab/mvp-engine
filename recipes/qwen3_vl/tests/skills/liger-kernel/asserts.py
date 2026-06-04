@@ -19,9 +19,7 @@ def test_config_structure(config: Any) -> None:
     liger_config = config.model.liger_kernel
 
     assert isinstance(liger_config.enabled, bool), "model.liger_kernel.enabled must be a bool."
-    assert liger_config.stage in ALLOWED_STAGES, (
-        f"model.liger_kernel.stage must be one of {sorted(ALLOWED_STAGES)}."
-    )
+    assert liger_config.stage in ALLOWED_STAGES, f"model.liger_kernel.stage must be one of {sorted(ALLOWED_STAGES)}."
     assert liger_config.modules == "auto" or isinstance(liger_config.modules, dict), (
         "model.liger_kernel.modules must be 'auto' or a mapping of module names to booleans."
     )
@@ -38,9 +36,7 @@ def test_engine_structure(engine_class: type) -> None:
     calls = [(node.lineno, ast.unparse(node.func), node) for node in ast.walk(tree) if isinstance(node, ast.Call)]
 
     build_lines = [
-        lineno
-        for lineno, name, _ in calls
-        if name.endswith(".build_model") or name.endswith(".from_pretrained")
+        lineno for lineno, name, _ in calls if name.endswith(".build_model") or name.endswith(".from_pretrained")
     ]
     model_patch_lines = [lineno for lineno, name, _ in calls if name.endswith(".apply_model_patches")]
     token_loss_lines = [
@@ -72,6 +68,10 @@ def test_engine_structure(engine_class: type) -> None:
     assert min(model_patch_lines) > min(build_lines), "Model patches must run after model loading."
 
     if token_loss_lines:
-        assert min(model_patch_lines) < min(token_loss_lines), "Liger post-build patches must run before token-loss patching."
+        assert min(model_patch_lines) < min(token_loss_lines), (
+            "Liger post-build patches must run before token-loss patching."
+        )
     if wrap_lines:
-        assert min(model_patch_lines) < min(wrap_lines), "Liger post-build patches must run before distributed wrapping."
+        assert min(model_patch_lines) < min(wrap_lines), (
+            "Liger post-build patches must run before distributed wrapping."
+        )
