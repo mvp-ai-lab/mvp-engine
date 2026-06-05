@@ -12,13 +12,12 @@ CONFIG_SCHEMA_MODULE = f"{RECIPE_IMPORT_PATH}.configs.schema"
 CONFIG_CLASS_NAME = "VideoMLLMConfig"
 
 EXPECTED_FILES = [
-    "README.md",
     "__init__.py",
     "configs/__init__.py",
     "configs/schema.py",
-    "configs/train.yaml",
-    "configs/codec_smoke.yaml",
-    "configs/codec_train.yaml",
+    "configs/uniform.yaml",
+    "configs/codec.yaml",
+    "configs/keyframe_lowres.yaml",
     "dataset/__init__.py",
     "dataset/decoder.py",
     "dataset/sampling.py",
@@ -36,9 +35,9 @@ EXPECTED_FILES = [
     "model/__init__.py",
     "model/qwen3_vl.py",
     "model/onevision.py",
-    "run_smoke_8gpu.sbatch",
-    "run_train_8gpu.sbatch",
-    "run_codec_smoke_8gpu.sbatch",
+    "scripts/run_smoke_8gpu.sbatch",
+    "scripts/run_train_8gpu.sbatch",
+    "scripts/run_codec_smoke_8gpu.sbatch",
 ]
 
 

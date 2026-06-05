@@ -30,16 +30,16 @@ from recipes.video_mllm.dataset.video_encoding import (
 )
 from recipes.video_mllm.model.onevision import OneVisionVisualTower
 
-CODEC_SMOKE_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "codec_smoke.yaml"
+CODEC_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "codec.yaml"
 
 
-def _load_codec_smoke_config() -> VideoMLLMConfig:
-    container = OmegaConf.to_container(OmegaConf.load(CODEC_SMOKE_CONFIG), resolve=True)
+def _load_codec_config() -> VideoMLLMConfig:
+    container = OmegaConf.to_container(OmegaConf.load(CODEC_CONFIG), resolve=True)
     return VideoMLLMConfig.model_validate(container)
 
 
-def test_codec_smoke_config_validates_against_schema():
-    config = _load_codec_smoke_config()
+def test_codec_config_validates_against_schema():
+    config = _load_codec_config()
 
     assert config.data.video_encoding_strategy == "codec_patch"
     assert config.data.cv_reader_required is False
@@ -50,15 +50,15 @@ def test_codec_smoke_config_validates_against_schema():
 
 
 def test_codec_schema_rejects_mismatched_k_keep():
-    container = OmegaConf.to_container(OmegaConf.load(CODEC_SMOKE_CONFIG), resolve=True)
-    container["data"]["codec_k_keep"] = 255  # one off from the required packed-frame budget.
+    container = OmegaConf.to_container(OmegaConf.load(CODEC_CONFIG), resolve=True)
+    container["data"]["codec_k_keep"] = container["data"]["codec_k_keep"] - 1
 
     with pytest.raises(ValueError):
         VideoMLLMConfig.model_validate(container)
 
 
 def test_schema_accepts_keyframe_lowres_strategy():
-    container = OmegaConf.to_container(OmegaConf.load(CODEC_SMOKE_CONFIG), resolve=True)
+    container = OmegaConf.to_container(OmegaConf.load(CODEC_CONFIG), resolve=True)
     container["data"]["video_encoding_strategy"] = "keyframe_lowres"
     container["data"]["keyframe_interval"] = 2
     container["data"]["keyframe_lowres_frame_size"] = 112
@@ -71,7 +71,7 @@ def test_schema_accepts_keyframe_lowres_strategy():
 
 
 def test_schema_rejects_keyframe_lowres_larger_than_full_resolution():
-    container = OmegaConf.to_container(OmegaConf.load(CODEC_SMOKE_CONFIG), resolve=True)
+    container = OmegaConf.to_container(OmegaConf.load(CODEC_CONFIG), resolve=True)
     container["data"]["video_encoding_strategy"] = "keyframe_lowres"
     container["data"]["video_frame_size"] = 112
     container["data"]["keyframe_lowres_frame_size"] = 224

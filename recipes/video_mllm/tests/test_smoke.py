@@ -19,9 +19,17 @@ from mvp_engine.testing.utils import (
     load_smoke_test_config,
 )
 
-CONFIG_NAME = "smoke"
+CONFIG_NAME = "uniform"
 WORLD_SIZE = 1
-CONFIG_OVERRIDES: tuple[str, ...] = ("loop.total_steps=2", "log.interval=1")
+CONFIG_OVERRIDES: tuple[str, ...] = (
+    "data.train_path=./tmp/spatialvid_smoke/smoke.jsonl",
+    "data.max_seq_len=2048",
+    "data.num_frames=4",
+    "optim.lr=1.0e-5",
+    "optim.gradient_accumulation_steps=1",
+    "loop.total_steps=2",
+    "log.interval=1",
+)
 PROCESS_TIMEOUT_SECONDS = 12000
 
 
