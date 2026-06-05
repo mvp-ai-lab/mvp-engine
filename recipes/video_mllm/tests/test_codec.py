@@ -12,7 +12,6 @@ from omegaconf import OmegaConf
 
 from recipes.video_mllm.configs.schema import VideoMLLMConfig
 from recipes.video_mllm.dataset import codec as codec_module
-from recipes.video_mllm.dataset.collator import VideoMLLMCollator
 from recipes.video_mllm.dataset.codec import (
     CodecPatchConfig,
     _load_cv_reader_residual_arrays,
@@ -23,6 +22,7 @@ from recipes.video_mllm.dataset.codec import (
     pack_video_patches,
     process_video_with_codec,
 )
+from recipes.video_mllm.dataset.collator import VideoMLLMCollator
 from recipes.video_mllm.dataset.video_encoding import (
     KeyframeLowresVideoConfig,
     VideoEncodingResult,
@@ -121,9 +121,7 @@ def test_build_uniform_sample_expands_dense_video_pads_and_masks_labels(monkeypa
         "video": "demo.mp4",
     }
 
-    out = preprocess_module._build_uniform_sample(
-        sample, processor=FakeProcessor(), max_length=64, dense_config=config
-    )
+    out = preprocess_module._build_uniform_sample(sample, processor=FakeProcessor(), max_length=64, dense_config=config)
 
     input_ids = out["input_ids"]
     labels = out["labels"]
@@ -178,9 +176,7 @@ def test_build_codec_sample_expands_video_pads_and_masks_labels(monkeypatch):
         "video": "demo.mp4",
     }
 
-    out = preprocess_module._build_codec_sample(
-        sample, processor=FakeProcessor(), max_length=64, codec_config=config
-    )
+    out = preprocess_module._build_codec_sample(sample, processor=FakeProcessor(), max_length=64, codec_config=config)
 
     input_ids = out["input_ids"]
     labels = out["labels"]
@@ -324,9 +320,7 @@ def test_onevision_patch_sequence_uses_per_sample_token_positions():
     class FakeEncoder(nn.Module):
         def __init__(self):
             super().__init__()
-            self.embeddings = SimpleNamespace(
-                patch_embedding=nn.Conv2d(3, 4, kernel_size=2, stride=2, bias=False)
-            )
+            self.embeddings = SimpleNamespace(patch_embedding=nn.Conv2d(3, 4, kernel_size=2, stride=2, bias=False))
             self.video_rope = FakeRope()
             self.layernorm_pre = nn.Identity()
             self.encoder = FakeEncoderBlock()
@@ -391,7 +385,9 @@ def test_keyframe_lowres_video_processor_outputs_dense_variable_resolution_token
     assert outputs.frame_grid_thw.tolist() == [[1, 4, 4], [1, 2, 2], [1, 4, 4]]
     assert outputs.merge_sizes.tolist() == [1, 1, 1]
     assert outputs.token_positions.shape == (36, 3)
-    assert torch.allclose(outputs.token_positions[16:20, 1:], torch.tensor([[0.0, 0.0], [0.0, 3.0], [3.0, 0.0], [3.0, 3.0]]))
+    assert torch.allclose(
+        outputs.token_positions[16:20, 1:], torch.tensor([[0.0, 0.0], [0.0, 3.0], [3.0, 0.0], [3.0, 3.0]])
+    )
 
 
 def test_residual_topk_is_sorted_and_in_bounds():

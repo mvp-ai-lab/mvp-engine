@@ -282,9 +282,7 @@ def frames_to_patch_values(frames: torch.Tensor, *, patch_size: int) -> torch.Te
     grid_h = height // patch_size
     grid_w = width // patch_size
     patches = frames.reshape(num_frames, channels, grid_h, patch_size, grid_w, patch_size)
-    patches = patches.permute(0, 2, 4, 1, 3, 5).reshape(
-        num_frames * grid_h * grid_w, channels, patch_size, patch_size
-    )
+    patches = patches.permute(0, 2, 4, 1, 3, 5).reshape(num_frames * grid_h * grid_w, channels, patch_size, patch_size)
     return patches.contiguous()
 
 

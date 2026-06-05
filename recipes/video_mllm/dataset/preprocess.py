@@ -159,9 +159,7 @@ def _build_text_tensors_with_expanded_video(
     expanded_video = video_token * int(video_token_count)
 
     def _render_and_expand(messages: list[dict[str, Any]], *, add_generation_prompt: bool) -> str:
-        text = processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=add_generation_prompt
-        )
+        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=add_generation_prompt)
         if text.count(video_token) != 1:
             raise ValueError("video preprocessing expects exactly one video pad token in the rendered chat.")
         return text.replace(video_token, expanded_video)
@@ -176,8 +174,7 @@ def _build_text_tensors_with_expanded_video(
     prompt_ids = torch.tensor(tokenizer(prompt_text, add_special_tokens=False)["input_ids"], dtype=torch.long)
     if int(input_ids.shape[0]) > int(max_length):
         raise ValueError(
-            f"sequence length {int(input_ids.shape[0])} exceeds max_seq_len {int(max_length)}; "
-            f"{overlength_hint}"
+            f"sequence length {int(input_ids.shape[0])} exceeds max_seq_len {int(max_length)}; {overlength_hint}"
         )
 
     video_token_id = int(processor.video_token_id)
@@ -297,8 +294,7 @@ def _build_keyframe_lowres_sample(
         video_token_count=video_outputs.visual_token_count,
         max_length=max_length,
         overlength_hint=(
-            "reduce data.num_frames, data.video_frame_size, data.keyframe_lowres_frame_size, "
-            "or max_seq_len."
+            "reduce data.num_frames, data.video_frame_size, data.keyframe_lowres_frame_size, or max_seq_len."
         ),
         ignore_index=ignore_index,
     )

@@ -23,7 +23,9 @@ from typing import Any
 import torch
 import torch.nn as nn
 from transformers import AutoModel
-from transformers.models.qwen3_vl.modeling_qwen3_vl import BaseModelOutputWithDeepstackFeatures
+from transformers.models.qwen3_vl.modeling_qwen3_vl import (
+    BaseModelOutputWithDeepstackFeatures,
+)
 
 
 class OneVisionVisualTower(nn.Module):
