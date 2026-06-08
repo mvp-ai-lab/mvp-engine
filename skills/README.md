@@ -60,6 +60,7 @@ patterns in `references/`.
 
 Kit APIs:
 
+- `kit/liger-kernel-kit`: [kit/liger-kernel-kit/SKILL.md](kit/liger-kernel-kit/SKILL.md)
 - `kit/mllm-data-kit`: [kit/mllm-data-kit/SKILL.md](kit/mllm-data-kit/SKILL.md)
 - `kit/mllm-model-kit`: [kit/mllm-model-kit/SKILL.md](kit/mllm-model-kit/SKILL.md)
 - `kit/token-loss-kit`: [kit/token-loss-kit/SKILL.md](kit/token-loss-kit/SKILL.md)

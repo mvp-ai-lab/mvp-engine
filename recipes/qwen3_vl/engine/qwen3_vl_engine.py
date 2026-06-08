@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-from functools import partial
 from typing import TYPE_CHECKING
 
 import torch
@@ -28,12 +27,7 @@ from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
 from ..configs.schema import Qwen3VLConfig
 from ..guards.loss import PerTokenLossGuard
-from ..model import (
-    apply_liger_kernel_pre_build,
-    patch_liger_kernel_post_build,
-    patch_qwen3vl_conv3d,
-    patch_qwen3vl_model_flops,
-)
+from ..model import patch_qwen3vl_conv3d, patch_qwen3vl_model_flops
 from ..model.packing import prepare_packed_model_inputs
 from ..utils.misc import infer_total_steps
 
@@ -143,13 +137,6 @@ class Qwen3VLEngine(Engine):
         Returns:
             The distributed-ready Qwen3-VL model.
         """
-        liger_config = self.config.model.liger_kernel
-        if liger_config.enabled and liger_config.stage == "pre_build":
-            apply_liger_kernel_pre_build(
-                model_name_or_path=self.config.model.pretrained_model_name_or_path,
-                config=liger_config,
-            )
-
         model = self.model_kit.build_model(
             self.config.model.pretrained_model_name_or_path,
             trust_remote_code=getattr(self.config.model, "trust_remote_code", True),
@@ -158,10 +145,7 @@ class Qwen3VLEngine(Engine):
         ).to(self.device)
         logger.info(f"Model name: {model.__class__.__name__}")
 
-        model_patches = [patch_qwen3vl_conv3d, patch_qwen3vl_model_flops]
-        if liger_config.enabled and liger_config.stage == "post_build":
-            model_patches.append(partial(patch_liger_kernel_post_build, config=liger_config))
-        model = self.model_kit.apply_model_patches(model, model_patches)
+        model = self.model_kit.apply_model_patches(model, [patch_qwen3vl_conv3d, patch_qwen3vl_model_flops])
         model = self.token_loss_kit.apply_chunked_token_loss_patch(model)
 
         model = self.model_kit.apply_freeze_policy(

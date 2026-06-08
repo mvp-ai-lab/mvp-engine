@@ -8,6 +8,7 @@ if TYPE_CHECKING:
         TokenNormedLossKit,
         apply_chunked_token_loss_patch,
     )
+    from .model import LigerKernelKit, LigerKernelReport, LigerReplacement
     from .mllm import (
         MLLMCollator,
         MLLMDataKit,
@@ -22,6 +23,9 @@ if TYPE_CHECKING:
 
 __all__ = [
     "MFUKit",
+    "LigerKernelKit",
+    "LigerKernelReport",
+    "LigerReplacement",
     "MLLMCollator",
     "MLLMDataKit",
     "MLLMMediaKit",
@@ -37,6 +41,9 @@ __all__ = [
 
 _EXPORT_MODULES = {
     "MFUKit": ".perf.mfu",
+    "LigerKernelKit": ".model",
+    "LigerKernelReport": ".model",
+    "LigerReplacement": ".model",
     "MLLMCollator": ".mllm",
     "MLLMDataKit": ".mllm",
     "MLLMMediaKit": ".mllm",

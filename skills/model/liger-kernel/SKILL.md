@@ -1,241 +1,112 @@
 ---
 name: liger-kernel
-description: Add, review, update, and validate Liger Kernel integration in
-  MVP-Engine recipes, including official pre-build model-family patching,
-  recipe-local post-build module replacement, module selection config, and
-  token-loss compatibility checks.
+description: Decide where and how to wire Liger Kernel into an MVP-Engine recipe
+  using LigerKernelKit, including pre-build family patch placement, post-build
+  model patch placement, module selection, and loss-kernel compatibility.
 ---
 
 # Liger Kernel
 
 ## Goal
 
-Wire Liger Kernel into a recipe without changing training semantics:
-
-- expose a recipe-local `model.liger_kernel` config;
-- support official pre-build model-family patching before `build_model(...)`;
-- support recipe-local post-build module replacement through
-  `MLLMModelKit.apply_model_patches(...)`;
-- let users select modules explicitly, with `"auto"` as the default;
-- keep loss-kernel changes separate from token-normalized loss.
+Use Liger Kernel to replace supported model kernels without changing training
+semantics. Treat reusable behavior as `LigerKernelKit` API and keep recipes
+limited to config, placement, and any model-family-specific extension points.
 
 ## Required Inputs
 
-Identify these before editing:
-
-- target recipe path and `prepare_model()` path;
-- model family from config, checkpoint path, or loaded config;
-- whether Liger has an official `apply_liger_kernel_to_*` API for that family;
-- requested stage: `pre_build` or `post_build`;
-- requested modules, or whether `modules="auto"` should be resolved;
-- whether the recipe applies `TokenNormedLossKit.apply_chunked_token_loss_patch`.
-
-Ask the user only when the target recipe or intended stage cannot be derived.
+- target recipe and model construction path;
+- model family, such as `qwen3`, `qwen3_vl`, or `llama`;
+- desired stage: `pre_build` or `post_build`;
+- module selection, either `"auto"` or explicit semantic module flags;
+- whether the recipe has custom loss accounting that conflicts with Liger loss
+  kernels.
 
 ## Workflow
 
-### 1. Add Recipe Config
+### 1. Use LigerKernelKit
 
-Add a recipe-local config nested under `model`:
+Read `skills/kit/liger-kernel-kit/SKILL.md` before editing. Do not reimplement
+module resolution, Liger imports, pre-build helper dispatch, or generic norm
+replacement inside a recipe.
 
-```python
-class LigerKernelConfig(BaseModel):
-    """Liger Kernel replacement options."""
+### 2. Choose The Stage
 
-    model_config = ConfigDict(frozen=False, extra="forbid")
-
-    enabled: bool = False
-    stage: Literal["pre_build", "post_build"] = "pre_build"
-    modules: Literal["auto"] | dict[str, bool] = "auto"
-```
-
-Use this YAML shape:
-
-```yaml
-model:
-  liger_kernel:
-    enabled: false
-    stage: "pre_build"
-    modules: "auto"
-```
-
-For explicit module selection:
-
-```yaml
-model:
-  liger_kernel:
-    enabled: true
-    stage: "post_build"
-    modules:
-      rms_norm: true
-      rope: true
-      swiglu: true
-      layer_norm: false
-      cross_entropy: false
-      fused_linear_cross_entropy: false
-```
-
-Treat `"auto"` as recipe-owned model-family resolution. Do not silently enable
-loss kernels in `"auto"`.
-
-### 2. Implement Recipe-Local Liger Helpers
-
-Put Liger integration in:
-
-```text
-recipes/<recipe>/model/liger.py
-```
-
-Recommended public helpers:
+Use `pre_build` when Liger provides an official model-family patch function.
+Call the kit before model construction:
 
 ```python
-def apply_liger_kernel_pre_build(*, model_name_or_path: str, config: LigerKernelConfig) -> None:
-    """Apply official Liger model-family monkey patches before model construction."""
-
-
-def patch_liger_kernel_post_build(model: torch.nn.Module, *, config: LigerKernelConfig) -> torch.nn.Module:
-    """Replace supported modules on an already-built model instance."""
+self.liger_kit.apply_pre_build(
+    model_family=config.model.liger_kernel.model_family,
+    modules=config.model.liger_kernel.modules,
+)
+model = self.model_kit.build_model(...)
 ```
 
-Use the official pre-build model-family API when available. This changes
-Transformers classes/functions in the current Python process before
-`from_pretrained(...)`; it does not edit source files on disk.
-
-Use post-build replacement only in recipe-local code with explicit supported
-module types or paths. Do not add a generic repository-wide `named_modules()`
-rewriter that replaces unknown modules by class-name guesses.
-
-### 3. Wire Prepare Model
-
-Place pre-build Liger before model construction:
+Use `post_build` when a recipe needs instance-level module replacement. Route it
+through the recipe's existing model patch stage:
 
 ```python
-liger_config = self.config.model.liger_kernel
-if liger_config.enabled and liger_config.stage == "pre_build":
-    apply_liger_kernel_pre_build(
-        model_name_or_path=self.config.model.pretrained_model_name_or_path,
-        config=liger_config,
+model_patches = [...]
+if config.model.liger_kernel.enabled and config.model.liger_kernel.stage == "post_build":
+    model_patches.append(
+        partial(
+            self.liger_kit.apply_post_build,
+            model_family=config.model.liger_kernel.model_family,
+            modules=config.model.liger_kernel.modules,
+            module_replacers=recipe_replacers,
+        )
     )
-
-model = self.model_kit.build_model(...).to(self.device)
-```
-
-Place post-build Liger in the recipe model patch list:
-
-```python
-model_patches = [patch_qwen3vl_conv3d, patch_qwen3vl_model_flops]
-if liger_config.enabled and liger_config.stage == "post_build":
-    model_patches.append(partial(patch_liger_kernel_post_build, config=liger_config))
-
 model = self.model_kit.apply_model_patches(model, model_patches)
 ```
 
-Keep ordering:
+If the recipe uses a non-MLLM model kit, place post-build Liger at the equivalent
+post-construction, pre-freeze, pre-distributed wrapping point.
 
-```text
-pre-build Liger -> load model -> recipe/post-build patches -> token-loss patch
--> freeze policy -> trainable dtype upcast -> checkpointing -> compile
--> parallelize -> build optimizer
-```
+### 3. Keep Recipe Glue Small
 
-### 4. Resolve Modules Conservatively
+Recipe code may add:
 
-`modules="auto"` should resolve from the recipe's known model family. If the
-family is unsupported, fail with a clear error.
+- config fields under `model.liger_kernel`;
+- a `LigerKernelKit` instance in the engine;
+- model-family name wiring;
+- recipe-specific `module_replacers` only when the kit does not support the
+  module generically.
 
-Supported module names should be semantic, not raw class names:
+Do not apply Liger to a recipe unless requested for that recipe. This skill can
+exist independently from recipe usage.
 
-```text
-rms_norm
-layer_norm
-rope
-swiglu
-geglu
-cross_entropy
-fused_linear_cross_entropy
-```
+### 4. Protect Loss Semantics
 
-For post-build replacements:
-
-- preserve parameter names and checkpoint keys;
-- copy or reuse existing weights, dtype, device, and `requires_grad`;
-- replace only modules that the recipe explicitly supports;
-- record applied replacements on the model, such as
-  `model._mvp_engine_liger_kernel = {...}`;
-- fail when an explicitly requested module cannot be applied.
-
-### 5. Protect Token-Loss Semantics
-
-Do not enable `cross_entropy` or `fused_linear_cross_entropy` when the recipe
-also applies `TokenNormedLossKit.apply_chunked_token_loss_patch(...)`, unless
-the recipe adds a dedicated compatibility path that still returns unreduced
-per-token loss.
-
-Default behavior:
-
-- `modules="auto"` keeps Liger loss kernels disabled;
-- explicit loss-kernel requests fail when token-normalized loss is active and no
-  compatibility code exists;
-- non-loss kernels may be used before the token-loss patch.
+Leave `cross_entropy` and `fused_linear_cross_entropy` disabled unless the
+recipe has a dedicated compatibility path for its loss accounting. This matters
+for token-normalized or unreduced per-token loss workflows.
 
 ## Validation
 
 ### Soft Validation
 
-- config exposes `model.liger_kernel.enabled`, `stage`, and `modules`;
-- no Liger dependency is added to `pyproject.toml` unless the user requested it;
-- pre-build patching runs before `build_model(...)`;
-- post-build patching runs through `MLLMModelKit.apply_model_patches(...)`;
-- post-build replacements are recipe-local and explicit;
-- `"auto"` module resolution is tied to model family and fails on unsupported
-  families;
-- loss kernels cannot silently conflict with token-normalized loss;
-- Liger runs before freeze, checkpointing, compile, and distributed wrapping.
+- recipe calls `LigerKernelKit` rather than local duplicate helper code;
+- pre-build runs before model construction;
+- post-build runs after model construction and before freeze, compile, and
+  distributed wrapping;
+- unsupported modules fail clearly instead of being reported as applied;
+- loss kernels are not silently enabled when recipe loss accounting is custom.
 
 ### Hard Validation
 
-Copy `references/asserts.py` into:
-
-```text
-recipes/<recipe>/tests/skills/liger-kernel/asserts.py
-```
-
-Ensure the recipe has `tests/test_structure.py` and `tests/test_smoke.py`; use
-`tests/templates/` if missing.
-
-Run structure and smoke tests. For runtime validation, run at least one smoke
-with Liger enabled for the configured stage:
-
-```bash
-pytest recipes/<recipe>/tests/test_structure.py -q
-pytest recipes/<recipe>/tests/test_smoke.py -q --config-override model.liger_kernel.enabled=true
-```
-
-If both stages are implemented, validate both:
-
-```bash
-pytest recipes/<recipe>/tests/test_smoke.py -q \
-  --config-override model.liger_kernel.enabled=true \
-  --config-override model.liger_kernel.stage=pre_build
-pytest recipes/<recipe>/tests/test_smoke.py -q \
-  --config-override model.liger_kernel.enabled=true \
-  --config-override model.liger_kernel.stage=post_build
-```
-
-If Liger Kernel is not installed or the environment lacks required GPU/NPU
-support, report the exact command that should be run in the real environment.
+Run the Liger kit unit tests and the target recipe's structure test. Run smoke
+with Liger enabled only in an environment that has `liger-kernel` installed and
+the required GPU/NPU resources.
 
 ## Output
 
-- State target recipe and configured stage.
-- State resolved modules and whether they came from `"auto"` or explicit config.
-- State whether official pre-build API or recipe-local post-build replacement
-  was used.
-- State loss-kernel compatibility with token-normalized loss.
-- Report validation commands and remaining runtime gaps.
+- State selected stage and module selection.
+- State whether kit built-ins or recipe-specific replacers were used.
+- State validation commands and any runtime environment gap.
 
 ## Read On Demand
 
-- `skills/kit/mllm-model-kit/SKILL.md`: model patch placement and ordering.
-- `skills/kit/token-loss-kit/SKILL.md`: token-loss patch contract.
-- `references/asserts.py`: recipe-local structure assertions.
+- `skills/kit/liger-kernel-kit/SKILL.md`: authoritative API contract.
+- `skills/kit/mllm-model-kit/SKILL.md`: MLLM model setup placement.
+- `skills/kit/token-loss-kit/SKILL.md`: token-loss compatibility.
