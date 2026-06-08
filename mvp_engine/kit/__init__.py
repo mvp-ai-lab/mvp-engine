@@ -8,7 +8,6 @@ if TYPE_CHECKING:
         TokenNormedLossKit,
         apply_chunked_token_loss_patch,
     )
-    from .model import LigerKernelKit, LigerKernelReport, LigerReplacement
     from .mllm import (
         MLLMCollator,
         MLLMDataKit,
@@ -18,6 +17,7 @@ if TYPE_CHECKING:
         ModelInputs,
         PackingOptions,
     )
+    from .model import LigerKernelKit, LigerKernelReport, LigerReplacement
     from .optim import OptimKit
     from .perf.mfu import MFUKit
 
