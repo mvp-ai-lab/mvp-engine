@@ -16,7 +16,8 @@ limited to config, placement, and any model-family-specific extension points.
 ## Required Inputs
 
 - target recipe and model construction path;
-- model family, such as `qwen3`, `qwen3_vl`, or `llama`;
+- model name/path for pre-build or a loaded model for post-build;
+- optional model family override, such as `qwen3`, `qwen3_vl`, or `llama`;
 - desired stage: `pre_build` or `post_build`;
 - module selection, either `"auto"` or explicit semantic module flags;
 - whether the recipe has custom loss accounting that conflicts with Liger loss
@@ -37,8 +38,9 @@ Call the kit before model construction:
 
 ```python
 self.liger_kit.apply_pre_build(
-    model_family=config.model.liger_kernel.model_family,
+    model_name_or_path=config.model.pretrained_model_name_or_path,
     modules=config.model.liger_kernel.modules,
+    model_family=config.model.liger_kernel.get("model_family_override"),
 )
 model = self.model_kit.build_model(...)
 ```
@@ -52,8 +54,8 @@ if config.model.liger_kernel.enabled and config.model.liger_kernel.stage == "pos
     model_patches.append(
         partial(
             self.liger_kit.apply_post_build,
-            model_family=config.model.liger_kernel.model_family,
             modules=config.model.liger_kernel.modules,
+            model_family=config.model.liger_kernel.get("model_family_override"),
             module_replacers=recipe_replacers,
         )
     )
@@ -69,7 +71,7 @@ Recipe code may add:
 
 - config fields under `model.liger_kernel`;
 - a `LigerKernelKit` instance in the engine;
-- model-family name wiring;
+- optional model-family override wiring;
 - recipe-specific `module_replacers` only when the kit does not support the
   module generically.
 

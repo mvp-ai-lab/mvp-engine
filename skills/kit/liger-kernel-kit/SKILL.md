@@ -13,7 +13,8 @@ description: Use LigerKernelKit for reusable Liger Kernel integration,
 Use `LigerKernelKit` as the default API for Liger Kernel integration:
 
 - `apply_pre_build(...)` calls official `liger_kernel.transformers` family
-  patch functions before model construction;
+  patch functions before model construction, inferring the family from Hugging
+  Face `AutoConfig.model_type` by default;
 - `apply_post_build(...)` replaces supported modules on an already-built model;
 - `resolve_modules(...)` validates semantic module selections;
 - built-in post-build replacement covers generic norm modules;
@@ -21,7 +22,8 @@ Use `LigerKernelKit` as the default API for Liger Kernel integration:
 
 ## Required Inputs
 
-- model family name, such as `qwen3`, `qwen3_vl`, or `llama`;
+- model name/path for pre-build or a loaded model for post-build;
+- optional model family override, such as `qwen3`, `qwen3_vl`, or `llama`;
 - stage: `pre_build` or `post_build`;
 - module selection: `"auto"` or `dict[str, bool]`;
 - whether loss kernels are compatible with the recipe's loss accounting;
@@ -48,14 +50,16 @@ Use pre-build when Liger provides an official model-family patch:
 ```python
 if config.model.liger_kernel.enabled and config.model.liger_kernel.stage == "pre_build":
     self.liger_kit.apply_pre_build(
-        model_family=config.model.liger_kernel.model_family,
+        model_name_or_path=config.model.pretrained_model_name_or_path,
         modules=config.model.liger_kernel.modules,
+        model_family=config.model.liger_kernel.get("model_family_override"),
     )
 model = build_model(...)
 ```
 
 The kit forwards explicit `False` values for accepted kwargs, so Liger defaults
 cannot silently enable kernels the recipe left disabled.
+Use `model_family` only as an override for custom or misreported configs.
 
 ### 3. Apply Post-Build Replacements
 
@@ -65,8 +69,8 @@ distributed wrapping:
 ```python
 model = self.liger_kit.apply_post_build(
     model,
-    model_family=config.model.liger_kernel.model_family,
     modules=config.model.liger_kernel.modules,
+    model_family=config.model.liger_kernel.get("model_family_override"),
 )
 ```
 
@@ -82,8 +86,8 @@ For other modules, pass explicit recipe-specific replacers:
 ```python
 model = self.liger_kit.apply_post_build(
     model,
-    model_family="custom_family",
     modules={"swiglu": True},
+    model_family="custom_family",
     module_replacers={"swiglu": replace_custom_swiglu},
 )
 ```
@@ -120,6 +124,8 @@ contract.
 
 ### Soft Validation
 
+- pre-build infers from `AutoConfig.model_type` unless an override is provided;
+- post-build infers from `model.config.model_type` unless an override is provided;
 - no recipe duplicates kit helper logic;
 - `liger-kernel` remains optional and lazily imported;
 - unsupported model-family/module combinations fail clearly;

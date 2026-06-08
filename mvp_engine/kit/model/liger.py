@@ -24,14 +24,10 @@ SUPPORTED_MODULES = frozenset(
     }
 )
 LOSS_MODULES = frozenset({"cross_entropy", "fused_linear_cross_entropy"})
-PRE_BUILD_HELPERS = {
-    "llama": "apply_liger_kernel_to_llama",
-    "mistral": "apply_liger_kernel_to_mistral",
-    "mixtral": "apply_liger_kernel_to_mixtral",
-    "qwen2": "apply_liger_kernel_to_qwen2",
-    "qwen2_vl": "apply_liger_kernel_to_qwen2_vl",
-    "qwen3": "apply_liger_kernel_to_qwen3",
-    "qwen3_vl": "apply_liger_kernel_to_qwen3_vl",
+MODEL_TYPE_ALIASES = {
+    "qwq": "qwen2",
+    "qwen2_5": "qwen2",
+    "qvq": "qwen2_vl",
 }
 MODEL_FAMILY_UNSUPPORTED_MODULES = {
     # The supported Liger release accepts the kwarg but does not replace dense
@@ -110,16 +106,25 @@ class LigerKernelKit:
     def apply_pre_build(
         self,
         *,
-        model_family: str,
+        model_name_or_path: str | None = None,
+        trust_remote_code: bool = True,
         modules: LigerModules = "auto",
+        model_family: str | None = None,
         helper_name: str | None = None,
+        config_kwargs: dict[str, Any] | None = None,
         loss_kernels_allowed: bool = False,
         strict: bool = True,
     ) -> LigerKernelReport:
         """Apply an official Liger model-family patch before model construction."""
         family = _normalize_model_family(model_family)
         if family is None:
-            raise ValueError("model_family must be provided for pre-build Liger patching.")
+            if model_name_or_path is None:
+                raise ValueError("model_name_or_path must be provided when model_family is not set.")
+            family = self.infer_model_family(
+                model_name_or_path,
+                trust_remote_code=trust_remote_code,
+                **(config_kwargs or {}),
+            )
 
         resolved_modules = self.resolve_modules(
             stage="pre_build",
@@ -127,14 +132,15 @@ class LigerKernelKit:
             model_family=family,
             loss_kernels_allowed=loss_kernels_allowed,
         )
-        helper = helper_name or PRE_BUILD_HELPERS.get(family)
-        if helper is None:
-            raise ValueError(f"No built-in Liger pre-build helper is registered for model family {model_family!r}.")
 
         liger_transformers = _import_liger_transformers()
-        patch_fn = getattr(liger_transformers, helper, None)
-        if patch_fn is None:
-            raise RuntimeError(f"Liger Kernel does not expose `{helper}` in this environment.")
+        if helper_name is None:
+            helper, patch_fn = _find_liger_pre_build_helper(liger_transformers, family)
+        else:
+            helper = helper_name
+            patch_fn = getattr(liger_transformers, helper, None)
+            if patch_fn is None:
+                raise RuntimeError(f"Liger Kernel does not expose `{helper}` in this environment.")
 
         patch_fn(**self._filter_patch_kwargs(patch_fn, resolved_modules, strict=strict))
         return LigerKernelReport(
@@ -155,10 +161,11 @@ class LigerKernelKit:
         strict: bool = True,
     ) -> torch.nn.Module:
         """Apply Liger replacements to an already-built model instance."""
+        family = _normalize_model_family(model_family) or self.infer_model_family_from_model(model)
         resolved_modules = self.resolve_modules(
             stage="post_build",
             modules=modules,
-            model_family=model_family,
+            model_family=family,
             loss_kernels_allowed=loss_kernels_allowed,
         )
         liger_transformers = _import_liger_transformers()
@@ -181,11 +188,35 @@ class LigerKernelKit:
 
         model._mvp_engine_liger_kernel = LigerKernelReport(  # noqa: SLF001
             stage="post_build",
-            model_family=_normalize_model_family(model_family),
+            model_family=family,
             modules=resolved_modules,
             replacements=tuple(replacements),
         )
         return model
+
+    def infer_model_family(
+        self,
+        model_name_or_path: str,
+        *,
+        trust_remote_code: bool = True,
+        **config_kwargs: Any,
+    ) -> str:
+        """Infer the normalized model family from a Hugging Face config model_type."""
+        from transformers import AutoConfig
+
+        hf_config = AutoConfig.from_pretrained(
+            model_name_or_path,
+            trust_remote_code=trust_remote_code,
+            **config_kwargs,
+        )
+        family = _normalize_model_family(getattr(hf_config, "model_type", None))
+        if family is None:
+            raise ValueError(f"Could not infer model family from config at {model_name_or_path!r}.")
+        return family
+
+    def infer_model_family_from_model(self, model: torch.nn.Module) -> str | None:
+        """Infer the normalized model family from model.config.model_type."""
+        return _normalize_model_family(getattr(getattr(model, "config", None), "model_type", None))
 
     def _reject_unsupported_family_modules(
         self,
@@ -239,6 +270,24 @@ def _import_liger_transformers() -> Any:
     except ModuleNotFoundError as exc:
         raise ModuleNotFoundError("LigerKernelKit requires the optional `liger-kernel` package.") from exc
     return liger_transformers
+
+
+def _find_liger_pre_build_helper(liger_transformers: Any, model_family: str) -> tuple[str, Callable[..., Any]]:
+    candidate_helpers = _candidate_liger_helper_names(model_family)
+    for helper_name in candidate_helpers:
+        patch_fn = getattr(liger_transformers, helper_name, None)
+        if patch_fn is not None:
+            return helper_name, patch_fn
+    tried = ", ".join(f"`{helper}`" for helper in candidate_helpers)
+    raise RuntimeError(f"Liger Kernel does not expose a pre-build helper for model family {model_family!r}: {tried}.")
+
+
+def _candidate_liger_helper_names(model_family: str) -> tuple[str, ...]:
+    candidates = [model_family]
+    alias = MODEL_TYPE_ALIASES.get(model_family)
+    if alias is not None:
+        candidates.append(alias)
+    return tuple(dict.fromkeys(f"apply_liger_kernel_to_{candidate}" for candidate in candidates))
 
 
 def _replace_rms_norm_modules(
@@ -373,5 +422,5 @@ def _normalize_replacements(replacements: Iterable[LigerReplacement | dict[str, 
 def _normalize_model_family(model_family: str | None) -> str | None:
     if model_family is None:
         return None
-    normalized = model_family.strip().lower().replace("-", "_")
+    normalized = model_family.strip().lower().replace("-", "_").replace(".", "_")
     return normalized or None
