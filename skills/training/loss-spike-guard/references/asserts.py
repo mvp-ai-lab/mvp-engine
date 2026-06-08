@@ -14,21 +14,14 @@ def test_file_structure(recipe_root: Path) -> None:
     """Verify the recipe contains loss-spike guard implementation wiring."""
     config_files = sorted((recipe_root / "configs").glob("*.py")) + sorted((recipe_root / "configs").glob("*.yaml"))
     engine_files = sorted((recipe_root / "engine").glob("*.py"))
-    guard_files = [
-        path
-        for path in sorted(recipe_root.rglob("*.py"))
-        if "tests" not in path.parts and "guards" in path.parts and "loss" in path.stem
-    ]
     config_source = "\n".join(path.read_text(encoding="utf-8") for path in config_files)
-    guard_source = "\n".join(path.read_text(encoding="utf-8") for path in guard_files)
     engine_source = "\n".join(path.read_text(encoding="utf-8") for path in engine_files)
 
     assert "loss_spike_skip_multiplier" in config_source, "Config must expose optim.loss_spike_skip_multiplier."
     assert "loss_spike_skip_window_size" in config_source, "Config must expose optim.loss_spike_skip_window_size."
     assert "loss_spike_skip_min_history" in config_source, "Config must expose optim.loss_spike_skip_min_history."
-    assert guard_files, "Loss spike guard must live in a recipe-local guard file such as guards/loss.py."
-    assert "LossGuard" in guard_source or "PerTokenLossGuard" in guard_source, (
-        "Recipe guard file must define LossGuard or PerTokenLossGuard."
+    assert "LossGuard" in engine_source or "PerTokenLossGuard" in engine_source, (
+        "Engine must import a loss guard from mvp_engine.kit."
     )
     assert "loss_guard" in engine_source, "Engine must store the guard as recipe-local loss_guard state."
 

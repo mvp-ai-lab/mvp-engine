@@ -1,14 +1,14 @@
 ---
 name: loss-spike-guard
-description: Add, review, update, and validate recipe-local loss spike guards for scalar-loss or per-token-loss training, including config thresholds, micro-batch skip wiring, distributed loss reduction.
+description: Add, review, update, and validate loss spike guards for scalar-loss or per-token-loss training, including config thresholds, micro-batch skip wiring, distributed loss reduction.
 ---
 
 # Loss Spike Guard
 
 ## Goal
 
-Add a recipe-local guard that skips anomalous micro-batch loss contributions
-without moving training-policy logic into `mvp_engine/`:
+Use the optimizer kit loss guard to skip anomalous micro-batch loss
+contributions:
 
 - keep the guard disabled by default unless a recipe stage intentionally enables
   it;
@@ -77,21 +77,15 @@ Only enable the guard in YAML configs where spike skipping is intended. Do not
 add explicit disabled keys to unrelated stage YAMLs just to restate schema
 defaults.
 
-### 3. Add Guard Logic
+### 3. Use Guard Logic
 
-Keep guard code recipe-local, for example:
-
-```text
-recipes/<recipe>/guards/loss.py
-```
-
-Implement:
+Use the shared OptimKit guard implementations:
 
 - `LossGuard` for scalar losses;
 - `PerTokenLossGuard` only when the recipe uses unreduced per-token loss sums.
 
 Read `references/guard_logic.md` before implementing or changing the check
-semantics.
+semantics in `mvp_engine/kit/optim/__init__.py`.
 
 ### 4. Wire The Engine
 
@@ -99,6 +93,8 @@ Create the guard during engine initialization, commonly in `prepare_optimizer()`
 or another path that runs before the first training step:
 
 ```python
+from mvp_engine.kit import LossGuard
+
 self.loss_guard = LossGuard(...)
 ```
 

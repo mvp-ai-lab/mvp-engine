@@ -20,13 +20,13 @@ from mvp_engine.kit import (
     ModelInputs,
     OptimKit,
     PackingOptions,
+    PerTokenLossGuard,
     TokenNormedLossKit,
 )
 from mvp_engine.utils.log import logger
 from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
 from ..configs.schema import Qwen3VLConfig
-from ..guards.loss import PerTokenLossGuard
 from ..model import patch_qwen3vl_conv3d, patch_qwen3vl_model_flops
 from ..model.packing import prepare_packed_model_inputs
 from ..utils.misc import infer_total_steps

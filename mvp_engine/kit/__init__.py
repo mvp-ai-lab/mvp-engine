@@ -17,10 +17,11 @@ if TYPE_CHECKING:
         ModelInputs,
         PackingOptions,
     )
-    from .optim import OptimKit
+    from .optim import LossGuard, OptimKit, PerTokenLossGuard
     from .perf.mfu import MFUKit
 
 __all__ = [
+    "LossGuard",
     "MFUKit",
     "MLLMCollator",
     "MLLMDataKit",
@@ -30,12 +31,14 @@ __all__ = [
     "ModelInputs",
     "OptimKit",
     "PackingOptions",
+    "PerTokenLossGuard",
     "TokenNormedLossKit",
     "TokenLossStats",
     "apply_chunked_token_loss_patch",
 ]
 
 _EXPORT_MODULES = {
+    "LossGuard": ".optim",
     "MFUKit": ".perf.mfu",
     "MLLMCollator": ".mllm",
     "MLLMDataKit": ".mllm",
@@ -45,6 +48,7 @@ _EXPORT_MODULES = {
     "ModelInputs": ".mllm",
     "OptimKit": ".optim",
     "PackingOptions": ".mllm",
+    "PerTokenLossGuard": ".optim",
     "TokenLossStats": ".loss.token_loss",
     "TokenNormedLossKit": ".loss.token_loss",
     "apply_chunked_token_loss_patch": ".loss.token_loss",
