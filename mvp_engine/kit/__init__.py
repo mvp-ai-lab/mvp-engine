@@ -18,9 +18,11 @@ if TYPE_CHECKING:
         PackingOptions,
     )
     from .optim import OptimKit
+    from .parallel import CPKit
     from .perf.mfu import MFUKit
 
 __all__ = [
+    "CPKit",
     "MFUKit",
     "MLLMCollator",
     "MLLMDataKit",
@@ -36,6 +38,7 @@ __all__ = [
 ]
 
 _EXPORT_MODULES = {
+    "CPKit": ".parallel",
     "MFUKit": ".perf.mfu",
     "MLLMCollator": ".mllm",
     "MLLMDataKit": ".mllm",

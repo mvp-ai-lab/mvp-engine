@@ -37,6 +37,9 @@ gpu = [
 npu = [
     "torch_npu",
 ]
+long-context = [
+    "yunchang>=0.6.4,<0.7",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

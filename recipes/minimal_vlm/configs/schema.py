@@ -33,6 +33,7 @@ class MinimalVLMModelConfig(BaseModel):
     model_config = ConfigDict(frozen=False, extra="forbid")
 
     pretrained_model_name_or_path: str = "Qwen/Qwen3-VL-2B-Instruct"
+    attn_implementation: Optional[str] = None
 
     @field_validator("pretrained_model_name_or_path", mode="before")
     @classmethod
@@ -43,6 +44,19 @@ class MinimalVLMModelConfig(BaseModel):
         normalized = value.strip()
         if not normalized:
             raise ValueError("`model.pretrained_model_name_or_path` must not be empty.")
+        return normalized
+
+    @field_validator("attn_implementation", mode="before")
+    @classmethod
+    def validate_attn_implementation(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise TypeError("`model.attn_implementation` must be a string or null.")
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("`model.attn_implementation` must not be empty.")
         return normalized
 
 

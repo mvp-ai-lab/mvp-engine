@@ -13,5 +13,6 @@ class ModelInputs(TypedDict):
     input_ids: torch.Tensor
     attention_mask: torch.Tensor
     labels: torch.Tensor
+    position_ids: NotRequired[torch.Tensor]
     pixel_values: NotRequired[torch.Tensor]
     image_grid_thw: NotRequired[torch.Tensor]

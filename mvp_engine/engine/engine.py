@@ -22,11 +22,11 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
 from mvp_engine.config.schema import BaseEngineConfig
-from mvp_engine.distributed.device_mesh import initialize_device_mesh
 from mvp_engine.distributed.init import initialize_process_group
 from mvp_engine.distributed.utils import (
     broadcast_from_main,
     get_local_rank,
+    initialize_device_mesh,
     is_main_process,
 )
 from mvp_engine.utils.checkpointing.parallel_sl_util import (

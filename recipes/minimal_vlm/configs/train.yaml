@@ -17,7 +17,19 @@ parallel:
   mesh:
     replicate: -1
     shard: 1
+    context: 1
     tensor: 1
+  backend_kwargs:
+    sequence_parallel: false
+    long_context:
+      enabled: false
+      ulysses_degree: 1
+      ring_degree: 1
+      ring_impl_type: "basic"
+      attn_impl: "fa"
+      use_ulysses_low: true
+      use_sync: false
+      grad_sync: true
 data:
   train_path: "./data/minimal_vlm/demo.parquet"
   max_seq_len: 2048

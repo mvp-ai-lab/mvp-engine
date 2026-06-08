@@ -5,6 +5,16 @@ from omegaconf import OmegaConf
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.fsdp import CPUOffloadPolicy
 
+from mvp_engine.distributed.utils import (
+    MESH_DIM_SHARD,
+    MESH_DIM_TENSOR,
+    get_context_parallel_size,
+    get_mesh_dim_size,
+    get_mesh_shape,
+    get_replicate_mesh,
+    get_sharded_data_parallel_mesh,
+    get_tensor_parallel_mesh,
+)
 from mvp_engine.utils.log import logger
 
 
@@ -56,6 +66,9 @@ def parallelize_model(
             For Tensor Parallel and Sequence Parallel (if tensor mesh is active):
                 - sequence_parallel: Enables sequence parallel layouts on the tensor mesh before FSDP2 (default: False)
 
+            For Long-Context Attention (if context mesh is active):
+                - long_context: Initializes yunchang USP/Ring attention before TP/FSDP2 and installs context grad sync.
+
     Returns:
         The parallelized model wrapped with the specified backend.
 
@@ -78,33 +91,54 @@ def parallelize_model(
         backend_kwargs = OmegaConf.to_container(backend_kwargs, resolve=True)
 
     backend_kwargs = dict(backend_kwargs)
-    tensor_size = device_mesh["tensor"].size()
-    shard_size = device_mesh["shard"].size()
+    tensor_size = get_mesh_dim_size(device_mesh, MESH_DIM_TENSOR)
+    shard_size = get_mesh_dim_size(device_mesh, MESH_DIM_SHARD)
+    context_size = get_context_parallel_size(device_mesh)
 
     sequence_parallel = bool(backend_kwargs.pop("sequence_parallel", False))
+    long_context_kwargs = backend_kwargs.pop("long_context", {}) or {}
+    from mvp_engine.distributed.cp import (
+        install_context_grad_sync,
+        is_long_context_enabled,
+        prepare_long_context_attention,
+    )
+
+    long_context = is_long_context_enabled(long_context_kwargs)
     if sequence_parallel and tensor_size <= 1:
         raise ValueError("Sequence parallel requires an active tensor mesh with parallel.mesh.tensor > 1.")
+    if long_context and sequence_parallel:
+        raise ValueError("Long-context attention and tensor-mesh sequence_parallel cannot be enabled together.")
+    if long_context and context_size <= 1:
+        raise ValueError("Long-context attention requires parallel.mesh.context > 1.")
+    if context_size > 1 and not long_context:
+        raise ValueError("parallel.mesh.context > 1 requires parallel.backend_kwargs.long_context.enabled=true.")
 
-    if device_mesh["shard"].shape[0] * device_mesh["tensor"].shape[0] == 1:
+    if shard_size * tensor_size * context_size == 1:
         # For Pure DDP: [N, 1, 1]
         from torch.nn.parallel import DistributedDataParallel
 
         logger.info(f"Wrapping {model.__class__.__name__} with DistributedDataParallel...")
         backend_kwargs = backend_kwargs.get("ddp", {})
-        backend_kwargs = _set_default_kwargs(backend_kwargs, "device_mesh", device_mesh["replicate"])
+        backend_kwargs = _set_default_kwargs(backend_kwargs, "device_mesh", get_replicate_mesh(device_mesh))
         parallelized_model = DistributedDataParallel(model, **backend_kwargs)
     else:
         # For FSDP2: [N, M, ...]
-        if shard_size == 1 and tensor_size > 1:
+        if shard_size == 1 and (tensor_size > 1 or context_size > 1):
             raise ValueError(
-                f"Invalid device mesh shape {device_mesh.shape}. "
-                "Tensor/sequence parallel should be used with FSDP rather than the pure DDP"
+                f"Invalid device mesh shape {get_mesh_shape(device_mesh)}. "
+                "Tensor/sequence/long-context parallel should be used with FSDP rather than the pure DDP"
             )
 
         from mvp_engine.distributed.fsdp2 import parallelize_model_with_fsdp2
 
-        fsdp2_mesh = device_mesh["replicate", "shard"]
-        tp_mesh = device_mesh["tensor"] if device_mesh.ndim > 2 else None
+        fsdp2_mesh = get_sharded_data_parallel_mesh(device_mesh)
+        tp_mesh = None
+        if tensor_size > 1:
+            tp_mesh = get_tensor_parallel_mesh(device_mesh)
+
+        if long_context:
+            logger.info(f"Preparing {model.__class__.__name__} for Long-Context Attention...")
+            prepare_long_context_attention(model, device_mesh, long_context_kwargs)
 
         if tp_mesh is not None and tp_mesh.size() > 1:
             from mvp_engine.distributed.tp import parallelize_model_with_tensor_parallel
@@ -139,5 +173,8 @@ def parallelize_model(
                 backend_kwargs["offload_policy"] = CPUOffloadPolicy()
 
             parallelized_model = parallelize_model_with_fsdp2(model, backend_kwargs)
+
+        if long_context and bool(long_context_kwargs.get("grad_sync", True)):
+            install_context_grad_sync(parallelized_model, device_mesh)
 
     return parallelized_model

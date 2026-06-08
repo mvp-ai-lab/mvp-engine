@@ -38,9 +38,10 @@ class BaseMeshConfig(BaseModel):
 
     replicate: int = 1
     shard: int = 8
+    context: int = 1
     tensor: int = 1
 
-    @field_validator("replicate", "shard", "tensor")
+    @field_validator("replicate", "shard", "tensor", "context")
     @classmethod
     def validate_mesh_dim(cls, v: int) -> int:
         if v == 0 or v < -1:
@@ -71,10 +72,24 @@ class BaseDDPConfig(BaseModel):
     model_config = ConfigDict(frozen=False, extra="allow")
 
 
+class BaseLongContextConfig(BaseModel):
+    model_config = ConfigDict(frozen=False)
+
+    enabled: bool = False
+    ulysses_degree: int = Field(1, ge=1)
+    ring_degree: int = Field(1, ge=1)
+    ring_impl_type: str = "basic"
+    attn_impl: str = "fa"
+    use_ulysses_low: bool = True
+    use_sync: bool = False
+    grad_sync: bool = True
+
+
 class BaseBackendKwargsConfig(BaseModel):
     model_config = ConfigDict(frozen=False)
 
     sequence_parallel: bool = False
+    long_context: BaseLongContextConfig = Field(default_factory=BaseLongContextConfig)
     fsdp2: BaseFSDP2Config = Field(default_factory=BaseFSDP2Config)
     ddp: BaseDDPConfig = Field(default_factory=BaseDDPConfig)
 
