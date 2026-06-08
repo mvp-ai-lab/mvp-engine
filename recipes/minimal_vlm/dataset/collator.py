@@ -59,4 +59,14 @@ class MinimalVLMCollator:
         if image_grid_thw:
             model_inputs["image_grid_thw"] = torch.cat(image_grid_thw, dim=0)
 
+        if any("mm_token_type_ids" in sample for sample in batch):
+            mm_token_type_ids = [
+                sample.get("mm_token_type_ids", torch.zeros_like(sample["input_ids"])) for sample in batch
+            ]
+            model_inputs["mm_token_type_ids"] = pad_sequence(
+                mm_token_type_ids,
+                batch_first=True,
+                padding_value=0,
+            )
+
         return model_inputs

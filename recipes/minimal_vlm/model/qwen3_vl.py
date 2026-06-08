@@ -74,6 +74,74 @@ def apply_freeze_policy(model) -> int:
     return frozen_parameters
 
 
+def prepare_qwen3_vl_mrope_position_ids(model: torch.nn.Module, batch: dict[str, Any]) -> None:
+    """Populate Qwen3-VL multimodal RoPE position ids for full, unsharded batches."""
+    if "position_ids" in batch:
+        return
+
+    input_ids = batch.get("input_ids")
+    if not isinstance(input_ids, torch.Tensor):
+        return
+
+    has_image = isinstance(batch.get("image_grid_thw"), torch.Tensor)
+    has_video = isinstance(batch.get("video_grid_thw"), torch.Tensor)
+    if not has_image and not has_video:
+        return
+
+    qwen_model = _resolve_qwen3_vl_base_model(model)
+    mm_token_type_ids = batch.get("mm_token_type_ids")
+    if not isinstance(mm_token_type_ids, torch.Tensor):
+        mm_token_type_ids = _infer_qwen3_vl_mm_token_type_ids(
+            model,
+            input_ids,
+            has_image=has_image,
+            has_video=has_video,
+        )
+        batch["mm_token_type_ids"] = mm_token_type_ids
+
+    position_ids, rope_deltas = qwen_model.get_rope_index(
+        input_ids,
+        mm_token_type_ids=mm_token_type_ids,
+        image_grid_thw=batch.get("image_grid_thw"),
+        video_grid_thw=batch.get("video_grid_thw"),
+        attention_mask=batch.get("attention_mask"),
+    )
+    batch["position_ids"] = position_ids
+    qwen_model.rope_deltas = rope_deltas
+
+
+def _resolve_qwen3_vl_base_model(model: torch.nn.Module) -> torch.nn.Module:
+    qwen_model = getattr(model, "model", model)
+    if hasattr(qwen_model, "get_rope_index"):
+        return qwen_model
+    raise TypeError(f"Expected Qwen3VL model with get_rope_index, got {model.__class__.__name__}.")
+
+
+def _infer_qwen3_vl_mm_token_type_ids(
+    model: torch.nn.Module,
+    input_ids: torch.Tensor,
+    *,
+    has_image: bool,
+    has_video: bool,
+) -> torch.Tensor:
+    config = getattr(model, "config", None)
+    token_type_ids = torch.zeros_like(input_ids)
+
+    if has_image:
+        image_token_id = getattr(config, "image_token_id", None)
+        if image_token_id is None:
+            raise ValueError("Cannot infer Qwen3-VL image token types without config.image_token_id.")
+        token_type_ids = token_type_ids.masked_fill(input_ids == int(image_token_id), 1)
+
+    if has_video:
+        video_token_id = getattr(config, "video_token_id", None)
+        if video_token_id is None:
+            raise ValueError("Cannot infer Qwen3-VL video token types without config.video_token_id.")
+        token_type_ids = token_type_ids.masked_fill(input_ids == int(video_token_id), 2)
+
+    return token_type_ids
+
+
 def _get_autocast_attention_dtype(x: torch.Tensor) -> torch.dtype | None:
     if not x.is_floating_point() or not torch.is_autocast_enabled(x.device.type):
         return None

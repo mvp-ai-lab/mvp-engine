@@ -22,6 +22,7 @@ from ..dataset.types import ModelInputs
 from ..model.qwen3_vl import (
     build_qwen3_vl_model,
     install_qwen3_vl_tensor_parallel_grad_sync,
+    prepare_qwen3_vl_mrope_position_ids,
 )
 
 
@@ -151,6 +152,7 @@ class MinimalVLMEngine(Engine):
     def _prepare_long_context_batch(self, batch: ModelInputs) -> ModelInputs:
         """Shard token-aligned tensors across the context mesh."""
         long_context_config = self.config.parallel.backend_kwargs.long_context.model_dump()
+        prepare_qwen3_vl_mrope_position_ids(self.unwrapped_model, batch)
         prepared = self.cp_kit.prepare_causal_batch(
             batch,
             device_mesh=self.device_mesh,

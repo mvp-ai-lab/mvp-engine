@@ -155,7 +155,8 @@ def prepare_cp_causal_batch(
         )
         positions = torch.arange(input_ids.shape[1], device=input_ids.device, dtype=torch.long)
         local_batch[label_key] = shifted_labels
-        local_batch[position_ids_key] = positions.unsqueeze(0).expand(input_ids.shape[0], -1)
+        if position_ids_key not in local_batch or not isinstance(local_batch[position_ids_key], torch.Tensor):
+            local_batch[position_ids_key] = positions.unsqueeze(0).expand(input_ids.shape[0], -1)
         if drop_attention_mask:
             local_batch.pop(attention_mask_key, None)
         layout = CPBatchLayout(
@@ -178,8 +179,12 @@ def prepare_cp_causal_batch(
             label_key: int(ignore_index),
             attention_mask_key: 1,
             segment_ids_key: 0,
+            position_ids_key: 0,
         },
-        token_aligned_keys=set(token_aligned_keys) | {input_ids_key, label_key, attention_mask_key, segment_ids_key},
+        token_aligned_keys=set(token_aligned_keys)
+        | {input_ids_key, label_key, attention_mask_key, segment_ids_key, position_ids_key},
+        batch_size=int(input_ids.shape[0]),
+        position_ids_key=position_ids_key,
     )
 
     padded_input_ids = global_batch[input_ids_key]
@@ -204,7 +209,17 @@ def prepare_cp_causal_batch(
             local_batch[key] = _index_local_sequence(value, local_position_indices)
 
     local_batch[label_key] = _index_local_sequence(shifted_labels, local_position_indices)
-    local_batch[position_ids_key] = local_position_indices.unsqueeze(0).expand(padded_input_ids.shape[0], -1)
+    position_ids = global_batch.get(position_ids_key)
+    if isinstance(position_ids, torch.Tensor):
+        local_batch[position_ids_key] = _index_position_ids(
+            position_ids,
+            local_position_indices,
+            batch_size=int(padded_input_ids.shape[0]),
+            global_seq_len=global_seq_len,
+            position_ids_key=position_ids_key,
+        )
+    else:
+        local_batch[position_ids_key] = local_position_indices.unsqueeze(0).expand(padded_input_ids.shape[0], -1)
     if drop_attention_mask:
         local_batch.pop(attention_mask_key, None)
 
@@ -279,6 +294,8 @@ def _pad_global_batch(
     target_multiple: int,
     pad_values: Mapping[str, int],
     token_aligned_keys: set[str],
+    batch_size: int,
+    position_ids_key: str,
 ) -> dict[str, Any]:
     if target_multiple <= 0:
         raise ValueError("target_multiple must be positive.")
@@ -289,16 +306,31 @@ def _pad_global_batch(
     padded = dict(batch)
     for key in token_aligned_keys:
         value = padded.get(key)
-        if isinstance(value, torch.Tensor) and value.ndim >= 2 and int(value.shape[1]) == global_seq_len:
-            padded[key] = _pad_sequence_dim(value, pad_len=pad_len, pad_value=int(pad_values.get(key, 0)))
+        if not isinstance(value, torch.Tensor):
+            continue
+
+        sequence_dim = _get_token_sequence_dim(
+            key,
+            value,
+            batch_size=batch_size,
+            global_seq_len=global_seq_len,
+            position_ids_key=position_ids_key,
+        )
+        if sequence_dim is not None:
+            padded[key] = _pad_sequence_dim(
+                value,
+                dim=sequence_dim,
+                pad_len=pad_len,
+                pad_value=int(pad_values.get(key, 0)),
+            )
     return padded
 
 
-def _pad_sequence_dim(value: torch.Tensor, *, pad_len: int, pad_value: int) -> torch.Tensor:
+def _pad_sequence_dim(value: torch.Tensor, *, dim: int, pad_len: int, pad_value: int) -> torch.Tensor:
     pad_shape = list(value.shape)
-    pad_shape[1] = int(pad_len)
+    pad_shape[dim] = int(pad_len)
     pad = value.new_full(pad_shape, pad_value)
-    return torch.cat([value, pad], dim=1)
+    return torch.cat([value, pad], dim=dim)
 
 
 def _build_global_next_token_labels(
@@ -318,3 +350,56 @@ def _build_global_next_token_labels(
 
 def _index_local_sequence(value: torch.Tensor, local_position_indices: torch.Tensor) -> torch.Tensor:
     return value.index_select(1, local_position_indices.to(device=value.device)).contiguous()
+
+
+def _index_position_ids(
+    value: torch.Tensor,
+    local_position_indices: torch.Tensor,
+    *,
+    batch_size: int,
+    global_seq_len: int,
+    position_ids_key: str,
+) -> torch.Tensor:
+    sequence_dim = _get_position_ids_sequence_dim(
+        value,
+        batch_size=batch_size,
+        global_seq_len=global_seq_len,
+        position_ids_key=position_ids_key,
+    )
+    return value.index_select(sequence_dim, local_position_indices.to(device=value.device)).contiguous()
+
+
+def _get_token_sequence_dim(
+    key: str,
+    value: torch.Tensor,
+    *,
+    batch_size: int,
+    global_seq_len: int,
+    position_ids_key: str,
+) -> int | None:
+    if key == position_ids_key:
+        return _get_position_ids_sequence_dim(
+            value,
+            batch_size=batch_size,
+            global_seq_len=global_seq_len,
+            position_ids_key=position_ids_key,
+        )
+    if value.ndim >= 2 and int(value.shape[1]) == global_seq_len:
+        return 1
+    return None
+
+
+def _get_position_ids_sequence_dim(
+    value: torch.Tensor,
+    *,
+    batch_size: int,
+    global_seq_len: int,
+    position_ids_key: str,
+) -> int:
+    if value.ndim == 2 and int(value.shape[0]) == batch_size and int(value.shape[1]) == global_seq_len:
+        return 1
+    if value.ndim == 3 and int(value.shape[1]) == batch_size and int(value.shape[2]) == global_seq_len:
+        return 2
+    raise ValueError(
+        f"{position_ids_key} must have shape [batch, seq] or [dims, batch, seq], got {tuple(value.shape)}."
+    )
