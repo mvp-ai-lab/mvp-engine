@@ -7,9 +7,14 @@ training infrastructure.
 
 ## Stages
 
-- `configs/stage1.yaml`: alignment stage.
-- `configs/stage2.yaml`: pretraining stage.
-- `configs/stage3.yaml`: SFT stage.
+- `configs/stage1.yaml`: alignment stage Hydra entrypoint.
+- `configs/stage2.yaml`: pretraining stage Hydra entrypoint.
+- `configs/stage3.yaml`: SFT stage Hydra entrypoint.
+
+Stage entrypoints compose shared config groups under `configs/data/`,
+`configs/model/`, `configs/model_checkpoint/`, `configs/model_runtime/`,
+`configs/optim/`, `configs/parallel/`, `configs/loop/`, and
+`configs/checkpoint/`.
 
 Each stage expects a Lance dataset `meta.json` from `mvp_dataset` and a local
 checkpoint path. Override `data.train_path` and

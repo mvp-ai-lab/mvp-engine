@@ -1,0 +1,7 @@
+# @package model
+
+attn_implementation: "flash_attention_2"
+compile:
+  enabled: false
+  backend: "inductor"
+  mode: "default"

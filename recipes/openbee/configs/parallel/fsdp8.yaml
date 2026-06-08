@@ -1,0 +1,6 @@
+# @package parallel
+
+mesh:
+  replicate: -1
+  shard: 8
+  tensor: 1

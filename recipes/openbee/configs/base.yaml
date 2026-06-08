@@ -1,0 +1,15 @@
+# @package _global_
+
+dev_mode: false
+engine: OpenBeeEngine
+deterministic: false
+
+project:
+  name: "openbee"
+  dir: "./outputs"
+
+log:
+  interval: 1
+  backends: ["terminal", "file", "wandb"]
+  accumulation_size: 1
+  timer_window_size: 10

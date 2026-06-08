@@ -1,0 +1,5 @@
+# @package checkpoint
+
+interval: 100
+keep_n: 2
+hf_enable: true

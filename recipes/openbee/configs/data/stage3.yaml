@@ -1,0 +1,11 @@
+# @package data
+
+train_path: "./data/Open-Bee-Lance/stage3/meta.json"
+ref_columns: ["images"]
+thinking_mode: "non-empty"
+packing_selection_strategy: "best_fit"
+packing_open_pack_limit: 8
+packing_buffer_size: 64
+max_seq_len: 16384
+batch_size: 1
+num_workers: 4

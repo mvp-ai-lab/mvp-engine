@@ -1,0 +1,9 @@
+# @package optim
+
+lr: 4.0e-5
+weight_decay: 0.0
+global_batch_size: 256
+gradient_accumulation_steps: -1
+mixed_precision: "bf16"
+warmup_ratio: 0.002
+clip_grad_norm: 1.0

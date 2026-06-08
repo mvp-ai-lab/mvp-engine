@@ -1,0 +1,9 @@
+# @package model
+
+image_max_pixels: 1280000
+gradient_checkpointing:
+  enabled: true
+  use_reentrant: false
+freeze_vit: false
+freeze_projector: false
+freeze_llm: false
