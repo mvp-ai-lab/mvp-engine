@@ -1,18 +1,47 @@
-"""Loss guards for Qwen3-VL training."""
+"""Reusable scalar loss helpers."""
 
 from __future__ import annotations
 
 from collections import deque
-from typing import Any
-
-import torch
-import torch.distributed as dist
+from typing import TYPE_CHECKING, Any
 
 from mvp_engine.utils.log import simple_info
 
+if TYPE_CHECKING:
+    import torch
+
+
+class LossKit:
+    """Group reusable scalar loss utilities."""
+
+    def __init__(self, loss_guard: LossGuard | None = None) -> None:
+        """Initialize scalar loss helpers and optional guard state."""
+        self.loss_guard = loss_guard
+
+    def build_loss_guard(
+        self,
+        *,
+        spike_multiplier: float | None,
+        window_size: int,
+        min_history: int,
+    ) -> LossGuard:
+        """Build and store the scalar loss guard used by ``guard_loss``."""
+        self.loss_guard = LossGuard(
+            spike_multiplier=spike_multiplier,
+            window_size=window_size,
+            min_history=min_history,
+        )
+        return self.loss_guard
+
+    def guard_loss(self, loss: torch.Tensor | float, *, step: int = 0) -> bool:
+        """Return whether ``loss`` should participate in backward."""
+        if self.loss_guard is None:
+            return True
+        return not self.loss_guard.check(loss, step=step)
+
 
 class LossGuard:
-    """Detect and skip micro-batches with anomalously high loss."""
+    """Detect and skip scalar micro-batch losses with anomalous spikes."""
 
     def __init__(
         self,
@@ -20,14 +49,10 @@ class LossGuard:
         spike_multiplier: float | None,
         window_size: int,
         min_history: int,
-        group: dist.ProcessGroup | None = None,
-        group_world_size: int | None = None,
     ) -> None:
         """Initialize the scalar-loss spike detector."""
         self.spike_multiplier = spike_multiplier
         self.min_history = min_history
-        self.group = group
-        self.group_world_size = group_world_size
         self.loss_history: deque[float] = deque(maxlen=window_size)
 
     def check(self, loss: torch.Tensor | float, *, step: int, token_count: int | None = None) -> bool:
@@ -63,49 +88,8 @@ class LossGuard:
     @staticmethod
     def _as_float(loss: torch.Tensor | float | Any) -> float:
         """Convert a scalar tensor or Python value to a float."""
+        import torch
+
         if isinstance(loss, torch.Tensor):
             return float(loss.detach().item())
         return float(loss)
-
-
-class PerTokenLossGuard(LossGuard):
-    """Detect spikes from per-token loss sums and valid token counts."""
-
-    def check(
-        self,
-        loss_sum: torch.Tensor | float,
-        token_count: int,
-        *,
-        step: int,
-        device: torch.device,
-    ) -> bool:
-        """Return whether the current per-token micro-batch loss should be skipped."""
-        if self.spike_multiplier is None:
-            return False
-
-        loss_stats = torch.stack(
-            (
-                self._as_tensor(loss_sum, device=device),
-                torch.tensor(float(token_count), device=device, dtype=torch.float64),
-            )
-        )
-        should_reduce = self.group_world_size is None or self.group_world_size > 1
-        if should_reduce and dist.is_available() and dist.is_initialized():
-            dist.all_reduce(loss_stats, op=dist.ReduceOp.SUM, group=self.group)
-
-        global_token_count = int(loss_stats[1].item())
-        if global_token_count <= 0:
-            return False
-
-        return super().check(
-            loss_stats[0] / loss_stats[1],
-            step=step,
-            token_count=global_token_count,
-        )
-
-    @staticmethod
-    def _as_tensor(value: torch.Tensor | float, *, device: torch.device) -> torch.Tensor:
-        """Convert a per-rank loss sum into a float64 scalar tensor."""
-        if isinstance(value, torch.Tensor):
-            return value.detach().to(device=device, dtype=torch.float64)
-        return torch.tensor(float(value), device=device, dtype=torch.float64)

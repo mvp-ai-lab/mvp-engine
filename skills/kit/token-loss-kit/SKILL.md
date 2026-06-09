@@ -19,6 +19,8 @@ The kit provides:
 
 - `apply_chunked_token_loss_patch(...)`;
 - `accumulate_microbatch(...)`;
+- `build_loss_guard(...)` and `guard_loss(...)` for optional per-token spike
+  skipping;
 - `reduce_window()`;
 - `rescale_gradients(...)`;
 - `reset()`.
