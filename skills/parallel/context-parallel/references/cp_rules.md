@@ -58,7 +58,6 @@ The attention wrapper:
 - Normalize loss with the global valid-token count across context ranks.
 - Attention masks must match the extracted layout. If the recipe cannot express
   a local mask, restrict smoke/training to unpadded causal batches.
-- Packed samples need segment-aware local slicing and loss masking.
 - Multimodal placeholder spans, such as image/video tokens, must be all-or-none
   local after extraction. Select feature tensors in the same order that local
   placeholder tokens appear, or reject/resample spans that cross context ranks.
@@ -66,6 +65,25 @@ The attention wrapper:
   gather/reduce logic or must be disabled for smoke validation.
 - Generation and KV-cache inference need a separate design; do not assume the
   training hook supports incremental decode.
+
+## CP + Data Packing
+
+- Keep `pack_segment_ids` token-aligned with `input_ids`; pad inactive positions
+  with `0`.
+- Build packed position ids and attention-isolation metadata on the global
+  sequence before CP extraction.
+- Pass raw unshifted labels into `CPKit.prepare_causal_batch(...)`; it performs
+  global next-token shift and masks cross-segment labels.
+- Use segment-isolated causal attention for packed batches. Plain causal masks
+  allow cross-sample attention and are incorrect.
+- Compute backward loss on local logits with
+  `CPKit.compute_cross_entropy_loss(...)`; log global loss as
+  `global_loss_sum / global_valid_tokens`.
+- Context ranks must read the same packed samples; do not shard packing or data
+  loading by the context mesh dimension.
+- Packed/unpacked parity should compare input ids, shifted labels, position ids,
+  logits/top-1, global loss, and grad norms. Small bf16 drift is acceptable when
+  absolute positions or kernel shapes differ.
 
 ## Gradient Sync
 
