@@ -194,7 +194,7 @@ class MinimalVLMEngine(Engine):
         position_to_local_index = {
             int(position): local_index for local_index, position in enumerate(local_position_indices.tolist())
         }
-        selected_images: list[tuple[int, int]] = []
+        selected_image_indices: list[int] = []
         image_index = 0
         for row in full_batch["input_ids"]:
             image_positions = torch.nonzero(row == image_token_id, as_tuple=False).flatten().tolist()
@@ -220,18 +220,17 @@ class MinimalVLMEngine(Engine):
                         raise ValueError(
                             "Minimal VLM long-context requires local image placeholder spans to stay contiguous."
                         )
-                    selected_images.append((sorted_local_indices[0], image_index))
+                    selected_image_indices.append(image_index)
                 image_index += 1
 
         if image_index != len(language_token_counts):
             raise ValueError("Qwen3-VL image_grid_thw entries exceed image placeholders.")
 
-        if not selected_images:
+        if not selected_image_indices:
             local_batch.pop("pixel_values", None)
             local_batch.pop("image_grid_thw", None)
             return
 
-        selected_image_indices = [image_index for _, image_index in sorted(selected_images)]
         local_batch["image_grid_thw"] = torch.stack([image_grid_thw[index] for index in selected_image_indices], dim=0)
         local_batch["pixel_values"] = torch.cat([pixel_chunks[index] for index in selected_image_indices], dim=0)
 
