@@ -7,8 +7,7 @@ description: Add, review, update, and validate loss spike guards for scalar-loss
 
 ## Goal
 
-Use the optimizer kit loss guard to skip anomalous micro-batch loss
-contributions:
+Use the shared loss-kit guards to skip anomalous micro-batch loss contributions:
 
 - keep the guard disabled by default unless a recipe stage intentionally enables
   it;
@@ -90,8 +89,8 @@ semantics in `mvp_engine/kit/loss/loss.py` or
 
 ### 4. Wire The Engine
 
-Create the guard during engine initialization, commonly in `prepare_optimizer()`
-or another path that runs before the first training step:
+Create the guard during engine initialization or another path that runs before
+the first training step:
 
 ```python
 self.loss_kit.build_loss_guard(...)
