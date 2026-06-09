@@ -150,6 +150,20 @@ def run_attention(
             deterministic=deterministic,
             return_attn_probs=return_attn_probs,
         )
+    if normalized == "npu":
+        return _npu_attention(
+            query,
+            key,
+            value,
+            dropout_p=dropout_p,
+            softmax_scale=softmax_scale,
+            causal=causal,
+            window_size=window_size,
+            softcap=softcap,
+            alibi_slopes=alibi_slopes,
+            deterministic=deterministic,
+            return_attn_probs=return_attn_probs,
+        )
     return _torch_attention(
         query,
         key,
@@ -245,6 +259,54 @@ def _flash_attention(
     )
 
 
+def _npu_attention(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    *,
+    dropout_p: float,
+    softmax_scale: float | None,
+    causal: bool,
+    window_size: tuple[int, int],
+    softcap: float,
+    alibi_slopes: torch.Tensor | None,
+    deterministic: bool,
+    return_attn_probs: bool,
+) -> torch.Tensor:
+    if dropout_p != 0.0:
+        raise ValueError("NPU Ulysses attention does not support dropout_p.")
+    if window_size != (-1, -1):
+        raise ValueError("NPU Ulysses attention does not support local attention window_size.")
+    if softcap != 0.0:
+        raise ValueError("NPU Ulysses attention does not support softcap.")
+    if alibi_slopes is not None:
+        raise ValueError("NPU Ulysses attention does not support alibi_slopes.")
+    if deterministic:
+        raise ValueError("NPU Ulysses attention does not support deterministic mode.")
+    if return_attn_probs:
+        raise ValueError("NPU Ulysses attention does not support return_attn_probs.")
+
+    try:
+        import torch_npu
+    except ImportError as exc:  # pragma: no cover - optional NPU dependency
+        raise ImportError("Ulysses attn_impl='npu' requires torch_npu.") from exc
+
+    if softmax_scale is None:
+        softmax_scale = query.shape[-1] ** -0.5
+
+    output = torch_npu.npu_fusion_attention_v2(
+        query,
+        key,
+        value,
+        head_num=query.shape[-2],
+        input_layout="BSND",
+        scale=softmax_scale,
+        pre_tokens=65535,
+        next_tokens=0 if causal else 65535,
+    )
+    return output[0] if isinstance(output, tuple) else output
+
+
 def _torch_attention(
     query: torch.Tensor,
     key: torch.Tensor,
@@ -310,6 +372,9 @@ def _normalize_attn_impl(attn_impl: str) -> str:
         "torch_flash": "torch_flash",
         "torch_efficient": "torch_efficient",
         "torch_cudnn": "torch_cudnn",
+        "npu": "npu",
+        "torch_npu": "npu",
+        "npu_fa": "npu",
     }
     try:
         return aliases[attn_impl]
@@ -341,3 +406,5 @@ def _get_group_world_size(group: dist.ProcessGroup | None) -> int:
 def _maybe_sync(value: torch.Tensor, use_sync: bool) -> None:
     if use_sync and value.device.type == "cuda":
         torch.cuda.synchronize(value.device)
+    elif use_sync and value.device.type == "npu":
+        torch.npu.synchronize(value.device)
