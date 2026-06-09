@@ -20,10 +20,8 @@ def test_file_structure(recipe_root: Path) -> None:
     assert "loss_spike_skip_multiplier" in config_source, "Config must expose optim.loss_spike_skip_multiplier."
     assert "loss_spike_skip_window_size" in config_source, "Config must expose optim.loss_spike_skip_window_size."
     assert "loss_spike_skip_min_history" in config_source, "Config must expose optim.loss_spike_skip_min_history."
-    assert "LossGuard" in engine_source or "PerTokenLossGuard" in engine_source, (
-        "Engine must import a loss guard from mvp_engine.kit."
-    )
-    assert "loss_guard" in engine_source, "Engine must store the guard as recipe-local loss_guard state."
+    assert "build_loss_guard" in engine_source, "Engine must configure a loss-kit guard."
+    assert "guard_loss" in engine_source, "Engine must call loss-kit guard_loss before backward."
 
 
 def test_config_structure(config) -> None:
@@ -40,31 +38,33 @@ def test_config_structure(config) -> None:
 
 def test_engine_structure(engine_class: type) -> None:
     """Verify the engine checks the guard before backward."""
+    engine_init = getattr(engine_class, "__init__", None)
     prepare_optimizer = getattr(engine_class, "prepare_optimizer", None)
     backward_step = getattr(engine_class, "backward_step", None)
     assert backward_step is not None, "Engine must define backward_step for loss guard wiring."
 
+    init_source = textwrap.dedent(inspect.getsource(engine_init)) if engine_init else ""
     prepare_source = textwrap.dedent(inspect.getsource(prepare_optimizer)) if prepare_optimizer else ""
     backward_source = textwrap.dedent(inspect.getsource(backward_step))
-    source = f"{prepare_source}\n{backward_source}"
+    source = f"{init_source}\n{prepare_source}\n{backward_source}"
 
-    assert "loss_guard" in source, "Engine must create and use self.loss_guard."
-    assert ".check(" in backward_source, "backward_step must call the loss guard check before backward."
+    assert "build_loss_guard" in source, "Engine must configure a loss-kit build_loss_guard(...)."
+    assert ".guard_loss(" in backward_source, "backward_step must call loss-kit guard_loss before backward."
 
     tree = ast.parse(backward_source)
     check_lines = [
         node.lineno
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "check"
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "guard_loss"
     ]
     backward_lines = [
         node.lineno
         for node in ast.walk(tree)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "backward"
     ]
-    assert check_lines, "backward_step must call loss_guard.check(...)."
+    assert check_lines, "backward_step must call loss-kit guard_loss(...)."
     assert backward_lines, "backward_step must call backward()."
-    assert min(check_lines) < min(backward_lines), "loss_guard.check(...) must run before backward()."
+    assert min(check_lines) < min(backward_lines), "loss-kit guard_loss(...) must run before backward()."
     assert "* 0.0" in backward_source or "zero_" in backward_source, (
         "Skipped micro-batches must zero the backward loss or local loss contribution."
     )
@@ -73,12 +73,14 @@ def test_engine_structure(engine_class: type) -> None:
 def assert_before_train_end(engine) -> None:
     """After setup, verify enabled loss-spike guard config reaches runtime state."""
     multiplier = engine.config.optim.loss_spike_skip_multiplier
-    guard = getattr(engine, "loss_guard", None)
+    loss_kit = getattr(engine, "loss_kit", None)
+    token_loss_kit = getattr(engine, "token_loss_kit", None)
+    guard = getattr(loss_kit, "loss_guard", None) or getattr(token_loss_kit, "loss_guard", None)
     if multiplier is None:
         return
 
-    assert guard is not None, "Loss spike guard is enabled in config, but engine.loss_guard is missing."
+    assert guard is not None, "Loss spike guard is enabled in config, but no loss-kit guard is configured."
     assert getattr(guard, "spike_multiplier", None) == multiplier, (
-        "engine.loss_guard.spike_multiplier must match optim.loss_spike_skip_multiplier."
+        "loss-kit guard spike_multiplier must match optim.loss_spike_skip_multiplier."
     )
     assert hasattr(guard, "loss_history"), "Loss guard must keep non-spike loss history."

@@ -20,7 +20,6 @@ from mvp_engine.kit import (
     ModelInputs,
     OptimKit,
     PackingOptions,
-    PerTokenLossGuard,
     TokenNormedLossKit,
 )
 from mvp_engine.utils.log import logger
@@ -43,7 +42,6 @@ class OpenBeeEngine(Engine):
     config: OpenBeeConfig
 
     processor: ProcessorMixin
-    loss_guard: PerTokenLossGuard
 
     data_kit: MLLMDataKit
     model_kit: MLLMModelKit
@@ -65,6 +63,11 @@ class OpenBeeEngine(Engine):
             device=self.device,
             dp_world_size=self.dp_world_size,
             dp_group=self.dp_group,
+        )
+        self.token_loss_kit.build_loss_guard(
+            spike_multiplier=self.config.optim.loss_spike_skip_multiplier,
+            window_size=int(self.config.optim.loss_spike_skip_window_size),
+            min_history=int(self.config.optim.loss_spike_skip_min_history),
         )
 
     def prepare_dataloader(self, workflow: str = "train"):
@@ -181,18 +184,11 @@ class OpenBeeEngine(Engine):
         return parallelized_model
 
     def prepare_optimizer(self) -> torch.optim.Optimizer:
-        """Construct AdamW and initialize the per-token loss guard.
+        """Construct AdamW.
 
         Returns:
             The optimizer used by this recipe.
         """
-        self.loss_guard = PerTokenLossGuard(
-            spike_multiplier=self.config.optim.loss_spike_skip_multiplier,
-            window_size=int(self.config.optim.loss_spike_skip_window_size),
-            min_history=int(self.config.optim.loss_spike_skip_min_history),
-            group=self.dp_group,
-            group_world_size=self.dp_world_size,
-        )
         return self.optim_kit.build_optimizer(
             self.model,
             optimizer=self.config.optim.optimizer,
@@ -303,11 +299,10 @@ class OpenBeeEngine(Engine):
             * int(self.config.optim.gradient_accumulation_steps)
         )
 
-        if self.loss_guard.check(
+        if not self.token_loss_kit.guard_loss(
             local_micro_loss_sum,
             micro_effective_token_count,
             step=int(self.step),
-            device=self.device,
         ):
             local_micro_loss_sum = local_micro_loss_sum * 0.0
 

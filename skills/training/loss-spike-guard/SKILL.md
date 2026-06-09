@@ -79,13 +79,14 @@ defaults.
 
 ### 3. Use Guard Logic
 
-Use the shared OptimKit guard implementations:
+Use the shared loss-kit guard implementations:
 
 - `LossGuard` for scalar losses;
 - `PerTokenLossGuard` only when the recipe uses unreduced per-token loss sums.
 
 Read `references/guard_logic.md` before implementing or changing the check
-semantics in `mvp_engine/kit/optim/__init__.py`.
+semantics in `mvp_engine/kit/loss/loss.py` or
+`mvp_engine/kit/loss/token_loss.py`.
 
 ### 4. Wire The Engine
 
@@ -93,20 +94,22 @@ Create the guard during engine initialization, commonly in `prepare_optimizer()`
 or another path that runs before the first training step:
 
 ```python
-from mvp_engine.kit import LossGuard
-
-self.loss_guard = LossGuard(...)
+self.loss_kit.build_loss_guard(...)
 ```
 
-In `backward_step()`, call the guard before backward and before final metric
-updates for the current micro-batch.
+For token-normalized per-token loss, use `self.token_loss_kit.build_loss_guard(...)`.
+
+In `backward_step()`, call `self.loss_kit.guard_loss(...)` or
+`self.token_loss_kit.guard_loss(...)` before backward and before final metric
+updates for the current micro-batch. `guard_loss(...)`
+returns `True` when the loss should participate in backward.
 
 For scalar loss, skip by zeroing the backward loss and the logged micro-batch
 loss contribution.
 
 For per-token loss, call the guard with local loss sum and local supervised token
 count, then zero the local loss sum and backward loss when the guard returns
-`True`. Do not set token count to zero unless the recipe already treats skipped
+`False`. Do not set token count to zero unless the recipe already treats skipped
 samples as removed from denominators.
 
 When the recipe uses `TokenNormedLossKit`, zero `local_micro_loss_sum` before

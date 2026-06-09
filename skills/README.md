@@ -23,7 +23,7 @@ Examples:
   standard MLLM data pipeline.
 - `MLLMModelKit` covers common MLLM model loading, patching, freeze,
   checkpointing, and compile wiring.
-- `TokenNormedLossKit`, `MFUKit`, and `OptimKit` cover standard training
+- `LossKit`, `TokenNormedLossKit`, `MFUKit`, and `OptimKit` cover standard training
   utilities.
 - TP plans, FSDP2 prefetch edges, model migration, and loss spike guards still
   rely on feature skills because they are model/recipe-specific patterns rather
