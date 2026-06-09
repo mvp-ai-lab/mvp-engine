@@ -11,6 +11,8 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
+from .loss import LossGuard
+
 
 @dataclass(frozen=True)
 class TokenLossStats:
@@ -23,6 +25,67 @@ class TokenLossStats:
     gradient_scale: float
 
 
+class PerTokenLossGuard(LossGuard):
+    """Detect spikes from per-token loss sums and valid token counts."""
+
+    def __init__(
+        self,
+        *,
+        spike_multiplier: float | None,
+        window_size: int,
+        min_history: int,
+        group: dist.ProcessGroup | None = None,
+        group_world_size: int | None = None,
+    ) -> None:
+        """Initialize the per-token loss spike detector."""
+        super().__init__(
+            spike_multiplier=spike_multiplier,
+            window_size=window_size,
+            min_history=min_history,
+        )
+        self.group = group
+        self.group_world_size = group_world_size
+
+    def check(
+        self,
+        loss_sum: torch.Tensor | float,
+        token_count: int,
+        *,
+        step: int,
+        device: torch.device,
+    ) -> bool:
+        """Return whether the current per-token micro-batch loss should be skipped."""
+        if self.spike_multiplier is None:
+            return False
+
+        loss_stats = torch.stack(
+            (
+                self._as_tensor(loss_sum, device=device),
+                torch.tensor(float(token_count), device=device, dtype=torch.float64),
+            )
+        )
+        should_reduce = self.group_world_size is None or self.group_world_size > 1
+        if should_reduce and dist.is_available() and dist.is_initialized():
+            dist.all_reduce(loss_stats, op=dist.ReduceOp.SUM, group=self.group)
+
+        global_token_count = int(loss_stats[1].item())
+        if global_token_count <= 0:
+            return False
+
+        return super().check(
+            loss_stats[0] / loss_stats[1],
+            step=step,
+            token_count=global_token_count,
+        )
+
+    @staticmethod
+    def _as_tensor(value: torch.Tensor | float, *, device: torch.device) -> torch.Tensor:
+        """Convert a per-rank loss sum into a float64 scalar tensor."""
+        if isinstance(value, torch.Tensor):
+            return value.detach().to(device=device, dtype=torch.float64)
+        return torch.tensor(float(value), device=device, dtype=torch.float64)
+
+
 class TokenNormedLossKit:
     """Track one token-normalized gradient-accumulation window."""
 
@@ -32,11 +95,13 @@ class TokenNormedLossKit:
         device: torch.device,
         dp_world_size: int,
         dp_group: dist.ProcessGroup | None = None,
+        loss_guard: PerTokenLossGuard | None = None,
     ) -> None:
         """Create an empty token-loss window on the given reduction device."""
         self.device = device
         self.dp_world_size = int(dp_world_size)
         self.dp_group = dp_group
+        self.loss_guard = loss_guard
         self.reset()
 
     def apply_chunked_token_loss_patch(
@@ -51,6 +116,36 @@ class TokenNormedLossKit:
             model,
             chunk_size=chunk_size,
             output_cls=output_cls,
+        )
+
+    def build_loss_guard(
+        self,
+        *,
+        spike_multiplier: float | None,
+        window_size: int,
+        min_history: int,
+        group: dist.ProcessGroup | None = None,
+        group_world_size: int | None = None,
+    ) -> PerTokenLossGuard:
+        """Build and store the per-token loss guard used by ``guard_loss``."""
+        self.loss_guard = PerTokenLossGuard(
+            spike_multiplier=spike_multiplier,
+            window_size=window_size,
+            min_history=min_history,
+            group=self.dp_group if group is None else group,
+            group_world_size=self.dp_world_size if group_world_size is None else group_world_size,
+        )
+        return self.loss_guard
+
+    def guard_loss(self, loss_sum: torch.Tensor | float, token_count: int, *, step: int = 0) -> bool:
+        """Return whether the per-token loss sum should participate in backward."""
+        if self.loss_guard is None:
+            return True
+        return not self.loss_guard.check(
+            loss_sum,
+            int(token_count),
+            step=step,
+            device=self.device,
         )
 
     def accumulate_microbatch(

@@ -30,8 +30,6 @@ def test_file_structure():
         "configs/stage3.yaml",
         "engine/__init__.py",
         "engine/openbee_engine.py",
-        "guards/__init__.py",
-        "guards/loss.py",
         "model/__init__.py",
         "model/qwen3_vl.py",
         "model/packing/__init__.py",
