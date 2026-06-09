@@ -73,15 +73,10 @@ class BaseDDPConfig(BaseModel):
 
 
 class BaseLongContextConfig(BaseModel):
-    model_config = ConfigDict(frozen=False)
+    model_config = ConfigDict(frozen=False, extra="forbid")
 
     enabled: bool = False
-    ulysses_degree: int = Field(1, ge=1)
-    ring_degree: int = Field(1, ge=1)
-    ring_impl_type: str = "basic"
     attn_impl: str = "fa"
-    use_ulysses_low: bool = True
-    use_sync: bool = False
     grad_sync: bool = True
 
 

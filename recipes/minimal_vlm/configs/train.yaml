@@ -23,12 +23,7 @@ parallel:
     sequence_parallel: false
     long_context:
       enabled: false
-      ulysses_degree: 1
-      ring_degree: 1
-      ring_impl_type: "basic"
       attn_impl: "fa"
-      use_ulysses_low: true
-      use_sync: false
       grad_sync: true
 data:
   train_path: "./data/minimal_vlm/demo.parquet"

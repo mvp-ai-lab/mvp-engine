@@ -151,12 +151,10 @@ class MinimalVLMEngine(Engine):
 
     def _prepare_long_context_batch(self, batch: ModelInputs) -> ModelInputs:
         """Shard token-aligned tensors across the context mesh."""
-        long_context_config = self.config.parallel.backend_kwargs.long_context.model_dump()
         prepare_qwen3_vl_mrope_position_ids(self.unwrapped_model, batch)
         prepared = self.cp_kit.prepare_causal_batch(
             batch,
             device_mesh=self.device_mesh,
-            config=long_context_config,
             pad_token_id=int(self.processor.tokenizer.pad_token_id),
             ignore_index=-100,
         )

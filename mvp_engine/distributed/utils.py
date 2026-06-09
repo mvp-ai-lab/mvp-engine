@@ -373,118 +373,20 @@ def validate_mvp_engine_mesh_order(device_mesh: DeviceMesh) -> None:
         )
 
 
-def configure_long_context_process_groups(device_mesh: DeviceMesh, config: dict | None) -> None:
-    """Configure yunchang Ulysses/Ring process groups from the mvp-engine DeviceMesh."""
+def configure_long_context_process_groups(device_mesh: DeviceMesh) -> dist.ProcessGroup | None:
+    """Validate and return the Ulysses context process group from the mvp-engine DeviceMesh."""
     if not dist.is_available() or not dist.is_initialized():
-        return
+        return None
 
     validate_mvp_engine_mesh_order(device_mesh)
-    config = config or {}
-    ulysses_degree = int(config.get("ulysses_degree", 1))
-    ring_degree = int(config.get("ring_degree", 1))
-    use_ulysses_low = bool(config.get("use_ulysses_low", True))
-
-    context_groups = get_mesh_group_ranks(device_mesh, (MESH_DIM_CONTEXT,))
-    ulysses_pg, ring_pg = create_yunchang_process_groups(
-        context_groups,
-        ulysses_degree=ulysses_degree,
-        ring_degree=ring_degree,
-        use_ulysses_low=use_ulysses_low,
-    )
-
-    try:
-        from yunchang.globals import PROCESS_GROUP
-    except ImportError as exc:  # pragma: no cover - optional dependency
-        raise ImportError("Long-context attention requires `pip install 'mvp_engine[long-context]'`.") from exc
-
-    PROCESS_GROUP.ULYSSES_PG = ulysses_pg
-    PROCESS_GROUP.RING_PG = ring_pg
+    context_group = get_context_parallel_group(device_mesh)
+    if context_group is None:
+        raise ValueError("Long-context attention requires parallel.mesh.context > 1.")
 
     from mvp_engine.utils.log import logger
 
-    logger.info(
-        "Initialized long-context process groups from DeviceMesh "
-        f"(context={get_context_parallel_size(device_mesh)}, "
-        f"ulysses={ulysses_degree}, ring={ring_degree}, use_ulysses_low={use_ulysses_low})."
-    )
-
-
-def create_yunchang_process_groups(
-    context_groups: list[list[int]],
-    *,
-    ulysses_degree: int,
-    ring_degree: int,
-    use_ulysses_low: bool,
-) -> tuple[dist.ProcessGroup, dist.ProcessGroup]:
-    """Create yunchang Ulysses and Ring groups and return this rank's groups."""
-    current_rank = dist.get_rank()
-    selected_ulysses_pg = None
-    selected_ring_pg = None
-
-    for context_ranks in context_groups:
-        ulysses_groups, ring_groups = get_yunchang_sequence_parallel_group_ranks(
-            context_ranks,
-            ulysses_degree=ulysses_degree,
-            ring_degree=ring_degree,
-            use_ulysses_low=use_ulysses_low,
-        )
-        if use_ulysses_low:
-            selected_ulysses_pg = create_process_group_set_and_select(
-                ulysses_groups,
-                current_rank,
-                selected_ulysses_pg,
-            )
-            selected_ring_pg = create_process_group_set_and_select(ring_groups, current_rank, selected_ring_pg)
-        else:
-            selected_ring_pg = create_process_group_set_and_select(ring_groups, current_rank, selected_ring_pg)
-            selected_ulysses_pg = create_process_group_set_and_select(
-                ulysses_groups,
-                current_rank,
-                selected_ulysses_pg,
-            )
-
-    if selected_ulysses_pg is None or selected_ring_pg is None:
-        raise RuntimeError(f"Failed to create yunchang process groups for rank {current_rank}.")
-    return selected_ulysses_pg, selected_ring_pg
-
-
-def get_yunchang_sequence_parallel_group_ranks(
-    context_ranks: list[int],
-    *,
-    ulysses_degree: int,
-    ring_degree: int,
-    use_ulysses_low: bool,
-) -> tuple[list[list[int]], list[list[int]]]:
-    """Return Ulysses and Ring rank groups for one context-parallel group."""
-    if ulysses_degree * ring_degree != len(context_ranks):
-        raise ValueError(
-            "Long-context attention requires ulysses_degree * ring_degree to match each context group size."
-        )
-
-    if use_ulysses_low:
-        ulysses_groups = [
-            context_ranks[index * ulysses_degree : (index + 1) * ulysses_degree] for index in range(ring_degree)
-        ]
-        ring_groups = [context_ranks[index::ulysses_degree] for index in range(ulysses_degree)]
-    else:
-        ring_groups = [
-            context_ranks[index * ring_degree : (index + 1) * ring_degree] for index in range(ulysses_degree)
-        ]
-        ulysses_groups = [context_ranks[index::ring_degree] for index in range(ring_degree)]
-    return ulysses_groups, ring_groups
-
-
-def create_process_group_set_and_select(
-    rank_groups: list[list[int]],
-    current_rank: int,
-    selected_pg: dist.ProcessGroup | None,
-) -> dist.ProcessGroup | None:
-    """Create all process groups in a set and return the one containing this rank."""
-    for ranks in rank_groups:
-        group = dist.new_group(ranks=ranks)
-        if current_rank in ranks:
-            selected_pg = group
-    return selected_pg
+    logger.info(f"Using long-context process group from DeviceMesh (ulysses={get_context_parallel_size(device_mesh)}).")
+    return context_group
 
 
 def is_main_process() -> bool:

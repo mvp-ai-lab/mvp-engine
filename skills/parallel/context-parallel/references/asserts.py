@@ -11,8 +11,6 @@ from pathlib import Path
 
 from mvp_engine.distributed.utils import get_context_parallel_size
 
-SUPPORTED_RING_IMPL_TYPES = {"zigzag", "basic"}
-
 
 def test_file_structure(recipe_root: Path) -> None:
     """Verify long-context recipe wiring can be discovered."""
@@ -35,13 +33,8 @@ def test_file_structure(recipe_root: Path) -> None:
     assert "prepare_causal_batch" in engine_source, "Engine should use CPKit to shard token tensors."
     assert "compute_cross_entropy_loss" in engine_source, "Engine should use CPKit for CP loss semantics."
     assert "labels" in engine_source, "Engine must pass CP-shifted labels to local loss."
-    if "get_basic_sequence_offset" in engine_source:
-        assert "ring_impl_type" in engine_source and "basic" in engine_source, (
-            "get_basic_sequence_offset is valid only behind an explicit basic ring layout branch."
-        )
     assert "long_context" in config_source, "Config must expose parallel.backend_kwargs.long_context."
     assert "context" in config_source, "Config must expose parallel.mesh.context."
-    assert "ring_impl_type" in config_source, "Config must expose long_context.ring_impl_type."
 
 
 def test_config_structure(config) -> None:
@@ -53,22 +46,13 @@ def test_config_structure(config) -> None:
     assert mesh.context >= 1 or mesh.context == -1, "parallel.mesh.context must be >= 1 or -1."
     assert hasattr(backend_kwargs, "sequence_parallel"), "sequence_parallel must remain available."
     assert isinstance(long_context.enabled, bool), "long_context.enabled must be a bool."
-    assert int(long_context.ulysses_degree) >= 1, "ulysses_degree must be >= 1."
-    assert int(long_context.ring_degree) >= 1, "ring_degree must be >= 1."
-    assert str(long_context.ring_impl_type) in SUPPORTED_RING_IMPL_TYPES, (
-        f"ring_impl_type must be one of {sorted(SUPPORTED_RING_IMPL_TYPES)}."
-    )
+    assert isinstance(long_context.attn_impl, str), "long_context.attn_impl must be a string."
+    assert isinstance(long_context.grad_sync, bool), "long_context.grad_sync must be a bool."
 
     if long_context.enabled:
         assert not backend_kwargs.sequence_parallel, "long_context and sequence_parallel must not both be enabled."
         assert mesh.context > 1 or mesh.context == -1, "long_context requires parallel.mesh.context > 1 or -1."
         assert mesh.shard != 1, "This repo requires FSDP2 shard > 1 when long_context is enabled."
-        if str(long_context.ring_impl_type) == "zigzag" and getattr(mesh, "tensor", 1) > 1:
-            raise AssertionError("Current shared runtime supports zigzag long-context only with mesh.tensor == 1.")
-        if mesh.context > 1:
-            assert int(long_context.ulysses_degree) * int(long_context.ring_degree) == int(mesh.context), (
-                "ulysses_degree * ring_degree must equal parallel.mesh.context."
-            )
 
 
 def test_engine_structure(engine_class: type) -> None:
@@ -107,13 +91,11 @@ def assert_before_train_end(engine) -> None:
 
 
 def assert_train_pre_step_end(engine, ctx) -> None:
-    """Verify simple token batches are sharded along sequence over context ranks."""
+    """Verify token batches are sharded along sequence over context ranks."""
     long_context = engine.config.parallel.backend_kwargs.long_context
     if not long_context.enabled:
         return
     if not isinstance(ctx.data, dict) or "input_ids" not in ctx.data:
-        return
-    if not hasattr(engine.config, "data") or not hasattr(engine.config.data, "seq_len"):
         return
 
     context_size = get_context_parallel_size(engine.device_mesh)
@@ -122,15 +104,6 @@ def assert_train_pre_step_end(engine, ctx) -> None:
     assert global_seq_len == local_seq_len * context_size, (
         "input_ids local sequence length must multiply back to the padded global sequence length."
     )
-    assert global_seq_len >= int(engine.config.data.seq_len), (
-        "Padded global sequence length must cover the configured sequence length."
-    )
-    if str(long_context.ring_impl_type) == "zigzag":
-        layout_multiple = 2 * int(long_context.ring_degree) * int(long_context.ulysses_degree)
-        assert global_seq_len % layout_multiple == 0, (
-            "Zigzag global sequence length must be padded to 2 * ring_degree * ulysses_degree."
-        )
-        assert "position_ids" in ctx.data, "Zigzag batches must carry extracted global position_ids."
 
 
 def _source_for(paths) -> str:

@@ -394,22 +394,31 @@ QWEN3_VL_TP_MODULE_POSTPROCESSORS = {
 }
 
 
-def _configure_text_attention_long_context(module: torch.nn.Module, config: Mapping[str, Any]) -> None:
-    """Patch one Qwen3-VL text attention module for yunchang long-context attention."""
+def _configure_text_attention_long_context(
+    module: torch.nn.Module,
+    config: Mapping[str, Any],
+    device_mesh: DeviceMesh,
+) -> None:
+    """Patch one Qwen3-VL text attention module for Ulysses long-context attention."""
     if getattr(module, "_long_context_attention_configured", False):
         return
 
-    ulysses_degree = int(config.get("ulysses_degree", 1))
+    context_size = get_context_parallel_size(device_mesh)
     text_config = getattr(module, "config", None)
     if text_config is not None:
+        tensor_size = get_mesh_dim_size(device_mesh, MESH_DIM_TENSOR)
         num_heads = int(text_config.num_attention_heads)
         num_key_value_heads = int(text_config.num_key_value_heads)
-        if num_heads % ulysses_degree != 0 or num_key_value_heads % ulysses_degree != 0:
+        if num_heads % tensor_size != 0 or num_key_value_heads % tensor_size != 0:
             raise ValueError(
-                "Qwen3-VL long-context ulysses_degree must divide both num_attention_heads and num_key_value_heads."
+                "Qwen3-VL parallel.mesh.tensor must divide both num_attention_heads and num_key_value_heads."
             )
+        local_num_heads = num_heads // tensor_size
+        local_num_key_value_heads = num_key_value_heads // tensor_size
+        if local_num_heads % context_size != 0 or local_num_key_value_heads % context_size != 0:
+            raise ValueError("Qwen3-VL parallel.mesh.context must divide TP-local attention and key-value heads.")
 
-    module.long_context_attention = build_long_context_attention(config)
+    module.long_context_attention = build_long_context_attention(config, device_mesh)
     module._long_context_original_forward = module.forward
     module.forward = MethodType(_forward_qwen3_vl_text_attention_long_context, module)
     module._long_context_attention_configured = True
@@ -431,7 +440,7 @@ def apply_long_context_attention_for_qwen3_vl(
     configured_count = 0
     for module in model.modules():
         if isinstance(module, Qwen3VLTextAttention):
-            _configure_text_attention_long_context(module, long_context_config)
+            _configure_text_attention_long_context(module, long_context_config, device_mesh)
             configured_count += 1
 
     if configured_count == 0:

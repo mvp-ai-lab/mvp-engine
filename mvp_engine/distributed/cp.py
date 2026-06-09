@@ -1,4 +1,4 @@
-"""Long-context attention helpers built around yunchang USP attention."""
+"""Long-context attention helpers built around local Ulysses attention."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ import torch.distributed as dist
 import torch.nn as nn
 from torch.distributed.device_mesh import DeviceMesh
 
+from mvp_engine.distributed.ulysses import UlyssesAttention
 from mvp_engine.distributed.utils import (
-    configure_long_context_process_groups,
     get_context_parallel_group,
     get_context_parallel_rank,
     get_context_parallel_size,
@@ -20,7 +20,6 @@ from mvp_engine.distributed.utils import (
 from mvp_engine.utils.log import logger
 
 _HOOK_ATTR = "APPLY_LONG_CONTEXT_ATTENTION"
-_BASIC_RING_IMPL_TYPES = {"basic", "basic_pytorch", "basic_flashinfer", "basic_npu"}
 
 
 def is_long_context_enabled(config: Mapping[str, Any] | None) -> bool:
@@ -33,9 +32,8 @@ def prepare_long_context_attention(
     device_mesh: DeviceMesh,
     config: Mapping[str, Any],
 ) -> None:
-    """Initialize yunchang process groups and apply an optional model hook."""
-    _validate_long_context_config(device_mesh, config)
-    _set_yunchang_process_groups(device_mesh, config)
+    """Validate context mesh and apply a model long-context hook."""
+    _validate_long_context_config(device_mesh)
 
     hook = getattr(model.__class__, _HOOK_ATTR, None)
     if hook is None:
@@ -45,26 +43,20 @@ def prepare_long_context_attention(
     hook(model, device_mesh, dict(config))
 
 
-def build_long_context_attention(config: Mapping[str, Any], *, use_pack_qkv: bool = False) -> nn.Module:
-    """Build a yunchang long-context attention module from backend config."""
-    yunchang = _import_yunchang()
-    from yunchang.kernels import AttnType
-
-    attn_type = AttnType.from_string(str(config.get("attn_impl", "fa")))
-    kwargs = {
-        "ring_impl_type": str(config.get("ring_impl_type", "basic")),
-        "use_sync": bool(config.get("use_sync", False)),
-        "attn_type": attn_type,
-    }
-    if use_pack_qkv:
-        return yunchang.LongContextAttentionQKVPacked(**kwargs)
-    return yunchang.LongContextAttention(**kwargs)
+def build_long_context_attention(config: Mapping[str, Any], device_mesh: DeviceMesh) -> nn.Module:
+    """Build a local Ulysses long-context attention module from backend config."""
+    sequence_process_group = get_context_parallel_group(device_mesh)
+    if sequence_process_group is None and dist.is_available() and dist.is_initialized():
+        raise RuntimeError("Ulysses attention requires an initialized context process group.")
+    return UlyssesAttention(
+        sequence_process_group=sequence_process_group,
+        attn_impl=str(config.get("attn_impl", "fa")),
+    )
 
 
 def extract_local_sequence(
     value: torch.Tensor,
     device_mesh: DeviceMesh,
-    config: Mapping[str, Any],
     *,
     dim: int = 1,
 ) -> torch.Tensor:
@@ -72,37 +64,16 @@ def extract_local_sequence(
     context_size = get_context_parallel_size(device_mesh)
     if context_size <= 1:
         return value
+    if int(value.shape[dim]) % context_size != 0:
+        raise ValueError("Global sequence length must be divisible by context size.")
 
     context_rank = get_context_parallel_rank(device_mesh)
-    ring_impl_type = str(config.get("ring_impl_type", "basic"))
-    if ring_impl_type == "basic" and dim != 1:
-        raise ValueError("basic long-context extraction only supports dim=1.")
-    if ring_impl_type == "basic":
-        return value.chunk(context_size, dim=dim)[context_rank].contiguous()
-
-    yunchang = _import_yunchang()
-    extract_fn = yunchang.EXTRACT_FUNC_DICT[ring_impl_type]
-    return extract_fn(
-        value,
-        context_rank,
-        world_size=context_size,
-        rd=int(config.get("ring_degree", 1)),
-        ud=int(config.get("ulysses_degree", 1)),
-        dim=dim,
-    )
-
-
-def get_basic_sequence_offset(local_sequence_length: int, device_mesh: DeviceMesh, config: Mapping[str, Any]) -> int:
-    """Return the global sequence offset for contiguous basic ring extraction."""
-    if str(config.get("ring_impl_type", "basic")) not in _BASIC_RING_IMPL_TYPES:
-        raise ValueError("Only basic ring extraction has a contiguous per-rank sequence offset.")
-    return get_context_parallel_rank(device_mesh) * int(local_sequence_length)
+    return value.chunk(context_size, dim=dim)[context_rank].contiguous()
 
 
 def get_local_sequence_position_indices(
     global_sequence_length: int,
     device_mesh: DeviceMesh,
-    config: Mapping[str, Any],
     *,
     device: torch.device | None = None,
 ) -> torch.Tensor:
@@ -115,33 +86,7 @@ def get_local_sequence_position_indices(
         raise ValueError("Global sequence length must be divisible by context size.")
 
     context_rank = get_context_parallel_rank(device_mesh)
-    ring_impl_type = str(config.get("ring_impl_type", "basic"))
-    if ring_impl_type in _BASIC_RING_IMPL_TYPES:
-        return positions.chunk(context_size, dim=0)[context_rank]
-
-    ulysses_degree = int(config.get("ulysses_degree", 1))
-    ring_degree = int(config.get("ring_degree", 1))
-    if ring_impl_type == "strip":
-        if global_sequence_length % ring_degree != 0:
-            raise ValueError("Strip long-context extraction requires sequence length divisible by ring_degree.")
-        ordered_positions = positions.reshape(global_sequence_length // ring_degree, ring_degree)
-        ordered_positions = ordered_positions.transpose(0, 1).reshape(global_sequence_length)
-        return ordered_positions.chunk(context_size, dim=0)[context_rank]
-
-    if ring_impl_type == "zigzag":
-        if global_sequence_length % (2 * ring_degree) != 0:
-            raise ValueError("Zigzag long-context extraction requires sequence length divisible by 2 * ring_degree.")
-        ring_rank, ulysses_rank = _get_context_subranks(
-            context_rank,
-            ulysses_degree=ulysses_degree,
-            ring_degree=ring_degree,
-            use_ulysses_low=bool(config.get("use_ulysses_low", True)),
-        )
-        chunks = positions.chunk(2 * ring_degree, dim=0)
-        local_positions = torch.cat([chunks[ring_rank], chunks[2 * ring_degree - ring_rank - 1]], dim=0)
-        return local_positions.chunk(ulysses_degree, dim=0)[ulysses_rank]
-
-    raise ValueError(f"Unsupported long-context ring_impl_type for position indices: {ring_impl_type}.")
+    return positions.chunk(context_size, dim=0)[context_rank]
 
 
 def install_context_grad_sync(model: nn.Module, device_mesh: DeviceMesh) -> None:
@@ -166,37 +111,10 @@ def install_context_grad_sync(model: nn.Module, device_mesh: DeviceMesh) -> None
     logger.info(f"Installed long-context grad sync hooks on {len(handles)} parameters.")
 
 
-def _validate_long_context_config(device_mesh: DeviceMesh, config: Mapping[str, Any]) -> None:
+def _validate_long_context_config(device_mesh: DeviceMesh) -> None:
     context_size = get_context_parallel_size(device_mesh)
-    ulysses_degree = int(config.get("ulysses_degree", 1))
-    ring_degree = int(config.get("ring_degree", 1))
     if context_size <= 1:
         raise ValueError("Long-context attention requires parallel.mesh.context > 1.")
-    if ulysses_degree * ring_degree != context_size:
-        raise ValueError(
-            "Long-context attention requires "
-            "parallel.backend_kwargs.long_context.ulysses_degree * ring_degree == parallel.mesh.context."
-        )
-
-
-def _set_yunchang_process_groups(device_mesh: DeviceMesh, config: Mapping[str, Any]) -> None:
-    _import_yunchang()
-    if not dist.is_available() or not dist.is_initialized():
-        return
-
-    configure_long_context_process_groups(device_mesh, dict(config))
-
-
-def _get_context_subranks(
-    context_rank: int,
-    *,
-    ulysses_degree: int,
-    ring_degree: int,
-    use_ulysses_low: bool,
-) -> tuple[int, int]:
-    if use_ulysses_low:
-        return context_rank // ulysses_degree, context_rank % ulysses_degree
-    return context_rank % ring_degree, context_rank // ring_degree
 
 
 def _make_context_grad_sync_hook(group: dist.ProcessGroup):
@@ -233,11 +151,3 @@ def _local_tensor(tensor: torch.Tensor) -> torch.Tensor:
             local_tensor = wait()
         return local_tensor
     return tensor
-
-
-def _import_yunchang():
-    try:
-        import yunchang
-    except ImportError as exc:  # pragma: no cover - optional dependency
-        raise ImportError("Long-context attention requires `pip install 'mvp_engine[long-context]'`.") from exc
-    return yunchang

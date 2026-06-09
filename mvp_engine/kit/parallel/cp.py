@@ -17,8 +17,6 @@ from mvp_engine.distributed.utils import (
     get_context_parallel_size,
 )
 
-_BASIC_RING_IMPL_TYPES = {"basic", "basic_pytorch", "basic_flashinfer", "basic_npu"}
-
 
 @dataclass(frozen=True, slots=True)
 class CPBatchLayout:
@@ -28,7 +26,6 @@ class CPBatchLayout:
     unpadded_global_seq_len: int
     local_seq_len: int
     context_size: int
-    ring_impl_type: str
     local_position_indices: torch.Tensor
     local_loss_tokens: int
 
@@ -61,7 +58,6 @@ class CPKit:
         batch: Mapping[str, Any],
         *,
         device_mesh: DeviceMesh,
-        config: Mapping[str, Any],
         pad_token_id: int,
         ignore_index: int = -100,
         input_ids_key: str = "input_ids",
@@ -77,7 +73,6 @@ class CPKit:
         return prepare_cp_causal_batch(
             batch,
             device_mesh=device_mesh,
-            config=config,
             pad_token_id=pad_token_id,
             ignore_index=ignore_index,
             input_ids_key=input_ids_key,
@@ -111,7 +106,6 @@ def prepare_cp_causal_batch(
     batch: Mapping[str, Any],
     *,
     device_mesh: DeviceMesh,
-    config: Mapping[str, Any],
     pad_token_id: int,
     ignore_index: int = -100,
     input_ids_key: str = "input_ids",
@@ -164,7 +158,6 @@ def prepare_cp_causal_batch(
             unpadded_global_seq_len=int(input_ids.shape[1]),
             local_seq_len=int(input_ids.shape[1]),
             context_size=1,
-            ring_impl_type=str(config.get("ring_impl_type", "basic")),
             local_position_indices=positions,
             local_loss_tokens=int(shifted_labels.ne(ignore_index).sum().item()),
         )
@@ -173,7 +166,7 @@ def prepare_cp_causal_batch(
     global_batch = _pad_global_batch(
         batch,
         global_seq_len=int(input_ids.shape[1]),
-        target_multiple=_get_layout_multiple(config, context_size),
+        target_multiple=context_size,
         pad_values={
             input_ids_key: int(pad_token_id),
             label_key: int(ignore_index),
@@ -192,7 +185,6 @@ def prepare_cp_causal_batch(
     local_position_indices = get_local_sequence_position_indices(
         global_seq_len,
         device_mesh,
-        config,
         device=padded_input_ids.device,
     )
 
@@ -228,7 +220,6 @@ def prepare_cp_causal_batch(
         unpadded_global_seq_len=int(input_ids.shape[1]),
         local_seq_len=int(local_batch[input_ids_key].shape[1]),
         context_size=context_size,
-        ring_impl_type=str(config.get("ring_impl_type", "basic")),
         local_position_indices=local_position_indices,
         local_loss_tokens=int(local_batch[label_key].ne(ignore_index).sum().item()),
     )
@@ -276,15 +267,6 @@ def compute_cp_cross_entropy_loss(
         local_valid_tokens=local_valid_tokens,
         global_valid_tokens=global_valid_tokens,
     )
-
-
-def _get_layout_multiple(config: Mapping[str, Any], context_size: int) -> int:
-    ring_impl_type = str(config.get("ring_impl_type", "basic"))
-    if ring_impl_type == "zigzag":
-        return 2 * int(config.get("ring_degree", 1)) * int(config.get("ulysses_degree", 1))
-    if ring_impl_type in _BASIC_RING_IMPL_TYPES or ring_impl_type == "strip":
-        return int(context_size)
-    raise ValueError(f"Unsupported context-parallel ring_impl_type for batch layout: {ring_impl_type}.")
 
 
 def _pad_global_batch(

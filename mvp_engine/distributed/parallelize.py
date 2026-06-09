@@ -67,7 +67,7 @@ def parallelize_model(
                 - sequence_parallel: Enables sequence parallel layouts on the tensor mesh before FSDP2 (default: False)
 
             For Long-Context Attention (if context mesh is active):
-                - long_context: Initializes yunchang USP/Ring attention before TP/FSDP2 and installs context grad sync.
+                - long_context: Installs local Ulysses attention before TP/FSDP2 and context grad sync.
 
     Returns:
         The parallelized model wrapped with the specified backend.
