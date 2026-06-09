@@ -1,34 +1,35 @@
 ---
 name: liger-kernel-kit
-description: Use LigerKernelKit for reusable Liger Kernel integration,
-  including official pre-build model-family patching, post-build module
-  replacement, module selection validation, optional recipe-specific replacers,
-  and loss-kernel guards.
+description: Use LigerKernelKit for reusable Liger Kernel integration before model
+  construction, covering official model-family dispatch, custom-model symbol
+  patching via LigerPatch, module selection validation, and loss-kernel guards.
 ---
 
 # Liger Kernel Kit
 
 ## Goal
 
-Use `LigerKernelKit` as the default API for Liger Kernel integration:
+Use `LigerKernelKit` as the single API for Liger Kernel integration. Every Liger
+helper (`apply_liger_kernel_to_<family>`) is the same skeleton: flag-gated
+`setattr(modeling_module, symbol, liger_impl)` assignments run **before** the
+model is built. The kit keeps that one skeleton and exposes two routes through a
+single `apply_pre_build(...)`:
 
-- `apply_pre_build(...)` calls official `liger_kernel.transformers` family
-  patch functions before model construction, inferring the family from Hugging
-  Face `AutoConfig.model_type` by default;
-- `apply_post_build(...)` replaces supported modules on an already-built model;
-- `resolve_modules(...)` validates semantic module selections;
-- built-in post-build replacement covers generic norm modules;
-- optional recipe-specific replacers handle model-family details.
+- **official**: dispatch to liger's own `apply_liger_kernel_to_<family>`, with the
+  family inferred from Hugging Face `AutoConfig.model_type` by default;
+- **custom** (model has no official helper): apply an explicit `{module:
+  LigerPatch}` map describing the same symbol swaps for the model's own modeling
+  module.
+
+There is no post-build / instance path: all patching is pre-build, so no
+module-tree walking is needed. Loss kernels stay off unless explicitly allowed.
 
 ## Required Inputs
 
-- model name/path for pre-build or a loaded model for post-build;
-- optional model family override, such as `qwen3`, `qwen3_vl`, or `llama`;
-- stage: `pre_build` or `post_build`;
+- model name/path (official route) or a model-family label for reporting;
 - module selection: `"auto"` or `dict[str, bool]`;
-- whether loss kernels are compatible with the recipe's loss accounting;
-- optional recipe-specific replacers for modules the kit cannot handle
-  generically.
+- for custom models: a `custom_patches` map (`{semantic_module: LigerPatch}`);
+- whether loss kernels are compatible with the recipe's loss accounting.
 
 ## Workflow
 
@@ -41,102 +42,87 @@ self.liger_kit = LigerKernelKit()
 ```
 
 `liger-kernel` is an optional dependency. Importing the kit must not require it;
-the package is imported lazily only when an apply method runs.
+the package is imported lazily only when `apply_pre_build` runs the official route.
 
-### 2. Apply Pre-Build Family Patches
+### 2. Official Route (model is in liger's registry)
 
-Use pre-build when Liger provides an official model-family patch:
+Call before model construction:
 
 ```python
-if config.model.liger_kernel.enabled and config.model.liger_kernel.stage == "pre_build":
-    self.liger_kit.apply_pre_build(
-        model_name_or_path=config.model.pretrained_model_name_or_path,
-        modules=config.model.liger_kernel.modules,
-        model_family=config.model.liger_kernel.get("model_family_override"),
-    )
+report = self.liger_kit.apply_pre_build(
+    model_name_or_path=config.model.pretrained_model_name_or_path,
+    modules=config.model.liger_kernel.modules,            # "auto" or {flag: bool}
+    model_family=config.model.liger_kernel.get("model_family_override"),
+)
 model = build_model(...)
 ```
 
-The kit forwards explicit `False` values for accepted kwargs, so Liger defaults
-cannot silently enable kernels the recipe left disabled.
-Use `model_family` only as an override for custom or misreported configs.
+- `modules="auto"` forwards **nothing** for rope/norm/mlp (liger picks the correct
+  per-model defaults, e.g. SwiGLU vs GeGLU, standard vs multimodal RoPE) and only
+  forces loss kernels **off**. This avoids re-encoding per-model knowledge the
+  library already owns.
+- An explicit `dict` is forwarded as-is; enabling a module the helper does not
+  accept fails fast.
+- Use `model_family` only to override a custom or misreported `model_type`.
 
-### 3. Apply Post-Build Replacements
+### 3. Custom Route (no official helper)
 
-Use post-build after model construction and before freeze, compile, and
-distributed wrapping:
-
-```python
-model = self.liger_kit.apply_post_build(
-    model,
-    modules=config.model.liger_kernel.modules,
-    model_family=config.model.liger_kernel.get("model_family_override"),
-)
-```
-
-Built-in post-build support is intentionally narrow:
-
-```text
-rms_norm
-layer_norm
-```
-
-For other modules, pass explicit recipe-specific replacers:
+Provide the symbol swaps as data; the kit imports each target module, checks the
+symbol exists (catching upstream renames), and `setattr`s the replacement:
 
 ```python
-model = self.liger_kit.apply_post_build(
-    model,
-    modules={"swiglu": True},
-    model_family="custom_family",
-    module_replacers={"swiglu": replace_custom_swiglu},
+from liger_kernel.transformers import LigerRMSNorm, LigerSwiGLUMLP
+from liger_kernel.transformers.rope import liger_rotary_pos_emb
+from mvp_engine.kit import LigerPatch
+
+M = "my_pkg.modeling_mymodel"
+report = self.liger_kit.apply_pre_build(
+    model_family="mymodel",
+    custom_patches={
+        "rms_norm": LigerPatch(module=M, attr="MyRMSNorm", replacement=LigerRMSNorm),
+        "swiglu":   LigerPatch(module=M, attr="MyMLP", replacement=LigerSwiGLUMLP),
+        "rope":     LigerPatch(module=M, attr="apply_rotary_pos_emb", replacement=liger_rotary_pos_emb),
+    },
 )
+model = build_model(...)
 ```
 
-A replacer receives `(model, liger_transformers)` and returns
-`LigerReplacement` records or equivalent dictionaries with `path`, `source`, and
-`target`.
+The kit does **not** infer which symbols to swap or which replacement is correct —
+that per-model knowledge is authored via `skills/model/liger-kernel/SKILL.md`. The
+kit only provides the validated mechanism. For composite custom models, prefer
+reusing the official route per component (see that skill).
 
-### 4. Resolve Modules Conservatively
-
-Use semantic module names:
+### 4. Semantic Module Names
 
 ```text
-rms_norm
-layer_norm
-rope
-swiglu
-geglu
-cross_entropy
-fused_linear_cross_entropy
+rope  rms_norm  layer_norm  swiglu  geglu  cross_entropy  fused_linear_cross_entropy
 ```
 
-`modules="auto"` enables only the kit's conservative defaults for the selected
-stage and model family. Explicit unsupported modules fail in strict mode.
+Unknown names are rejected. In the custom route, `modules="auto"` applies every
+provided patch; an explicit `dict` applies only enabled flags and fails if an
+enabled flag has no patch.
 
-### 5. Handle Loss Kernels Explicitly
+### 5. Loss Kernels
 
 `cross_entropy` and `fused_linear_cross_entropy` are disabled by default because
-many recipes own loss reduction or token normalization. Set
-`loss_kernels_allowed=True` only after the recipe preserves the expected loss
-contract.
+many recipes own loss reduction or token normalization (liger defaults FLCE to
+**on**, which the kit overrides off). Set `loss_kernels_allowed=True` only after
+the recipe preserves the expected loss contract. The custom route applies
+module-level symbol swaps only; `fused_linear_cross_entropy` rewrites a model's
+`ForCausalLM.forward` and is **out of scope** for custom models here.
 
 ## Validation
 
 ### Soft Validation
 
-- pre-build infers from `AutoConfig.model_type` unless an override is provided;
-- post-build infers from `model.config.model_type` unless an override is provided;
-- no recipe duplicates kit helper logic;
+- official route infers from `AutoConfig.model_type` unless overridden;
 - `liger-kernel` remains optional and lazily imported;
-- unsupported model-family/module combinations fail clearly;
-- post-build replacement preserves parameter names, dtype, device, and
-  `requires_grad`;
-- custom replacers are recipe-local and explicit;
+- enabling a module unsupported by the official helper fails clearly;
+- custom patches fail clearly when a target symbol is missing;
+- custom per-model knowledge lives in the recipe, not the kit;
 - loss kernels are guarded by recipe compatibility.
 
 ### Hard Validation
-
-Run focused kit tests:
 
 ```bash
 pytest tests/test_liger_kernel_kit.py -q
@@ -147,11 +133,12 @@ environment with `liger-kernel` and the required accelerator resources.
 
 ## Output
 
-- State selected stage and resolved modules.
-- State official helper or post-build replacers used.
+- State route (official/custom), resolved modules, and helper or patched symbols
+  (from the returned `LigerKernelReport`).
 - State whether loss kernels are allowed.
 - Report validation commands and runtime gaps.
 
 ## Read On Demand
 
-- `skills/model/liger-kernel/SKILL.md`: recipe placement workflow.
+- `skills/model/liger-kernel/SKILL.md`: recipe placement and how to author a
+  custom-model (or composite-model) `custom_patches` map.

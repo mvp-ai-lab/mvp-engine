@@ -1,267 +1,150 @@
-"""Reusable Liger Kernel integration helpers."""
+"""Reusable Liger Kernel integration, applied before model construction.
+
+Liger ships one ``apply_liger_kernel_to_<family>`` per model, but every helper is
+the same skeleton: a few flag-gated ``setattr(modeling_module, symbol, liger_impl)``
+assignments. This kit keeps that single skeleton as one pre-build entry point:
+
+* official families dispatch to liger's own helper;
+* custom models (no official helper) pass an explicit ``{module: LigerPatch}`` map
+  describing the same symbol swaps for their own modeling module.
+
+Everything happens before the model is instantiated, so there is no module-tree
+walking or instance fix-up. Loss kernels stay disabled unless explicitly allowed,
+because recipes often own loss reduction and token normalization.
+"""
 
 from __future__ import annotations
 
+import importlib
 import inspect
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, Literal
-
-import torch
-
-LigerStage = Literal["pre_build", "post_build"]
-LigerModules = Literal["auto"] | dict[str, bool]
-LigerModuleReplacer = Callable[[torch.nn.Module, Any], Iterable["LigerReplacement | dict[str, str]"]]
+from typing import Any
 
 SUPPORTED_MODULES = frozenset(
-    {
-        "rms_norm",
-        "layer_norm",
-        "rope",
-        "swiglu",
-        "geglu",
-        "cross_entropy",
-        "fused_linear_cross_entropy",
-    }
+    {"rope", "rms_norm", "layer_norm", "swiglu", "geglu", "cross_entropy", "fused_linear_cross_entropy"}
 )
 LOSS_MODULES = frozenset({"cross_entropy", "fused_linear_cross_entropy"})
-MODEL_TYPE_ALIASES = {
-    "qwq": "qwen2",
-    "qwen2_5": "qwen2",
-    "qvq": "qwen2_vl",
-}
-MODEL_FAMILY_UNSUPPORTED_MODULES = {
-    # The supported Liger release accepts the kwarg but does not replace dense
-    # Qwen3-VL MLP modules, so enabled SwiGLU would be a false-positive report.
-    "qwen3_vl": frozenset({"swiglu"}),
-}
-PRE_BUILD_AUTO_MODULES = {
-    "rms_norm": True,
-    "rope": True,
-    "swiglu": True,
-    "layer_norm": False,
-    "geglu": False,
-    "cross_entropy": False,
-    "fused_linear_cross_entropy": False,
-}
-POST_BUILD_AUTO_MODULES = {
-    "rms_norm": True,
-    "layer_norm": False,
-    "rope": False,
-    "swiglu": False,
-    "geglu": False,
-    "cross_entropy": False,
-    "fused_linear_cross_entropy": False,
-}
+
+# model_type values that reuse another family's liger helper
+MODEL_TYPE_ALIASES = {"qwq": "qwen2", "qwen2_5": "qwen2", "qvq": "qwen2_vl"}
 
 
 @dataclass(frozen=True)
-class LigerReplacement:
-    """One post-build module replacement applied by LigerKernelKit."""
+class LigerPatch:
+    """One symbol swap for a custom model: ``setattr(import_module(module), attr, replacement)``."""
 
-    path: str
-    source: str
-    target: str
+    module: str
+    attr: str
+    replacement: Any
 
 
 @dataclass(frozen=True)
 class LigerKernelReport:
     """Summary of one Liger Kernel application."""
 
-    stage: LigerStage
-    modules: dict[str, bool]
-    model_family: str | None = None
+    model_family: str | None
+    route: str  # "official" or "custom"
     helper: str | None = None
-    replacements: tuple[LigerReplacement, ...] = ()
+    applied: dict[str, bool] | None = None
+    patched: tuple[str, ...] = ()
 
 
 class LigerKernelKit:
-    """Apply Liger Kernel pre-build family patches or post-build replacements."""
-
-    def resolve_modules(
-        self,
-        *,
-        stage: LigerStage,
-        modules: LigerModules = "auto",
-        model_family: str | None = None,
-        loss_kernels_allowed: bool = False,
-    ) -> dict[str, bool]:
-        """Resolve semantic Liger module selections for one stage."""
-        family = _normalize_model_family(model_family)
-        if modules == "auto":
-            resolved = dict(PRE_BUILD_AUTO_MODULES if stage == "pre_build" else POST_BUILD_AUTO_MODULES)
-            for module_name in MODEL_FAMILY_UNSUPPORTED_MODULES.get(family or "", frozenset()):
-                resolved[module_name] = False
-        else:
-            unknown = sorted(set(modules) - SUPPORTED_MODULES)
-            if unknown:
-                raise ValueError(f"Unsupported Liger module(s): {unknown}.")
-            resolved = {name: False for name in SUPPORTED_MODULES}
-            resolved.update(modules)
-
-        self._reject_unsupported_family_modules(resolved, model_family=family)
-        if not loss_kernels_allowed:
-            self._reject_loss_kernels(resolved)
-        return resolved
+    """Apply Liger Kernel before model construction via module-level monkey-patching."""
 
     def apply_pre_build(
         self,
-        *,
         model_name_or_path: str | None = None,
-        trust_remote_code: bool = True,
-        modules: LigerModules = "auto",
-        model_family: str | None = None,
-        helper_name: str | None = None,
-        config_kwargs: dict[str, Any] | None = None,
-        loss_kernels_allowed: bool = False,
-        strict: bool = True,
-    ) -> LigerKernelReport:
-        """Apply an official Liger model-family patch before model construction."""
-        family = _normalize_model_family(model_family)
-        if family is None:
-            if model_name_or_path is None:
-                raise ValueError("model_name_or_path must be provided when model_family is not set.")
-            family = self.infer_model_family(
-                model_name_or_path,
-                trust_remote_code=trust_remote_code,
-                **(config_kwargs or {}),
-            )
-
-        resolved_modules = self.resolve_modules(
-            stage="pre_build",
-            modules=modules,
-            model_family=family,
-            loss_kernels_allowed=loss_kernels_allowed,
-        )
-
-        liger_transformers = _import_liger_transformers()
-        if helper_name is None:
-            helper, patch_fn = _find_liger_pre_build_helper(liger_transformers, family)
-        else:
-            helper = helper_name
-            patch_fn = getattr(liger_transformers, helper, None)
-            if patch_fn is None:
-                raise RuntimeError(f"Liger Kernel does not expose `{helper}` in this environment.")
-
-        patch_fn(**self._filter_patch_kwargs(patch_fn, resolved_modules, strict=strict))
-        return LigerKernelReport(
-            stage="pre_build",
-            model_family=family,
-            modules=resolved_modules,
-            helper=helper,
-        )
-
-    def apply_post_build(
-        self,
-        model: torch.nn.Module,
         *,
         model_family: str | None = None,
-        modules: LigerModules = "auto",
-        module_replacers: dict[str, LigerModuleReplacer] | None = None,
+        modules: str | dict[str, bool] = "auto",
+        custom_patches: dict[str, LigerPatch] | None = None,
         loss_kernels_allowed: bool = False,
-        strict: bool = True,
-    ) -> torch.nn.Module:
-        """Apply Liger replacements to an already-built model instance."""
-        family = _normalize_model_family(model_family) or self.infer_model_family_from_model(model)
-        resolved_modules = self.resolve_modules(
-            stage="post_build",
-            modules=modules,
-            model_family=family,
-            loss_kernels_allowed=loss_kernels_allowed,
-        )
-        liger_transformers = _import_liger_transformers()
-        replacers = self._build_post_build_replacers(liger_transformers)
-        if module_replacers:
-            replacers.update(module_replacers)
+        trust_remote_code: bool = True,
+    ) -> LigerKernelReport:
+        """Patch Liger kernels before the model is built.
 
-        unsupported = sorted(name for name, enabled in resolved_modules.items() if enabled and name not in replacers)
-        if unsupported and strict:
-            raise ValueError(f"Liger post-build replacement does not support enabled module(s): {unsupported}.")
-
-        replacements: list[LigerReplacement] = []
-        for module_name, enabled in resolved_modules.items():
-            if not enabled or module_name not in replacers:
-                continue
-            replacements.extend(_normalize_replacements(replacers[module_name](model, liger_transformers)))
-
-        if not replacements and strict:
-            raise RuntimeError("Liger post-build patch did not replace any modules.")
-
-        model._mvp_engine_liger_kernel = LigerKernelReport(  # noqa: SLF001
-            stage="post_build",
-            model_family=family,
-            modules=resolved_modules,
-            replacements=tuple(replacements),
-        )
-        return model
+        Without ``custom_patches``, dispatch to liger's official
+        ``apply_liger_kernel_to_<family>`` (family inferred from the HF config when
+        not given). Otherwise apply the given symbol swaps to the custom model's own
+        modeling module. Loss kernels require ``loss_kernels_allowed=True``.
+        """
+        family = _normalize_family(model_family)
+        if custom_patches is None:
+            if family is None:
+                if model_name_or_path is None:
+                    raise ValueError("Provide model_name_or_path or model_family for the official route.")
+                family = self.infer_model_family(model_name_or_path, trust_remote_code=trust_remote_code)
+            return self._apply_official(family, modules, loss_kernels_allowed)
+        return self._apply_custom(family, modules, custom_patches, loss_kernels_allowed)
 
     def infer_model_family(
-        self,
-        model_name_or_path: str,
-        *,
-        trust_remote_code: bool = True,
-        **config_kwargs: Any,
+        self, model_name_or_path: str, *, trust_remote_code: bool = True, **config_kwargs: Any
     ) -> str:
-        """Infer the normalized model family from a Hugging Face config model_type."""
+        """Infer the normalized model family from a Hugging Face config ``model_type``."""
         from transformers import AutoConfig
 
-        hf_config = AutoConfig.from_pretrained(
-            model_name_or_path,
-            trust_remote_code=trust_remote_code,
-            **config_kwargs,
-        )
-        family = _normalize_model_family(getattr(hf_config, "model_type", None))
+        config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code, **config_kwargs)
+        family = _normalize_family(getattr(config, "model_type", None))
         if family is None:
             raise ValueError(f"Could not infer model family from config at {model_name_or_path!r}.")
         return family
 
-    def infer_model_family_from_model(self, model: torch.nn.Module) -> str | None:
-        """Infer the normalized model family from model.config.model_type."""
-        return _normalize_model_family(getattr(getattr(model, "config", None), "model_type", None))
+    def _apply_official(self, family: str, modules: str | dict[str, bool], loss_allowed: bool) -> LigerKernelReport:
+        helper, patch_fn = _find_pre_build_helper(_import_liger_transformers(), family)
+        accepted = set(inspect.signature(patch_fn).parameters)
 
-    def _reject_unsupported_family_modules(
+        if modules == "auto":
+            kwargs: dict[str, bool] = {}  # let liger pick per-model defaults (swiglu vs geglu, mRoPE, ...)
+        else:
+            _check_module_names(modules)
+            unsupported = sorted(m for m, on in modules.items() if on and m not in accepted)
+            if unsupported:
+                raise ValueError(f"{helper} does not support enabled module(s): {unsupported}.")
+            kwargs = dict(modules)
+
+        if not loss_allowed:
+            kwargs.update({m: False for m in LOSS_MODULES})  # override liger's fused-CE-on-by-default
+
+        kwargs = {m: on for m, on in kwargs.items() if m in accepted}
+        patch_fn(**kwargs)
+        return LigerKernelReport(model_family=family, route="official", helper=helper, applied=kwargs)
+
+    def _apply_custom(
         self,
-        modules: dict[str, bool],
-        *,
-        model_family: str | None,
-    ) -> None:
-        unsupported_modules = MODEL_FAMILY_UNSUPPORTED_MODULES.get(model_family or "", frozenset())
-        enabled_unsupported = sorted(name for name in unsupported_modules if modules.get(name, False))
-        if enabled_unsupported:
-            raise ValueError(
-                f"Liger Kernel integration for model family {model_family!r} does not support enabled module(s): "
-                f"{enabled_unsupported}."
-            )
+        family: str | None,
+        modules: str | dict[str, bool],
+        patches: dict[str, LigerPatch],
+        loss_allowed: bool,
+    ) -> LigerKernelReport:
+        _check_module_names(patches)
+        if modules == "auto":
+            enabled = set(patches)
+        else:
+            _check_module_names(modules)
+            enabled = {m for m, on in modules.items() if on}
+            missing = sorted(enabled - set(patches))
+            if missing:
+                raise ValueError(f"No custom_patches provided for enabled module(s): {missing}.")
 
-    def _reject_loss_kernels(self, modules: dict[str, bool]) -> None:
-        enabled_loss_modules = sorted(name for name in LOSS_MODULES if modules.get(name, False))
-        if enabled_loss_modules:
-            raise ValueError(
-                "Liger loss kernels are disabled by default because recipes may need custom loss accounting. "
-                f"Enable an explicit compatibility path before using: {enabled_loss_modules}."
-            )
+        blocked = enabled & LOSS_MODULES
+        if blocked and not loss_allowed:
+            raise ValueError(f"Loss kernels need loss_kernels_allowed=True: {sorted(blocked)}.")
 
-    def _filter_patch_kwargs(
-        self,
-        patch_fn: Callable[..., Any],
-        modules: dict[str, bool],
-        *,
-        strict: bool,
-    ) -> dict[str, bool]:
-        signature = inspect.signature(patch_fn)
-        if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
-            return dict(modules)
-
-        accepted_names = set(signature.parameters)
-        unsupported = sorted(name for name, enabled in modules.items() if enabled and name not in accepted_names)
-        if unsupported and strict:
-            raise ValueError(f"Liger pre-build patch does not support enabled module(s): {unsupported}.")
-        return {name: enabled for name, enabled in modules.items() if name in accepted_names}
-
-    def _build_post_build_replacers(self, liger_transformers: Any) -> dict[str, LigerModuleReplacer]:
-        return {
-            "rms_norm": lambda model, _: _replace_rms_norm_modules(model, liger_transformers.LigerRMSNorm),
-            "layer_norm": lambda model, _: _replace_layer_norm_modules(model, liger_transformers.LigerLayerNorm),
-        }
+        patched: list[str] = []
+        for name in sorted(enabled):
+            patch = patches[name]
+            module = importlib.import_module(patch.module)
+            if not hasattr(module, patch.attr):
+                raise AttributeError(f"{patch.module!r} has no symbol {patch.attr!r} to patch (renamed upstream?).")
+            setattr(module, patch.attr, patch.replacement)
+            patched.append(f"{patch.module}.{patch.attr}")
+        return LigerKernelReport(
+            model_family=family,
+            route="custom",
+            applied={name: True for name in sorted(enabled)},
+            patched=tuple(patched),
+        )
 
 
 def _import_liger_transformers() -> Any:
@@ -272,155 +155,26 @@ def _import_liger_transformers() -> Any:
     return liger_transformers
 
 
-def _find_liger_pre_build_helper(liger_transformers: Any, model_family: str) -> tuple[str, Callable[..., Any]]:
-    candidate_helpers = _candidate_liger_helper_names(model_family)
-    for helper_name in candidate_helpers:
-        patch_fn = getattr(liger_transformers, helper_name, None)
+def _find_pre_build_helper(liger_transformers: Any, family: str) -> tuple[str, Any]:
+    names = [family, MODEL_TYPE_ALIASES.get(family)]
+    candidates = dict.fromkeys(f"apply_liger_kernel_to_{name}" for name in names if name)
+    for helper in candidates:
+        patch_fn = getattr(liger_transformers, helper, None)
         if patch_fn is not None:
-            return helper_name, patch_fn
-    tried = ", ".join(f"`{helper}`" for helper in candidate_helpers)
-    raise RuntimeError(f"Liger Kernel does not expose a pre-build helper for model family {model_family!r}: {tried}.")
+            return helper, patch_fn
+    raise RuntimeError(
+        f"Liger Kernel exposes no pre-build helper for model family {family!r} (tried: {', '.join(candidates)})."
+    )
 
 
-def _candidate_liger_helper_names(model_family: str) -> tuple[str, ...]:
-    candidates = [model_family]
-    alias = MODEL_TYPE_ALIASES.get(model_family)
-    if alias is not None:
-        candidates.append(alias)
-    return tuple(dict.fromkeys(f"apply_liger_kernel_to_{candidate}" for candidate in candidates))
-
-
-def _replace_rms_norm_modules(
-    model: torch.nn.Module, liger_rms_norm_cls: type[torch.nn.Module]
-) -> list[LigerReplacement]:
-    replacements: list[LigerReplacement] = []
-    for module_path, parent, child_name, child in _iter_replaceable_children(model):
-        if _is_liger_module(child) or "rmsnorm" not in child.__class__.__name__.lower():
-            continue
-        if not hasattr(child, "weight"):
-            continue
-
-        replacement = _build_liger_norm(
-            liger_rms_norm_cls,
-            source=child,
-            eps=_get_norm_eps(child),
-            with_bias=False,
-        )
-        parent.add_module(child_name, replacement)
-        replacements.append(
-            LigerReplacement(
-                path=module_path,
-                source=child.__class__.__name__,
-                target=replacement.__class__.__name__,
-            )
-        )
-    return replacements
-
-
-def _replace_layer_norm_modules(
-    model: torch.nn.Module,
-    liger_layer_norm_cls: type[torch.nn.Module],
-) -> list[LigerReplacement]:
-    replacements: list[LigerReplacement] = []
-    for module_path, parent, child_name, child in _iter_replaceable_children(model):
-        if _is_liger_module(child) or not isinstance(child, torch.nn.LayerNorm):
-            continue
-
-        replacement = _build_liger_norm(
-            liger_layer_norm_cls,
-            source=child,
-            eps=float(child.eps),
-            with_bias=child.bias is not None,
-        )
-        parent.add_module(child_name, replacement)
-        replacements.append(
-            LigerReplacement(
-                path=module_path,
-                source=child.__class__.__name__,
-                target=replacement.__class__.__name__,
-            )
-        )
-    return replacements
-
-
-def _iter_replaceable_children(model: torch.nn.Module):
-    for parent_path, parent in model.named_modules():
-        for child_name, child in parent.named_children():
-            module_path = child_name if not parent_path else f"{parent_path}.{child_name}"
-            yield module_path, parent, child_name, child
-
-
-def _build_liger_norm(
-    liger_norm_cls: type[torch.nn.Module],
-    *,
-    source: torch.nn.Module,
-    eps: float,
-    with_bias: bool,
-) -> torch.nn.Module:
-    weight = getattr(source, "weight")
-    replacement = _instantiate_liger_norm(liger_norm_cls, int(weight.shape[0]), eps=eps, with_bias=with_bias)
-    replacement = replacement.to(device=weight.device, dtype=weight.dtype)
-
-    with torch.no_grad():
-        replacement.weight.copy_(weight)
-        if with_bias and hasattr(replacement, "bias") and getattr(source, "bias", None) is not None:
-            replacement.bias.copy_(source.bias)
-    replacement.weight.requires_grad = weight.requires_grad
-    if with_bias and hasattr(replacement, "bias") and getattr(source, "bias", None) is not None:
-        replacement.bias.requires_grad = source.bias.requires_grad
-    return replacement
-
-
-def _instantiate_liger_norm(
-    liger_norm_cls: type[torch.nn.Module],
-    hidden_size: int,
-    *,
-    eps: float,
-    with_bias: bool,
-) -> torch.nn.Module:
-    signature = inspect.signature(liger_norm_cls)
-    kwargs: dict[str, Any] = {}
-    if "eps" in signature.parameters:
-        kwargs["eps"] = eps
-    if "bias" in signature.parameters:
-        kwargs["bias"] = with_bias
-
-    try:
-        return liger_norm_cls(hidden_size, **kwargs)
-    except TypeError:
-        kwargs["hidden_size"] = hidden_size
-        return liger_norm_cls(**kwargs)
-
-
-def _get_norm_eps(module: torch.nn.Module) -> float:
-    for attr_name in ("variance_epsilon", "eps", "epsilon"):
-        if hasattr(module, attr_name):
-            return float(getattr(module, attr_name))
-    return 1e-6
-
-
-def _is_liger_module(module: torch.nn.Module) -> bool:
-    return module.__class__.__module__.startswith("liger_kernel.")
-
-
-def _normalize_replacements(replacements: Iterable[LigerReplacement | dict[str, str]]) -> list[LigerReplacement]:
-    normalized: list[LigerReplacement] = []
-    for replacement in replacements:
-        if isinstance(replacement, LigerReplacement):
-            normalized.append(replacement)
-            continue
-        normalized.append(
-            LigerReplacement(
-                path=replacement["path"],
-                source=replacement["source"],
-                target=replacement["target"],
-            )
-        )
-    return normalized
-
-
-def _normalize_model_family(model_family: str | None) -> str | None:
+def _normalize_family(model_family: str | None) -> str | None:
     if model_family is None:
         return None
     normalized = model_family.strip().lower().replace("-", "_").replace(".", "_")
     return normalized or None
+
+
+def _check_module_names(names: dict[str, Any]) -> None:
+    unknown = sorted(set(names) - SUPPORTED_MODULES)
+    if unknown:
+        raise ValueError(f"Unsupported Liger module(s): {unknown}. Choose from {sorted(SUPPORTED_MODULES)}.")

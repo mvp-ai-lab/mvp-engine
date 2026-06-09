@@ -17,7 +17,7 @@ if TYPE_CHECKING:
         ModelInputs,
         PackingOptions,
     )
-    from .model import LigerKernelKit, LigerKernelReport, LigerReplacement
+    from .model import LigerKernelKit, LigerKernelReport, LigerPatch
     from .optim import OptimKit
     from .perf.mfu import MFUKit
 
@@ -25,7 +25,7 @@ __all__ = [
     "MFUKit",
     "LigerKernelKit",
     "LigerKernelReport",
-    "LigerReplacement",
+    "LigerPatch",
     "MLLMCollator",
     "MLLMDataKit",
     "MLLMMediaKit",
@@ -43,7 +43,7 @@ _EXPORT_MODULES = {
     "MFUKit": ".perf.mfu",
     "LigerKernelKit": ".model",
     "LigerKernelReport": ".model",
-    "LigerReplacement": ".model",
+    "LigerPatch": ".model",
     "MLLMCollator": ".mllm",
     "MLLMDataKit": ".mllm",
     "MLLMMediaKit": ".mllm",

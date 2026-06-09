@@ -3,18 +3,18 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .liger import LigerKernelKit, LigerKernelReport, LigerReplacement
+    from .liger import LigerKernelKit, LigerKernelReport, LigerPatch
 
 __all__ = [
     "LigerKernelKit",
     "LigerKernelReport",
-    "LigerReplacement",
+    "LigerPatch",
 ]
 
 _EXPORT_MODULES = {
     "LigerKernelKit": ".liger",
     "LigerKernelReport": ".liger",
-    "LigerReplacement": ".liger",
+    "LigerPatch": ".liger",
 }
 
 

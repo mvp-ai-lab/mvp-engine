@@ -1,42 +1,50 @@
 ---
 name: liger-kernel
 description: Decide where and how to wire Liger Kernel into an MVP-Engine recipe
-  using LigerKernelKit, including pre-build family patch placement, post-build
-  model patch placement, module selection, and loss-kernel compatibility.
+  using LigerKernelKit, including official family dispatch, authoring a custom or
+  composite model's LigerPatch map, module selection, and loss-kernel safety.
 ---
 
 # Liger Kernel
 
 ## Goal
 
-Use Liger Kernel to replace supported model kernels without changing training
-semantics. Treat reusable behavior as `LigerKernelKit` API and keep recipes
-limited to config, placement, and any model-family-specific extension points.
+Use Liger Kernel to replace supported model kernels **before model construction**
+without changing training semantics. Reusable behavior is the `LigerKernelKit`
+API; the recipe owns only config, placement, and — for custom models — the
+per-model `custom_patches` map. All application is pre-build (no instance path).
 
 ## Required Inputs
 
-- target recipe and model construction path;
-- model name/path for pre-build or a loaded model for post-build;
-- optional model family override, such as `qwen3`, `qwen3_vl`, or `llama`;
-- desired stage: `pre_build` or `post_build`;
-- module selection, either `"auto"` or explicit semantic module flags;
-- whether the recipe has custom loss accounting that conflicts with Liger loss
-  kernels.
+- target recipe and its model construction point;
+- model name/path (official) or the custom model's modeling module + symbol names;
+- optional model-family override (e.g. `qwen3`, `qwen3_vl`);
+- module selection: `"auto"` or explicit semantic flags;
+- whether the recipe's loss accounting conflicts with Liger loss kernels.
 
 ## Workflow
 
 ### 1. Use LigerKernelKit
 
-Read `skills/kit/liger-kernel-kit/SKILL.md` before editing. Do not reimplement
-module resolution, Liger imports, pre-build helper dispatch, or generic norm
-replacement inside a recipe.
+Read `skills/kit/liger-kernel-kit/SKILL.md` first. Do not reimplement module
+resolution, Liger imports, official dispatch, or symbol patching in a recipe.
 
-### 2. Choose The Stage
+### 2. Classify The Model, Then Pick A Route
 
-Use `pre_build` when Liger provides an official model-family patch function.
-Call the kit before model construction:
+Decide once, before model construction:
+
+1. **Whole model in liger's registry** (`llama`, `qwen2/3`, `qwen2_5_vl`, `gemma*`,
+   `glm4v`, `llava`, `mllama`, ...) → **official route**, one call. Done.
+2. **Composite custom model** = a known LLM family + a custom encoder/projector
+   (e.g. an OV2-style VLM whose LLM is Qwen3) → **reuse official per component**
+   for the known family, then a small `custom_patches` map for the novel parts.
+3. **Monolithic custom model** with no official helper → author a `custom_patches`
+   map for its own modeling module.
+
+Always call the kit *before* the model is built:
 
 ```python
+# Route 1 — official
 self.liger_kit.apply_pre_build(
     model_name_or_path=config.model.pretrained_model_name_or_path,
     modules=config.model.liger_kernel.modules,
@@ -45,66 +53,82 @@ self.liger_kit.apply_pre_build(
 model = self.model_kit.build_model(...)
 ```
 
-Use `post_build` when a recipe needs instance-level module replacement. Route it
-through the recipe's existing model patch stage:
+### 3. Author A Custom / Composite `custom_patches` Map
+
+This is the per-model knowledge that cannot be generic. To produce it:
+
+1. **Locate the modeling module** the model is built from (a shared
+   `transformers.models.<x>.modeling_<x>`, or the recipe-local / remote-code
+   modeling file). It must be importable before `build_model`.
+2. **Find the symbol names** to swap:
+   `grep -nE "class .*RMSNorm|class .*MLP|def apply_.*rotary" <modeling_file>`.
+3. **Choose the matching Liger replacement** using the table below — picking the
+   wrong one silently corrupts the model.
+4. Pass them as `LigerPatch(module, attr, replacement)` entries.
+
+| Module | Source looks like | Correct Liger replacement |
+|---|---|---|
+| `rms_norm` | standard RMSNorm (`x * rsqrt(mean(x²)+eps) * weight`) | `LigerRMSNorm` |
+| `rms_norm` | **Gemma-style** (`(1+weight)`, float32 upcast / offset) | `LigerRMSNormForGemma` — **never** the standard one |
+| `layer_norm` | `nn.LayerNorm` | `LigerLayerNorm` |
+| `swiglu` | gate/up/down MLP with SiLU | `LigerSwiGLUMLP` |
+| `geglu` | gate/up/down MLP with GELU | `LigerGEGLUMLP` |
+| `rope` | standard full rotary | `liger_rotary_pos_emb` |
+| `rope` | **multimodal / mRoPE** (VL 3D positions) | not `liger_rotary_pos_emb`; only the matching multimodal rope, else leave off |
+
+For a **composite** model, reuse the official route for the known family instead
+of re-listing its symbols, then patch only the novel component:
 
 ```python
-model_patches = [...]
-if config.model.liger_kernel.enabled and config.model.liger_kernel.stage == "post_build":
-    model_patches.append(
-        partial(
-            self.liger_kit.apply_post_build,
-            modules=config.model.liger_kernel.modules,
-            model_family=config.model.liger_kernel.get("model_family_override"),
-            module_replacers=recipe_replacers,
-        )
-    )
-model = self.model_kit.apply_model_patches(model, model_patches)
+# LLM backbone is shared transformers Qwen3 -> reuse official (full kernel set)
+self.liger_kit.apply_pre_build(model_family="qwen3", modules="auto")
+# custom vision encoder -> only norms it actually uses
+self.liger_kit.apply_pre_build(
+    model_family="myvlm",
+    custom_patches={"rms_norm": LigerPatch("my_pkg.modeling_encoder", "EncoderRMSNorm", LigerRMSNorm)},
+)
+model = self.model_kit.build_model(...)
 ```
 
-If the recipe uses a non-MLLM model kit, place post-build Liger at the equivalent
-post-construction, pre-freeze, pre-distributed wrapping point.
+If the LLM backbone is a **vendored** copy (not shared `transformers`), the
+official call cannot reach it — give the backbone its own `custom_patches`
+pointing at the vendored modeling module.
 
-### 3. Keep Recipe Glue Small
+### 4. Keep Recipe Glue Small
 
-Recipe code may add:
+Recipe code may add: config under `model.liger_kernel`; a `LigerKernelKit`
+instance; an optional family override; and — only for custom models — the
+`custom_patches` map. Do not apply Liger to a recipe unless requested for it.
 
-- config fields under `model.liger_kernel`;
-- a `LigerKernelKit` instance in the engine;
-- optional model-family override wiring;
-- recipe-specific `module_replacers` only when the kit does not support the
-  module generically.
+### 5. Protect Loss Semantics
 
-Do not apply Liger to a recipe unless requested for that recipe. This skill can
-exist independently from recipe usage.
-
-### 4. Protect Loss Semantics
-
-Leave `cross_entropy` and `fused_linear_cross_entropy` disabled unless the
-recipe has a dedicated compatibility path for its loss accounting. This matters
-for token-normalized or unreduced per-token loss workflows.
+Leave `cross_entropy` and `fused_linear_cross_entropy` off unless the recipe has
+a dedicated loss-compatibility path (matters for token-normalized / unreduced
+per-token loss). `custom_patches` does module-level symbol swaps only;
+`fused_linear_cross_entropy` rewrites the model's `ForCausalLM.forward`, so it is
+out of scope for custom models and stays off.
 
 ## Validation
 
 ### Soft Validation
 
-- recipe calls `LigerKernelKit` rather than local duplicate helper code;
-- pre-build runs before model construction;
-- post-build runs after model construction and before freeze, compile, and
-  distributed wrapping;
-- unsupported modules fail clearly instead of being reported as applied;
-- loss kernels are not silently enabled when recipe loss accounting is custom.
+- recipe calls `LigerKernelKit`, not duplicate helper code;
+- all application happens before model construction;
+- the chosen Liger replacement matches the source module's math (table above);
+- enabling an unsupported module fails clearly instead of being reported applied;
+- loss kernels are not silently enabled under custom loss accounting.
 
 ### Hard Validation
 
-Run the Liger kit unit tests and the target recipe's structure test. Run smoke
-with Liger enabled only in an environment that has `liger-kernel` installed and
-the required GPU/NPU resources.
+Run the kit unit tests and the recipe structure test. Liger kernels are
+Triton/GPU-only, so **numerical correctness is validated empirically by smoke**
+(compare the first training steps' loss with and without Liger on real hardware),
+not at pre-build time. Run smoke only where `liger-kernel` and GPU/NPU are present.
 
 ## Output
 
-- State selected stage and module selection.
-- State whether kit built-ins or recipe-specific replacers were used.
+- State the route, module selection, and helper or patched symbols.
+- State whether kit official dispatch or a custom map was used.
 - State validation commands and any runtime environment gap.
 
 ## Read On Demand
