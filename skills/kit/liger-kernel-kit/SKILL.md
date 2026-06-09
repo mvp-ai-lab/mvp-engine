@@ -62,7 +62,9 @@ model = build_model(...)
   forces loss kernels **off**. This avoids re-encoding per-model knowledge the
   library already owns.
 - An explicit `dict` is forwarded as-is; enabling a module the helper does not
-  accept fails fast.
+  accept fails fast. Accepted flags are trusted verbatim — liger may no-op some on
+  a given model (e.g. dense Qwen3-VL SwiGLU), so prefer `auto` to defer to liger's
+  correct per-model defaults.
 - Use `model_family` only to override a custom or misreported `model_type`.
 
 ### 3. Custom Route (no official helper)

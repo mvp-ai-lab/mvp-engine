@@ -151,6 +151,20 @@ def test_official_rejects_module_absent_from_helper_signature(monkeypatch: pytes
         LigerKernelKit().apply_pre_build(model_family="qwen2", modules={"geglu": True})
 
 
+def test_official_rejects_explicit_loss_without_permission(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Explicitly enabling a loss kernel without permission raises (not a silent invert)."""
+    install_fake_liger(monkeypatch, [])
+
+    with pytest.raises(ValueError, match="loss_kernels_allowed"):
+        LigerKernelKit().apply_pre_build(model_family="qwen2", modules={"fused_linear_cross_entropy": True})
+
+
+def test_invalid_modules_string_is_rejected() -> None:
+    """A non-'auto' string for modules fails clearly instead of iterating characters."""
+    with pytest.raises(ValueError, match='must be "auto"'):
+        LigerKernelKit().apply_pre_build(model_family="qwen2", modules="full")
+
+
 def test_custom_route_swaps_symbols_in_target_module(monkeypatch: pytest.MonkeyPatch) -> None:
     """Custom route setattr-swaps each declared symbol and reports the patched paths."""
     modeling = install_fake_custom_module(monkeypatch)

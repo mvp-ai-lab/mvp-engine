@@ -18,7 +18,7 @@ from __future__ import annotations
 import importlib
 import inspect
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 SUPPORTED_MODULES = frozenset(
     {"rope", "rms_norm", "layer_norm", "swiglu", "geglu", "cross_entropy", "fused_linear_cross_entropy"}
@@ -40,10 +40,14 @@ class LigerPatch:
 
 @dataclass(frozen=True)
 class LigerKernelReport:
-    """Summary of one Liger Kernel application."""
+    """Summary of one Liger Kernel application.
+
+    ``applied`` lists only the kwargs the kit forwarded (on the official auto route
+    that is just the loss overrides), not liger's own per-model defaults.
+    """
 
     model_family: str | None
-    route: str  # "official" or "custom"
+    route: Literal["official", "custom"]
     helper: str | None = None
     applied: dict[str, bool] | None = None
     patched: tuple[str, ...] = ()
@@ -67,8 +71,11 @@ class LigerKernelKit:
         Without ``custom_patches``, dispatch to liger's official
         ``apply_liger_kernel_to_<family>`` (family inferred from the HF config when
         not given). Otherwise apply the given symbol swaps to the custom model's own
-        modeling module. Loss kernels require ``loss_kernels_allowed=True``.
+        modeling module. ``model_name_or_path`` is only used on the official route.
+        Loss kernels require ``loss_kernels_allowed=True``.
         """
+        if isinstance(modules, str) and modules != "auto":
+            raise ValueError('`modules` must be "auto" or a dict[str, bool].')
         family = _normalize_family(model_family)
         if custom_patches is None:
             if family is None:
@@ -104,6 +111,9 @@ class LigerKernelKit:
             kwargs = dict(modules)
 
         if not loss_allowed:
+            requested = sorted(m for m in LOSS_MODULES if isinstance(modules, dict) and modules.get(m))
+            if requested:
+                raise ValueError(f"Loss kernels need loss_kernels_allowed=True: {requested}.")
             kwargs.update({m: False for m in LOSS_MODULES})  # override liger's fused-CE-on-by-default
 
         kwargs = {m: on for m, on in kwargs.items() if m in accepted}
