@@ -13,7 +13,7 @@ Use `LigerKernelKit` as the single API for Liger Kernel integration. Every Liger
 helper (`apply_liger_kernel_to_<family>`) is the same skeleton: flag-gated
 `setattr(modeling_module, symbol, liger_impl)` assignments run **before** the
 model is built. The kit keeps that one skeleton and exposes two routes through a
-single `apply_pre_build(...)`:
+single `apply(...)`:
 
 - **official**: dispatch to liger's own `apply_liger_kernel_to_<family>`, with the
   family inferred from Hugging Face `AutoConfig.model_type` by default;
@@ -21,8 +21,8 @@ single `apply_pre_build(...)`:
   LigerPatch}` map describing the same symbol swaps for the model's own modeling
   module.
 
-There is no post-build / instance path: all patching is pre-build, so no
-module-tree walking is needed. Loss kernels stay off unless explicitly allowed.
+There is no instance-patching path: everything runs before the model is built,
+so no module-tree walking is needed. Loss kernels stay off unless explicitly allowed.
 
 ## Required Inputs
 
@@ -42,14 +42,14 @@ self.liger_kit = LigerKernelKit()
 ```
 
 `liger-kernel` is an optional dependency. Importing the kit must not require it;
-the package is imported lazily only when `apply_pre_build` runs the official route.
+the package is imported lazily only when `apply` runs the official route.
 
 ### 2. Official Route (model is in liger's registry)
 
 Call before model construction:
 
 ```python
-report = self.liger_kit.apply_pre_build(
+report = self.liger_kit.apply(
     model_name_or_path=config.model.pretrained_model_name_or_path,
     modules=config.model.liger_kernel.modules,            # "auto" or {flag: bool}
     model_family=config.model.liger_kernel.get("model_family_override"),
@@ -78,7 +78,7 @@ from liger_kernel.transformers.rope import liger_rotary_pos_emb
 from mvp_engine.kit import LigerPatch
 
 M = "my_pkg.modeling_mymodel"
-report = self.liger_kit.apply_pre_build(
+report = self.liger_kit.apply(
     model_family="mymodel",
     custom_patches={
         "rms_norm": LigerPatch(module=M, attr="MyRMSNorm", replacement=LigerRMSNorm),

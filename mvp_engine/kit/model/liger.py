@@ -2,7 +2,8 @@
 
 Liger ships one ``apply_liger_kernel_to_<family>`` per model, but every helper is
 the same skeleton: a few flag-gated ``setattr(modeling_module, symbol, liger_impl)``
-assignments. This kit keeps that single skeleton as one pre-build entry point:
+assignments. This kit keeps that single skeleton as one entry point, called
+before the model is built:
 
 * official families dispatch to liger's own helper;
 * custom models (no official helper) pass an explicit ``{module: LigerPatch}`` map
@@ -56,7 +57,7 @@ class LigerKernelReport:
 class LigerKernelKit:
     """Apply Liger Kernel before model construction via module-level monkey-patching."""
 
-    def apply_pre_build(
+    def apply(
         self,
         model_name_or_path: str | None = None,
         *,
@@ -98,7 +99,7 @@ class LigerKernelKit:
         return family
 
     def _apply_official(self, family: str, modules: str | dict[str, bool], loss_allowed: bool) -> LigerKernelReport:
-        helper, patch_fn = _find_pre_build_helper(_import_liger_transformers(), family)
+        helper, patch_fn = _find_official_helper(_import_liger_transformers(), family)
         accepted = set(inspect.signature(patch_fn).parameters)
 
         if modules == "auto":
@@ -165,7 +166,7 @@ def _import_liger_transformers() -> Any:
     return liger_transformers
 
 
-def _find_pre_build_helper(liger_transformers: Any, family: str) -> tuple[str, Any]:
+def _find_official_helper(liger_transformers: Any, family: str) -> tuple[str, Any]:
     names = [family, MODEL_TYPE_ALIASES.get(family)]
     candidates = dict.fromkeys(f"apply_liger_kernel_to_{name}" for name in names if name)
     for helper in candidates:
@@ -173,7 +174,7 @@ def _find_pre_build_helper(liger_transformers: Any, family: str) -> tuple[str, A
         if patch_fn is not None:
             return helper, patch_fn
     raise RuntimeError(
-        f"Liger Kernel exposes no pre-build helper for model family {family!r} (tried: {', '.join(candidates)})."
+        f"Liger Kernel exposes no official helper for model family {family!r} (tried: {', '.join(candidates)})."
     )
 
 

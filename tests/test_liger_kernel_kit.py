@@ -1,4 +1,4 @@
-"""Tests for the reusable Liger Kernel kit (pre-build only)."""
+"""Tests for the reusable Liger Kernel kit (applied before model build)."""
 
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ def test_official_auto_only_forces_loss_off_and_defers_to_liger(monkeypatch: pyt
     calls: list[dict] = []
     install_fake_liger(monkeypatch, calls)
 
-    report = LigerKernelKit().apply_pre_build(model_family="qwen3-vl", modules="auto")
+    report = LigerKernelKit().apply(model_family="qwen3-vl", modules="auto")
 
     assert isinstance(report, LigerKernelReport)
     assert report.route == "official"
@@ -101,7 +101,7 @@ def test_official_loss_allowed_auto_passes_no_kwargs(monkeypatch: pytest.MonkeyP
     calls: list[dict] = []
     install_fake_liger(monkeypatch, calls)
 
-    report = LigerKernelKit().apply_pre_build(model_family="qwen2", modules="auto", loss_kernels_allowed=True)
+    report = LigerKernelKit().apply(model_family="qwen2", modules="auto", loss_kernels_allowed=True)
 
     assert report.applied == {}
     assert calls[0]["fused_linear_cross_entropy"] is True  # liger default left untouched
@@ -112,7 +112,7 @@ def test_official_explicit_modules_force_loss_off(monkeypatch: pytest.MonkeyPatc
     calls: list[dict] = []
     install_fake_liger(monkeypatch, calls)
 
-    report = LigerKernelKit().apply_pre_build(model_family="qwen2", modules={"rms_norm": True, "rope": False})
+    report = LigerKernelKit().apply(model_family="qwen2", modules={"rms_norm": True, "rope": False})
 
     assert report.applied == {
         "rms_norm": True,
@@ -127,7 +127,7 @@ def test_official_infers_family_from_hf_config(monkeypatch: pytest.MonkeyPatch) 
     install_fake_auto_config(monkeypatch, model_type="Qwen2")
     install_fake_liger(monkeypatch, [])
 
-    report = LigerKernelKit().apply_pre_build(model_name_or_path="fake-qwen2", modules="auto")
+    report = LigerKernelKit().apply(model_name_or_path="fake-qwen2", modules="auto")
 
     assert report.model_family == "qwen2"
     assert report.helper == "apply_liger_kernel_to_qwen2"
@@ -137,7 +137,7 @@ def test_official_uses_alias_for_helper_lookup(monkeypatch: pytest.MonkeyPatch) 
     """An aliased model_type (qwq) resolves to the base family helper (qwen2)."""
     install_fake_liger(monkeypatch, [])
 
-    report = LigerKernelKit().apply_pre_build(model_family="qwq", modules="auto")
+    report = LigerKernelKit().apply(model_family="qwq", modules="auto")
 
     assert report.model_family == "qwq"
     assert report.helper == "apply_liger_kernel_to_qwen2"
@@ -148,7 +148,7 @@ def test_official_rejects_module_absent_from_helper_signature(monkeypatch: pytes
     install_fake_liger(monkeypatch, [])
 
     with pytest.raises(ValueError, match="geglu"):
-        LigerKernelKit().apply_pre_build(model_family="qwen2", modules={"geglu": True})
+        LigerKernelKit().apply(model_family="qwen2", modules={"geglu": True})
 
 
 def test_official_rejects_explicit_loss_without_permission(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -156,13 +156,13 @@ def test_official_rejects_explicit_loss_without_permission(monkeypatch: pytest.M
     install_fake_liger(monkeypatch, [])
 
     with pytest.raises(ValueError, match="loss_kernels_allowed"):
-        LigerKernelKit().apply_pre_build(model_family="qwen2", modules={"fused_linear_cross_entropy": True})
+        LigerKernelKit().apply(model_family="qwen2", modules={"fused_linear_cross_entropy": True})
 
 
 def test_invalid_modules_string_is_rejected() -> None:
     """A non-'auto' string for modules fails clearly instead of iterating characters."""
     with pytest.raises(ValueError, match='must be "auto"'):
-        LigerKernelKit().apply_pre_build(model_family="qwen2", modules="full")
+        LigerKernelKit().apply(model_family="qwen2", modules="full")
 
 
 def test_custom_route_swaps_symbols_in_target_module(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -170,7 +170,7 @@ def test_custom_route_swaps_symbols_in_target_module(monkeypatch: pytest.MonkeyP
     modeling = install_fake_custom_module(monkeypatch)
     patches = {"rms_norm": custom_patch("CustomRMSNorm"), "rope": custom_patch("apply_rotary_pos_emb")}
 
-    report = LigerKernelKit().apply_pre_build(model_family="custom_vlm", custom_patches=patches)
+    report = LigerKernelKit().apply(model_family="custom_vlm", custom_patches=patches)
 
     assert report.route == "custom"
     assert modeling.CustomRMSNorm is patches["rms_norm"].replacement
@@ -187,7 +187,7 @@ def test_custom_route_explicit_modules_select_subset(monkeypatch: pytest.MonkeyP
     original_rope = modeling.apply_rotary_pos_emb
     patches = {"rms_norm": custom_patch("CustomRMSNorm"), "rope": custom_patch("apply_rotary_pos_emb")}
 
-    report = LigerKernelKit().apply_pre_build(custom_patches=patches, modules={"rms_norm": True, "rope": False})
+    report = LigerKernelKit().apply(custom_patches=patches, modules={"rms_norm": True, "rope": False})
 
     assert report.patched == ("fake_custom.modeling_custom.CustomRMSNorm",)
     assert modeling.apply_rotary_pos_emb is original_rope  # untouched
@@ -199,7 +199,7 @@ def test_custom_route_missing_symbol_raises(monkeypatch: pytest.MonkeyPatch) -> 
     patches = {"rms_norm": custom_patch("NoSuchSymbol")}
 
     with pytest.raises(AttributeError, match="NoSuchSymbol"):
-        LigerKernelKit().apply_pre_build(custom_patches=patches)
+        LigerKernelKit().apply(custom_patches=patches)
 
 
 def test_custom_route_requires_patch_for_enabled_module(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -208,7 +208,7 @@ def test_custom_route_requires_patch_for_enabled_module(monkeypatch: pytest.Monk
     patches = {"rms_norm": custom_patch("CustomRMSNorm")}
 
     with pytest.raises(ValueError, match="No custom_patches"):
-        LigerKernelKit().apply_pre_build(custom_patches=patches, modules={"swiglu": True})
+        LigerKernelKit().apply(custom_patches=patches, modules={"swiglu": True})
 
 
 def test_loss_kernels_are_guarded_on_custom_route(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -217,7 +217,7 @@ def test_loss_kernels_are_guarded_on_custom_route(monkeypatch: pytest.MonkeyPatc
     patches = {"fused_linear_cross_entropy": custom_patch("CustomMLP")}
 
     with pytest.raises(ValueError, match="loss_kernels_allowed"):
-        LigerKernelKit().apply_pre_build(custom_patches=patches)
+        LigerKernelKit().apply(custom_patches=patches)
 
 
 def test_unknown_module_name_is_rejected() -> None:
@@ -225,4 +225,4 @@ def test_unknown_module_name_is_rejected() -> None:
     patches = {"bogus": LigerPatch(module="m", attr="a", replacement=object())}
 
     with pytest.raises(ValueError, match="Unsupported Liger module"):
-        LigerKernelKit().apply_pre_build(custom_patches=patches)
+        LigerKernelKit().apply(custom_patches=patches)

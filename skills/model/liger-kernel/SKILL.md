@@ -12,7 +12,8 @@ description: Decide where and how to wire Liger Kernel into an MVP-Engine recipe
 Use Liger Kernel to replace supported model kernels **before model construction**
 without changing training semantics. Reusable behavior is the `LigerKernelKit`
 API; the recipe owns only config, placement, and — for custom models — the
-per-model `custom_patches` map. All application is pre-build (no instance path).
+per-model `custom_patches` map. All application happens before the model is
+built (no instance patching).
 
 ## Required Inputs
 
@@ -45,7 +46,7 @@ Always call the kit *before* the model is built:
 
 ```python
 # Route 1 — official
-self.liger_kit.apply_pre_build(
+self.liger_kit.apply(
     model_name_or_path=config.model.pretrained_model_name_or_path,
     modules=config.model.liger_kernel.modules,
     model_family=config.model.liger_kernel.get("model_family_override"),
@@ -81,9 +82,9 @@ of re-listing its symbols, then patch only the novel component:
 
 ```python
 # LLM backbone is shared transformers Qwen3 -> reuse official (full kernel set)
-self.liger_kit.apply_pre_build(model_family="qwen3", modules="auto")
+self.liger_kit.apply(model_family="qwen3", modules="auto")
 # custom vision encoder -> only norms it actually uses
-self.liger_kit.apply_pre_build(
+self.liger_kit.apply(
     model_family="myvlm",
     custom_patches={"rms_norm": LigerPatch("my_pkg.modeling_encoder", "EncoderRMSNorm", LigerRMSNorm)},
 )
@@ -123,7 +124,7 @@ out of scope for custom models and stays off.
 Run the kit unit tests and the recipe structure test. Liger kernels are
 Triton/GPU-only, so **numerical correctness is validated empirically by smoke**
 (compare the first training steps' loss with and without Liger on real hardware),
-not at pre-build time. Run smoke only where `liger-kernel` and GPU/NPU are present.
+not at patch time. Run smoke only where `liger-kernel` and GPU/NPU are present.
 
 ## Output
 
