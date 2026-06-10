@@ -20,8 +20,6 @@ EXPECTED_FILES = [
     "dataset/__init__.py",
     "engine/__init__.py",
     "engine/qwen3_vl_engine.py",
-    "guards/__init__.py",
-    "guards/loss.py",
     "model/__init__.py",
     "model/qwen3_vl.py",
     "model/packing/__init__.py",

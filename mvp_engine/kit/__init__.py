@@ -3,7 +3,9 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .loss.loss import LossGuard, LossKit
     from .loss.token_loss import (
+        PerTokenLossGuard,
         TokenLossStats,
         TokenNormedLossKit,
         apply_chunked_token_loss_patch,
@@ -22,6 +24,8 @@ if TYPE_CHECKING:
     from .perf.mfu import MFUKit
 
 __all__ = [
+    "LossGuard",
+    "LossKit",
     "MFUKit",
     "LigerKernelKit",
     "LigerKernelReport",
@@ -34,12 +38,15 @@ __all__ = [
     "ModelInputs",
     "OptimKit",
     "PackingOptions",
+    "PerTokenLossGuard",
     "TokenNormedLossKit",
     "TokenLossStats",
     "apply_chunked_token_loss_patch",
 ]
 
 _EXPORT_MODULES = {
+    "LossGuard": ".loss.loss",
+    "LossKit": ".loss.loss",
     "MFUKit": ".perf.mfu",
     "LigerKernelKit": ".model",
     "LigerKernelReport": ".model",
@@ -52,6 +59,7 @@ _EXPORT_MODULES = {
     "ModelInputs": ".mllm",
     "OptimKit": ".optim",
     "PackingOptions": ".mllm",
+    "PerTokenLossGuard": ".loss.token_loss",
     "TokenLossStats": ".loss.token_loss",
     "TokenNormedLossKit": ".loss.token_loss",
     "apply_chunked_token_loss_patch": ".loss.token_loss",
