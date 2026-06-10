@@ -26,9 +26,6 @@ SUPPORTED_MODULES = frozenset(
 )
 LOSS_MODULES = frozenset({"cross_entropy", "fused_linear_cross_entropy"})
 
-# model_type values that reuse another family's liger helper
-MODEL_TYPE_ALIASES = {"qwq": "qwen2", "qwen2_5": "qwen2", "qvq": "qwen2_vl"}
-
 
 @dataclass(frozen=True)
 class LigerPatch:
@@ -70,46 +67,32 @@ class LigerKernelKit:
         """Patch Liger kernels before the model is built.
 
         Without ``custom_patches``, dispatch to liger's official
-        ``apply_liger_kernel_to_<family>`` (family inferred from the HF config when
-        not given). Otherwise apply the given symbol swaps to the custom model's own
-        modeling module. ``model_name_or_path`` is only used on the official route.
-        Loss kernels require ``loss_kernels_allowed=True``.
+        ``apply_liger_kernel_to_<family>`` (family taken verbatim from ``model_family``
+        or the HF config's ``model_type``). With ``custom_patches``, apply every given
+        symbol swap to the custom model's own modeling module; ``modules`` and
+        ``model_name_or_path`` only affect the official route. Loss kernels require
+        ``loss_kernels_allowed=True``.
         """
         if isinstance(modules, str) and modules != "auto":
             raise ValueError('`modules` must be "auto" or a dict[str, bool].')
 
-        family = _normalize_family(model_family)
         if custom_patches is not None:
-            return self._apply_custom(family, modules, custom_patches, loss_kernels_allowed)
+            return self._apply_custom(model_family, custom_patches, loss_kernels_allowed)
 
+        family = model_family
         if family is None:
             if model_name_or_path is None:
                 raise ValueError("Provide model_name_or_path or model_family for the official route.")
             from transformers import AutoConfig
 
-            config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
-            family = _normalize_family(getattr(config, "model_type", None))
-            if family is None:
-                raise ValueError(f"Could not infer model family from config at {model_name_or_path!r}.")
+            family = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code).model_type
         return self._apply_official(family, modules, loss_kernels_allowed)
 
     def _apply_official(self, family: str, modules: str | dict[str, bool], loss_allowed: bool) -> LigerKernelReport:
-        try:
-            import liger_kernel.transformers as liger_transformers
-        except ModuleNotFoundError as exc:
-            raise ModuleNotFoundError("LigerKernelKit requires the optional `liger-kernel` package.") from exc
+        import liger_kernel.transformers as liger_transformers  # lazy: optional dependency
 
-        candidates = dict.fromkeys(
-            f"apply_liger_kernel_to_{name}" for name in (family, MODEL_TYPE_ALIASES.get(family)) if name
-        )
-        for helper in candidates:
-            patch_fn = getattr(liger_transformers, helper, None)
-            if patch_fn is not None:
-                break
-        else:
-            raise RuntimeError(
-                f"Liger Kernel exposes no official helper for model family {family!r} (tried: {', '.join(candidates)})."
-            )
+        helper = f"apply_liger_kernel_to_{family}"
+        patch_fn = getattr(liger_transformers, helper)  # unsupported family -> AttributeError naming the helper
 
         accepted = set(inspect.signature(patch_fn).parameters)
         if modules == "auto":
@@ -132,22 +115,10 @@ class LigerKernelKit:
         return LigerKernelReport(model_family=family, route="official", helper=helper, applied=kwargs)
 
     def _apply_custom(
-        self,
-        family: str | None,
-        modules: str | dict[str, bool],
-        patches: dict[str, LigerPatch],
-        loss_allowed: bool,
+        self, family: str | None, patches: dict[str, LigerPatch], loss_allowed: bool
     ) -> LigerKernelReport:
         _check_module_names(patches)
-        if modules == "auto":
-            enabled = sorted(patches)
-        else:
-            _check_module_names(modules)
-            enabled = sorted(m for m, on in modules.items() if on)
-            missing = sorted(set(enabled) - set(patches))
-            if missing:
-                raise ValueError(f"No custom_patches provided for enabled module(s): {missing}.")
-
+        enabled = sorted(patches)
         blocked = sorted(set(enabled) & LOSS_MODULES)
         if blocked and not loss_allowed:
             raise ValueError(f"Loss kernels need loss_kernels_allowed=True: {blocked}.")
@@ -166,13 +137,6 @@ class LigerKernelKit:
             applied=dict.fromkeys(enabled, True),
             patched=tuple(patched),
         )
-
-
-def _normalize_family(model_family: str | None) -> str | None:
-    if model_family is None:
-        return None
-    normalized = model_family.strip().lower().replace("-", "_").replace(".", "_")
-    return normalized or None
 
 
 def _check_module_names(names: dict[str, Any]) -> None:

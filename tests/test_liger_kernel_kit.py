@@ -77,7 +77,7 @@ def test_official_auto_only_forces_loss_off_and_defers_to_liger(monkeypatch: pyt
     calls: list[dict] = []
     install_fake_liger(monkeypatch, calls)
 
-    report = LigerKernelKit().apply(model_family="qwen3-vl", modules="auto")
+    report = LigerKernelKit().apply(model_family="qwen3_vl", modules="auto")
 
     assert isinstance(report, LigerKernelReport)
     assert report.route == "official"
@@ -124,7 +124,7 @@ def test_official_explicit_modules_force_loss_off(monkeypatch: pytest.MonkeyPatc
 
 def test_official_infers_family_from_hf_config(monkeypatch: pytest.MonkeyPatch) -> None:
     """Family is inferred from AutoConfig.model_type when no override is given."""
-    install_fake_auto_config(monkeypatch, model_type="Qwen2")
+    install_fake_auto_config(monkeypatch, model_type="qwen2")
     install_fake_liger(monkeypatch, [])
 
     report = LigerKernelKit().apply(model_name_or_path="fake-qwen2", modules="auto")
@@ -133,14 +133,12 @@ def test_official_infers_family_from_hf_config(monkeypatch: pytest.MonkeyPatch) 
     assert report.helper == "apply_liger_kernel_to_qwen2"
 
 
-def test_official_uses_alias_for_helper_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An aliased model_type (qwq) resolves to the base family helper (qwen2)."""
+def test_official_unknown_family_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A family without an official liger helper fails, naming the missing helper."""
     install_fake_liger(monkeypatch, [])
 
-    report = LigerKernelKit().apply(model_family="qwq", modules="auto")
-
-    assert report.model_family == "qwq"
-    assert report.helper == "apply_liger_kernel_to_qwen2"
+    with pytest.raises(AttributeError, match="apply_liger_kernel_to_mamba"):
+        LigerKernelKit().apply(model_family="mamba")
 
 
 def test_official_rejects_module_absent_from_helper_signature(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -181,18 +179,6 @@ def test_custom_route_swaps_symbols_in_target_module(monkeypatch: pytest.MonkeyP
     }
 
 
-def test_custom_route_explicit_modules_select_subset(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An explicit module dict applies only the enabled patches."""
-    modeling = install_fake_custom_module(monkeypatch)
-    original_rope = modeling.apply_rotary_pos_emb
-    patches = {"rms_norm": custom_patch("CustomRMSNorm"), "rope": custom_patch("apply_rotary_pos_emb")}
-
-    report = LigerKernelKit().apply(custom_patches=patches, modules={"rms_norm": True, "rope": False})
-
-    assert report.patched == ("fake_custom.modeling_custom.CustomRMSNorm",)
-    assert modeling.apply_rotary_pos_emb is original_rope  # untouched
-
-
 def test_custom_route_missing_symbol_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """A patch targeting a non-existent symbol fails loudly (e.g. upstream rename)."""
     install_fake_custom_module(monkeypatch)
@@ -200,15 +186,6 @@ def test_custom_route_missing_symbol_raises(monkeypatch: pytest.MonkeyPatch) -> 
 
     with pytest.raises(AttributeError, match="NoSuchSymbol"):
         LigerKernelKit().apply(custom_patches=patches)
-
-
-def test_custom_route_requires_patch_for_enabled_module(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Enabling a module without a corresponding custom patch fails fast."""
-    install_fake_custom_module(monkeypatch)
-    patches = {"rms_norm": custom_patch("CustomRMSNorm")}
-
-    with pytest.raises(ValueError, match="No custom_patches"):
-        LigerKernelKit().apply(custom_patches=patches, modules={"swiglu": True})
 
 
 def test_loss_kernels_are_guarded_on_custom_route(monkeypatch: pytest.MonkeyPatch) -> None:

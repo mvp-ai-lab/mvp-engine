@@ -105,9 +105,8 @@ instance; an optional family override; and — only for custom models — the
 
 Leave `cross_entropy` and `fused_linear_cross_entropy` off unless the recipe has
 a dedicated loss-compatibility path (matters for token-normalized / unreduced
-per-token loss). `custom_patches` does module-level symbol swaps only;
-`fused_linear_cross_entropy` rewrites the model's `ForCausalLM.forward`, so it is
-out of scope for custom models and stays off.
+per-token loss). The guard mechanics and the custom-route FLCE scope are kit
+contract — see the kit skill.
 
 ## Validation
 

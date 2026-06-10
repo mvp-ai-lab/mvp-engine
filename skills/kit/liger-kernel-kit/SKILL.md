@@ -46,14 +46,11 @@ the package is imported lazily only when `apply` runs the official route.
 
 ### 2. Official Route (model is in liger's registry)
 
-Call before model construction:
+Call before model construction (recipe config wiring lives in
+`skills/model/liger-kernel/SKILL.md`):
 
 ```python
-report = self.liger_kit.apply(
-    model_name_or_path=config.model.pretrained_model_name_or_path,
-    modules=config.model.liger_kernel.modules,            # "auto" or {flag: bool}
-    model_family=config.model.liger_kernel.get("model_family_override"),
-)
+report = self.liger_kit.apply(model_name_or_path=..., modules="auto")
 model = build_model(...)
 ```
 
@@ -65,34 +62,30 @@ model = build_model(...)
   accept fails fast. Accepted flags are trusted verbatim — liger may no-op some on
   a given model (e.g. dense Qwen3-VL SwiGLU), so prefer `auto` to defer to liger's
   correct per-model defaults.
-- Use `model_family` only to override a custom or misreported `model_type`.
+- Use `model_family` only to override a custom or misreported `model_type`. It is
+  used verbatim — match liger's naming (e.g. `qwen3_vl`, not `Qwen3-VL`).
 
 ### 3. Custom Route (no official helper)
 
-Provide the symbol swaps as data; the kit imports each target module, checks the
-symbol exists (catching upstream renames), and `setattr`s the replacement:
+Provide the symbol swaps as data; the kit imports each target module, fails if a
+symbol is missing (catching upstream renames), `setattr`s the replacement, and
+reports the patched paths:
 
 ```python
-from liger_kernel.transformers import LigerRMSNorm, LigerSwiGLUMLP
-from liger_kernel.transformers.rope import liger_rotary_pos_emb
+from liger_kernel.transformers import LigerRMSNorm
+
 from mvp_engine.kit import LigerPatch
 
-M = "my_pkg.modeling_mymodel"
 report = self.liger_kit.apply(
     model_family="mymodel",
-    custom_patches={
-        "rms_norm": LigerPatch(module=M, attr="MyRMSNorm", replacement=LigerRMSNorm),
-        "swiglu":   LigerPatch(module=M, attr="MyMLP", replacement=LigerSwiGLUMLP),
-        "rope":     LigerPatch(module=M, attr="apply_rotary_pos_emb", replacement=liger_rotary_pos_emb),
-    },
+    custom_patches={"rms_norm": LigerPatch("my_pkg.modeling_mymodel", "MyRMSNorm", LigerRMSNorm)},
 )
 model = build_model(...)
 ```
 
-The kit does **not** infer which symbols to swap or which replacement is correct —
-that per-model knowledge is authored via `skills/model/liger-kernel/SKILL.md`. The
-kit only provides the validated mechanism. For composite custom models, prefer
-reusing the official route per component (see that skill).
+The kit does **not** infer which symbols to swap or which replacement is
+numerically correct. Authoring that map — symbol discovery, the replacement
+decision table, composite/vendored models — is `skills/model/liger-kernel/SKILL.md`.
 
 ### 4. Semantic Module Names
 
@@ -100,9 +93,8 @@ reusing the official route per component (see that skill).
 rope  rms_norm  layer_norm  swiglu  geglu  cross_entropy  fused_linear_cross_entropy
 ```
 
-Unknown names are rejected. In the custom route, `modules="auto"` applies every
-provided patch; an explicit `dict` applies only enabled flags and fails if an
-enabled flag has no patch.
+Unknown names are rejected. `modules` selects modules on the official route only;
+the custom route applies every provided patch — the recipe owns the map's contents.
 
 ### 5. Loss Kernels
 
