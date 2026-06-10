@@ -77,31 +77,41 @@ class LigerKernelKit:
         """
         if isinstance(modules, str) and modules != "auto":
             raise ValueError('`modules` must be "auto" or a dict[str, bool].')
+
         family = _normalize_family(model_family)
-        if custom_patches is None:
-            if family is None:
-                if model_name_or_path is None:
-                    raise ValueError("Provide model_name_or_path or model_family for the official route.")
-                family = self.infer_model_family(model_name_or_path, trust_remote_code=trust_remote_code)
-            return self._apply_official(family, modules, loss_kernels_allowed)
-        return self._apply_custom(family, modules, custom_patches, loss_kernels_allowed)
+        if custom_patches is not None:
+            return self._apply_custom(family, modules, custom_patches, loss_kernels_allowed)
 
-    def infer_model_family(
-        self, model_name_or_path: str, *, trust_remote_code: bool = True, **config_kwargs: Any
-    ) -> str:
-        """Infer the normalized model family from a Hugging Face config ``model_type``."""
-        from transformers import AutoConfig
-
-        config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code, **config_kwargs)
-        family = _normalize_family(getattr(config, "model_type", None))
         if family is None:
-            raise ValueError(f"Could not infer model family from config at {model_name_or_path!r}.")
-        return family
+            if model_name_or_path is None:
+                raise ValueError("Provide model_name_or_path or model_family for the official route.")
+            from transformers import AutoConfig
+
+            config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
+            family = _normalize_family(getattr(config, "model_type", None))
+            if family is None:
+                raise ValueError(f"Could not infer model family from config at {model_name_or_path!r}.")
+        return self._apply_official(family, modules, loss_kernels_allowed)
 
     def _apply_official(self, family: str, modules: str | dict[str, bool], loss_allowed: bool) -> LigerKernelReport:
-        helper, patch_fn = _find_official_helper(_import_liger_transformers(), family)
-        accepted = set(inspect.signature(patch_fn).parameters)
+        try:
+            import liger_kernel.transformers as liger_transformers
+        except ModuleNotFoundError as exc:
+            raise ModuleNotFoundError("LigerKernelKit requires the optional `liger-kernel` package.") from exc
 
+        candidates = dict.fromkeys(
+            f"apply_liger_kernel_to_{name}" for name in (family, MODEL_TYPE_ALIASES.get(family)) if name
+        )
+        for helper in candidates:
+            patch_fn = getattr(liger_transformers, helper, None)
+            if patch_fn is not None:
+                break
+        else:
+            raise RuntimeError(
+                f"Liger Kernel exposes no official helper for model family {family!r} (tried: {', '.join(candidates)})."
+            )
+
+        accepted = set(inspect.signature(patch_fn).parameters)
         if modules == "auto":
             kwargs: dict[str, bool] = {}  # let liger pick per-model defaults (swiglu vs geglu, mRoPE, ...)
         else:
@@ -112,7 +122,7 @@ class LigerKernelKit:
             kwargs = dict(modules)
 
         if not loss_allowed:
-            requested = sorted(m for m in LOSS_MODULES if isinstance(modules, dict) and modules.get(m))
+            requested = sorted(m for m in LOSS_MODULES if kwargs.get(m))
             if requested:
                 raise ValueError(f"Loss kernels need loss_kernels_allowed=True: {requested}.")
             kwargs.update({m: False for m in LOSS_MODULES})  # override liger's fused-CE-on-by-default
@@ -130,20 +140,20 @@ class LigerKernelKit:
     ) -> LigerKernelReport:
         _check_module_names(patches)
         if modules == "auto":
-            enabled = set(patches)
+            enabled = sorted(patches)
         else:
             _check_module_names(modules)
-            enabled = {m for m, on in modules.items() if on}
-            missing = sorted(enabled - set(patches))
+            enabled = sorted(m for m, on in modules.items() if on)
+            missing = sorted(set(enabled) - set(patches))
             if missing:
                 raise ValueError(f"No custom_patches provided for enabled module(s): {missing}.")
 
-        blocked = enabled & LOSS_MODULES
+        blocked = sorted(set(enabled) & LOSS_MODULES)
         if blocked and not loss_allowed:
-            raise ValueError(f"Loss kernels need loss_kernels_allowed=True: {sorted(blocked)}.")
+            raise ValueError(f"Loss kernels need loss_kernels_allowed=True: {blocked}.")
 
-        patched: list[str] = []
-        for name in sorted(enabled):
+        patched = []
+        for name in enabled:
             patch = patches[name]
             module = importlib.import_module(patch.module)
             if not hasattr(module, patch.attr):
@@ -153,29 +163,9 @@ class LigerKernelKit:
         return LigerKernelReport(
             model_family=family,
             route="custom",
-            applied={name: True for name in sorted(enabled)},
+            applied=dict.fromkeys(enabled, True),
             patched=tuple(patched),
         )
-
-
-def _import_liger_transformers() -> Any:
-    try:
-        import liger_kernel.transformers as liger_transformers
-    except ModuleNotFoundError as exc:
-        raise ModuleNotFoundError("LigerKernelKit requires the optional `liger-kernel` package.") from exc
-    return liger_transformers
-
-
-def _find_official_helper(liger_transformers: Any, family: str) -> tuple[str, Any]:
-    names = [family, MODEL_TYPE_ALIASES.get(family)]
-    candidates = dict.fromkeys(f"apply_liger_kernel_to_{name}" for name in names if name)
-    for helper in candidates:
-        patch_fn = getattr(liger_transformers, helper, None)
-        if patch_fn is not None:
-            return helper, patch_fn
-    raise RuntimeError(
-        f"Liger Kernel exposes no official helper for model family {family!r} (tried: {', '.join(candidates)})."
-    )
 
 
 def _normalize_family(model_family: str | None) -> str | None:
