@@ -34,8 +34,9 @@ resolution, Liger imports, official dispatch, or symbol patching in a recipe.
 
 Decide once, before model construction:
 
-1. **Whole model in liger's registry** (`llama`, `qwen2/3`, `qwen2_5_vl`, `gemma*`,
-   `glm4v`, `llava`, `mllama`, ...) → **official route**, one call. Done.
+1. **Whole model in [liger's registry](https://github.com/linkedin/Liger-Kernel)**
+   (`llama`, `qwen2/3`, `qwen2_5_vl`, `gemma*`, `glm4v`, `llava`, `mllama`, ...) →
+   **official route**, one call. Done.
 2. **Composite custom model** = a known LLM family + a custom encoder/projector
    (e.g. an OV2-style VLM whose LLM is Qwen3) → **reuse official per component**
    for the known family, then a small `custom_patches` map for the novel parts.
@@ -45,7 +46,6 @@ Decide once, before model construction:
 Always call the kit *before* the model is built:
 
 ```python
-# Route 1 — official
 self.liger_kit.apply(
     model_name_or_path=config.model.pretrained_model_name_or_path,
     modules=config.model.liger_kernel.modules,
@@ -105,8 +105,8 @@ instance; an optional family override; and — only for custom models — the
 
 Leave `cross_entropy` and `fused_linear_cross_entropy` off unless the recipe has
 a dedicated loss-compatibility path (matters for token-normalized / unreduced
-per-token loss). The guard mechanics and the custom-route FLCE scope are kit
-contract — see the kit skill.
+per-token loss). The default `excluded_modules` already keeps them off; the
+mechanics are kit contract — see the kit skill.
 
 ## Validation
 
@@ -116,14 +116,17 @@ contract — see the kit skill.
 - all application happens before model construction;
 - the chosen Liger replacement matches the source module's math (table above);
 - enabling an unsupported module fails clearly instead of being reported applied;
-- loss kernels are not silently enabled under custom loss accounting.
+- the default `excluded_modules` (loss kernels) stays in place under custom loss
+  accounting.
 
 ### Hard Validation
 
-Run the kit unit tests and the recipe structure test. Liger kernels are
-Triton/GPU-only, so **numerical correctness is validated empirically by smoke**
-(compare the first training steps' loss with and without Liger on real hardware),
-not at patch time. Run smoke only where `liger-kernel` and GPU/NPU are present.
+Copy `references/asserts.py` (next to this skill) to
+`recipes/<recipe>/tests/skills/liger-kernel/asserts.py` so the recipe structure
+and smoke tests verify the wiring and the runtime replacement. Liger kernels are
+Triton kernels that run on GPU and NPU; **numerical correctness is validated
+empirically by smoke** (compare the first training steps' loss with and without
+Liger), not at patch time.
 
 ## Output
 

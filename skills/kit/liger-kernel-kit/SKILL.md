@@ -22,21 +22,22 @@ single `apply(...)`:
   module.
 
 There is no instance-patching path: everything runs before the model is built,
-so no module-tree walking is needed. Loss kernels stay off unless explicitly allowed.
+so no module-tree walking is needed. `excluded_modules` disables any kernels and
+defaults to the loss kernels.
 
 ## Required Inputs
 
 - model name/path (official route) or a model-family label for reporting;
 - module selection: `"auto"` or `dict[str, bool]`;
-- for custom models: a `custom_patches` map (`{semantic_module: LigerPatch}`);
-- whether loss kernels are compatible with the recipe's loss accounting.
+- for custom models: a `custom_patches` map (`{module_name: LigerPatch}`);
+- which modules to exclude (defaults to the loss kernels).
 
 ## Workflow
 
 ### 1. Initialize The Kit
 
 ```python
-from mvp_engine.kit import LigerKernelKit
+from mvp_engine.kit.model.liger import LigerKernelKit
 
 self.liger_kit = LigerKernelKit()
 ```
@@ -56,8 +57,8 @@ model = build_model(...)
 
 - `modules="auto"` forwards **nothing** for rope/norm/mlp (liger picks the correct
   per-model defaults, e.g. SwiGLU vs GeGLU, standard vs multimodal RoPE) and only
-  forces loss kernels **off**. This avoids re-encoding per-model knowledge the
-  library already owns.
+  forces the `excluded_modules` **off**. This avoids re-encoding per-model
+  knowledge the library already owns.
 - An explicit `dict` is forwarded as-is; enabling a module the helper does not
   accept fails fast. Accepted flags are trusted verbatim — liger may no-op some on
   a given model (e.g. dense Qwen3-VL SwiGLU), so prefer `auto` to defer to liger's
@@ -74,7 +75,7 @@ reports the patched paths:
 ```python
 from liger_kernel.transformers import LigerRMSNorm
 
-from mvp_engine.kit import LigerPatch
+from mvp_engine.kit.model.liger import LigerPatch
 
 report = self.liger_kit.apply(
     model_family="mymodel",
@@ -93,43 +94,44 @@ decision table, composite/vendored models — is `skills/model/liger-kernel/SKIL
 rope  rms_norm  layer_norm  swiglu  geglu  cross_entropy  fused_linear_cross_entropy
 ```
 
-Unknown names are rejected. `modules` selects modules on the official route only;
-the custom route applies every provided patch — the recipe owns the map's contents.
+Unknown names are rejected on the **official route only** — its vocabulary is the
+set of kwargs liger's helpers accept. The custom route accepts **any** module
+name, so a custom model can cover kernels beyond this list (e.g. a softmax or
+embedding swap); the recipe owns the map's contents. `modules` selects modules on
+the official route only.
 
-### 5. Loss Kernels
+### 5. Excluded Modules
 
-`cross_entropy` and `fused_linear_cross_entropy` are disabled by default because
-many recipes own loss reduction or token normalization (liger defaults FLCE to
-**on**, which the kit overrides off). Set `loss_kernels_allowed=True` only after
-the recipe preserves the expected loss contract. The custom route applies
-module-level symbol swaps only; `fused_linear_cross_entropy` rewrites a model's
-`ForCausalLM.forward` and is **out of scope** for custom models here.
+`excluded_modules` disables the named kernels on either route (forced off on the
+official route, skipped on the custom route). It defaults to the loss kernels
+(`cross_entropy`, `fused_linear_cross_entropy`) because many recipes own loss
+reduction or token normalization and liger defaults FLCE to **on**. Pass
+`excluded_modules=()` only after the recipe preserves the expected loss contract.
+Note `fused_linear_cross_entropy` rewrites a model's `ForCausalLM.forward`, so it
+cannot be expressed as a custom symbol swap anyway.
 
 ## Validation
 
 ### Soft Validation
 
-- official route infers from `AutoConfig.model_type` unless overridden;
-- `liger-kernel` remains optional and lazily imported;
-- enabling a module unsupported by the official helper fails clearly;
-- custom patches fail clearly when a target symbol is missing;
+- the kit is called before the model is built;
 - custom per-model knowledge lives in the recipe, not the kit;
-- loss kernels are guarded by recipe compatibility.
+- `excluded_modules` keeps the loss kernels off unless the recipe owns a
+  compatible loss path.
 
 ### Hard Validation
 
-```bash
-pytest tests/test_liger_kernel_kit.py -q
-```
-
-For recipe usage, also run the recipe structure test and a smoke test in an
-environment with `liger-kernel` and the required accelerator resources.
+There are no kit-level test files. Validate at the recipe level: copy
+`skills/model/liger-kernel/references/asserts.py` to
+`recipes/<recipe>/tests/skills/liger-kernel/asserts.py` so the recipe structure
+and smoke tests verify the wiring and the runtime replacement, and compare
+early-step smoke loss with Liger on/off on GPU/NPU.
 
 ## Output
 
 - State route (official/custom), resolved modules, and helper or patched symbols
   (from the returned `LigerKernelReport`).
-- State whether loss kernels are allowed.
+- State the excluded modules.
 - Report validation commands and runtime gaps.
 
 ## Read On Demand
