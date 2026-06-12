@@ -18,6 +18,7 @@ if TYPE_CHECKING:
         MLLMSampleKit,
         ModelInputs,
         PackingOptions,
+        StepEstimateResult,
     )
     from .optim import OptimKit
     from .perf.mfu import MFUKit
@@ -35,6 +36,7 @@ __all__ = [
     "OptimKit",
     "PackingOptions",
     "PerTokenLossGuard",
+    "StepEstimateResult",
     "TokenNormedLossKit",
     "TokenLossStats",
     "apply_chunked_token_loss_patch",
@@ -53,6 +55,7 @@ _EXPORT_MODULES = {
     "OptimKit": ".optim",
     "PackingOptions": ".mllm",
     "PerTokenLossGuard": ".loss.token_loss",
+    "StepEstimateResult": ".mllm",
     "TokenLossStats": ".loss.token_loss",
     "TokenNormedLossKit": ".loss.token_loss",
     "apply_chunked_token_loss_patch": ".loss.token_loss",

@@ -27,6 +27,7 @@ if TYPE_CHECKING:
         finalize_packed_samples,
     )
     from .sample import IMAGE_PLACEHOLDER, ROLE_MAP, MLLMSampleKit
+    from .step_estimation import StepEstimateResult
     from .types import CanonicalMedia, CanonicalMLLMSample, ModelInputs
 
 
@@ -60,6 +61,7 @@ __all__ = [
     "PackingAssembler",
     "PackingOptions",
     "ROLE_MAP",
+    "StepEstimateResult",
     "THOUGHT_MARKERS",
     "THOUGHT_PATTERN",
     "THOUGHT_PREFIX",
@@ -85,6 +87,7 @@ _EXPORT_MODULES = {
     "PackingAssembler": ".packing",
     "PackingOptions": ".packing",
     "ROLE_MAP": ".sample",
+    "StepEstimateResult": ".step_estimation",
     "THOUGHT_MARKERS": ".data",
     "THOUGHT_PATTERN": ".data",
     "THOUGHT_PREFIX": ".data",

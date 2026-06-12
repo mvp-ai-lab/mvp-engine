@@ -1,11 +1,12 @@
 """Reusable MLLM dataset, dataloader, and collation utilities."""
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from functools import partial
 from typing import Any
 
 import torch
+import torch.distributed as dist
 from mvp_dataset import Dataset, TorchLoader
 from mvp_dataset.core import RuntimeContext
 from torch.nn.utils.rnn import pad_sequence
@@ -17,6 +18,8 @@ from .media import MLLMMediaKit, build_empty_sample
 from .packing import PackingAssembler, PackingOptions
 from .packing import finalize_packed_samples as finalize_token_packed_samples
 from .sample import IMAGE_PLACEHOLDER, MLLMSampleKit
+from .step_estimation import StepEstimateResult
+from .step_estimation import estimate_total_steps as estimate_packed_total_steps
 from .types import ModelInputs
 
 THOUGHT_PREFIX = "<think>\n"
@@ -24,6 +27,19 @@ THOUGHT_SUFFIX = "\n</think>\n\n"
 THOUGHT_PATTERN = re.compile(f"{re.escape(THOUGHT_PREFIX)}(.*?){re.escape(THOUGHT_SUFFIX)}", re.DOTALL)
 THOUGHT_MARKERS = (THOUGHT_PREFIX.strip(), THOUGHT_SUFFIX.strip())
 MULTIMODAL_PLACEHOLDER = "<|mvp_multimodal_placeholder|>"
+
+
+def _resolve_data_parallel_dims(
+    device_mesh: object | None,
+    dp_dims: str | Sequence[str] | None,
+) -> Sequence[str] | str | None:
+    """Resolve default data-parallel mesh dimensions for data loading."""
+    if dp_dims is not None or device_mesh is None:
+        return dp_dims
+
+    mesh_dim_names = tuple(getattr(device_mesh, "mesh_dim_names", ()) or ())
+    resolved = tuple(dim_name for dim_name in mesh_dim_names if dim_name != "tensor")
+    return resolved or None
 
 
 class MLLMDataKit:
@@ -92,9 +108,17 @@ class MLLMDataKit:
         seed: int = 42,
         packing: PackingOptions = PackingOptions(),
         thinking_mode: bool | None | str = True,
+        device_mesh: object | None = None,
+        dp_dims: str | Sequence[str] | None = None,
     ) -> Dataset:
         """Build an always-packed MLLM training dataset pipeline."""
-        context = RuntimeContext.from_runtime(seed=seed)
+        resolved_dp_dims = _resolve_data_parallel_dims(device_mesh, dp_dims)
+        if device_mesh is None and resolved_dp_dims is not None:
+            raise ValueError("`device_mesh` is required when `dp_dims` is provided.")
+        if device_mesh is None or resolved_dp_dims is None:
+            context = RuntimeContext.from_runtime(seed=seed)
+        else:
+            context = RuntimeContext.from_runtime(seed=seed, device_mesh=device_mesh, dp_dims=resolved_dp_dims)
 
         dataset = Dataset.from_source(
             dataset_source,
@@ -160,6 +184,34 @@ class MLLMDataKit:
         dataset = dataset.map(self.finalize_packed_samples)
 
         return dataset
+
+    def estimate_total_steps(
+        self,
+        dataset: Dataset,
+        *,
+        batch_size: int,
+        gradient_accumulation_steps: int,
+        data_parallel_world_size: int,
+        data_parallel_group: dist.ProcessGroup | None = None,
+        device: torch.device | None = None,
+        mode: str = "estimate",
+        target_confidence: str = "High",
+        confidence_window_size: int = 100,
+        sync_interval: int = 10,
+    ) -> StepEstimateResult:
+        """Infer optimizer steps by consuming a finite packed dataset pipeline."""
+        return estimate_packed_total_steps(
+            dataset,
+            batch_size=batch_size,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            data_parallel_world_size=data_parallel_world_size,
+            data_parallel_group=data_parallel_group,
+            device=device,
+            mode=mode,
+            target_confidence=target_confidence,
+            confidence_window_size=confidence_window_size,
+            sync_interval=sync_interval,
+        )
 
     def build_collator(
         self, *, pad_token_id: int, processor: Any, ignore_index: int = -100

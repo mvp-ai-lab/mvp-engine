@@ -10,6 +10,7 @@ if TYPE_CHECKING:
         MLLMSampleKit,
         ModelInputs,
         PackingOptions,
+        StepEstimateResult,
     )
     from .model import MLLMModelKit
 
@@ -21,6 +22,7 @@ __all__ = [
     "MLLMSampleKit",
     "ModelInputs",
     "PackingOptions",
+    "StepEstimateResult",
 ]
 
 _EXPORT_MODULES = {
@@ -31,6 +33,7 @@ _EXPORT_MODULES = {
     "MLLMSampleKit": ".data",
     "ModelInputs": ".data",
     "PackingOptions": ".data",
+    "StepEstimateResult": ".data",
 }
 
 

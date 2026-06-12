@@ -28,7 +28,6 @@ from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 from ..configs.schema import Qwen3VLConfig
 from ..model import patch_qwen3vl_conv3d, patch_qwen3vl_model_flops
 from ..model.packing import prepare_packed_model_inputs
-from ..utils.misc import infer_total_steps
 
 if TYPE_CHECKING:
     from transformers import ProcessorMixin
@@ -91,23 +90,39 @@ class Qwen3VLEngine(Engine):
             image_max_pixels=self.config.model.image_max_pixels,
         )
 
-        # Step 2: when total_steps=-1, run one finite lightweight data pass to
-        # count packed samples and infer one-epoch optimization steps.
-        if int(self.config.loop.total_steps) == -1:
-            self.config.loop.total_steps = infer_total_steps(
-                self.config,
-                processor=self.processor,
-                device=self.device,
-                data_parallel_world_size=self.dp_world_size,
-                data_parallel_group=self.dp_group,
-            )
-
-        # Step 3: build the real training/eval dataset with the full preprocess.
+        # Step 2: configure token packing shared by estimation and training.
         packing = PackingOptions(
             selection_strategy=self.config.data.packing_selection_strategy,
             open_pack_limit=int(self.config.data.packing_open_pack_limit),
             buffer_size=int(self.config.data.packing_buffer_size),
         )
+
+        # Step 3: when total_steps=-1, consume one finite packed data pass to
+        # estimate one-epoch optimization steps.
+        if int(self.config.loop.total_steps) == -1:
+            estimation_dataset = self.data_kit.build_dataset(
+                dataset_path=self.config.data.train_path,
+                processor=self.processor,
+                max_seq_len=int(self.config.data.max_seq_len),
+                resample=False,
+                resolve_refs=False,
+                ref_columns=self.config.data.ref_columns,
+                seed=self.config.seed,
+                packing=packing,
+                thinking_mode=self.config.data.thinking_mode,
+                device_mesh=self.device_mesh,
+            )
+            estimate = self.data_kit.estimate_total_steps(
+                estimation_dataset,
+                batch_size=int(self.config.data.batch_size),
+                gradient_accumulation_steps=int(self.config.optim.gradient_accumulation_steps),
+                data_parallel_world_size=self.dp_world_size,
+                data_parallel_group=self.dp_group,
+                device=self.device,
+            )
+            self.config.loop.total_steps = estimate.total_steps
+
+        # Step 4: build the real training/eval dataset with the full preprocess.
         dataset = self.data_kit.build_dataset(
             dataset_path=self.config.data.train_path,
             processor=self.processor,
@@ -118,9 +133,10 @@ class Qwen3VLEngine(Engine):
             seed=self.config.seed,
             packing=packing,
             thinking_mode=self.config.data.thinking_mode,
+            device_mesh=self.device_mesh,
         )
 
-        # Step 4: wrap the dataset in the normal TorchLoader and return the
+        # Step 5: wrap the dataset in the normal TorchLoader and return the
         # batched dataloader used by the engine.
         collate_fn = self.data_kit.build_collator(
             pad_token_id=int(self.processor.tokenizer.pad_token_id),
