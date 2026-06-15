@@ -1,0 +1,65 @@
+dev_mode: false
+engine: Qwen3PTEngine
+
+seed: 42
+deterministic: false
+
+project:
+  name: "qwen3_pt-8b-pretrain"
+  dir: "./outputs"
+
+log:
+  interval: 1
+  backends: ["terminal", "file"]
+  accumulation_size: 1
+  timer_window_size: 10
+
+parallel:
+  mesh:
+    replicate: 1
+    shard: -1
+    tensor: 1
+
+data:
+  train_path: "./data/qwen3-pretrain/meta.json"
+  text_field: "data"
+  packing_selection_strategy: "best_fit"
+  packing_open_pack_limit: 8
+  packing_buffer_size: 64
+  max_seq_len: 8192
+  batch_size: 1
+  num_workers: 8
+
+model:
+  pretrained_model_name_or_path: "Qwen/Qwen3-8B-Base"
+  attn_implementation: "sdpa"
+  train_from_scratch: true
+  init_seed: 42
+  gradient_checkpointing:
+    enabled: true
+    use_reentrant: false
+  freeze_llm: false
+  compile:
+    enabled: false
+    backend: "inductor"
+    mode: "default"
+
+optim:
+  lr: 3.0e-4
+  weight_decay: 0.1
+  gradient_accumulation_steps: 1
+  mixed_precision: "bf16"
+  beta1: 0.9
+  beta2: 0.95
+  min_lr_rate: 0.1
+  warmup_steps: 2000
+  clip_grad_norm: 1.0
+
+loop:
+  policy: "iter"
+  total_steps: 10000
+
+checkpoint:
+  interval: 5000
+  keep_n: 2
+  hf_enable: false
