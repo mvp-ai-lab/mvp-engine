@@ -84,6 +84,7 @@ class BaseParallelConfig(BaseModel):
 
     mesh: BaseMeshConfig = Field(default_factory=BaseMeshConfig)
     backend_kwargs: BaseBackendKwargsConfig = Field(default_factory=BaseBackendKwargsConfig)
+    dist_timeout: int = Field(600, ge=1)
 
 
 class BaseOptimConfig(BaseModel):

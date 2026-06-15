@@ -1,3 +1,4 @@
+import datetime
 import os
 
 import torch
@@ -20,7 +21,7 @@ def _get_distributed_backend(device_type: str) -> str:
     return "gloo"
 
 
-def initialize_process_group():
+def initialize_process_group(dist_timeout: int = 600):
     """Initialize the torch.distributed process group based on env variables.
 
     Uses RANK and WORLD_SIZE from the environment, selects the device for the
@@ -61,6 +62,7 @@ def initialize_process_group():
         init_method="env://",
         world_size=world_size,
         rank=rank,
+        timeout=datetime.timedelta(seconds=dist_timeout),
     )
 
     simple_info(f"Process Group Initialized [bold]rank {rank}/{world_size}[/bold] on [yellow]{device}[/yellow]")

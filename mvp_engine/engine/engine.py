@@ -212,7 +212,7 @@ class Engine(ABC):
 
     def prepare_parallel(self) -> None:
         """Initialize distributed training backend."""
-        initialize_process_group()
+        initialize_process_group(dist_timeout=self.config.parallel.dist_timeout)
         mesh_cfg = self.config.parallel.mesh.model_dump()
         self.device_mesh = initialize_device_mesh(self.device.type, mesh_cfg)
 

@@ -28,6 +28,7 @@ parallel:
     shard: 8
     tensor: 1
   backend_kwargs: {}
+  dist_timeout: 600
 
 optim:
   lr: 0.001
