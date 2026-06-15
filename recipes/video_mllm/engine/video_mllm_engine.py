@@ -24,7 +24,7 @@ from ..dataset.dataset import build_dataset
 from ..dataset.processor import build_qwen3_vl_processor
 from ..guards.loss import PerTokenLossGuard
 from ..model import patch_qwen3vl_model_flops
-from ..model.onevision import apply_onevision_swap
+from ..model.onevision import apply_onevision_swap, bind_video_layout
 
 
 @ENGINE_REGISTRY.register()
@@ -206,14 +206,9 @@ class VideoMLLMEngine(Engine):
         if pixel_values_videos is not None and pixel_values_videos.is_floating_point():
             device_batch["pixel_values_videos"] = pixel_values_videos.to(self.dtype)
 
-        # Visual layout metadata is consumed by the OneVision adapter, not Qwen3-VL's forward kwargs.
-        self.unwrapped_model.model._video_vlm_token_positions = device_batch.pop("video_token_positions", None)
-        self.unwrapped_model.model._video_vlm_token_counts = device_batch.pop("video_token_counts", None)
-        self.unwrapped_model.model._video_vlm_frame_grid_thw = device_batch.pop("video_frame_grid_thw", None)
-        self.unwrapped_model.model._video_vlm_merge_sizes = device_batch.pop("video_merge_sizes", None)
-        self.unwrapped_model.model._video_vlm_frame_counts = device_batch.pop("video_frame_counts", None)
-
-        ctx.data = device_batch
+        # Bind visual-token layout onto the OneVision adapter and keep the remaining model kwargs.
+        # Shared with the eval path (one feeding implementation) so train and eval never drift.
+        ctx.data = bind_video_layout(self.unwrapped_model.model, device_batch)
         return ctx
 
     def forward_step(self, ctx: TrainStepContext) -> None:

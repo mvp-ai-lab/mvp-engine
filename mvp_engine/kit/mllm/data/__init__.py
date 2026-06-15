@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     )
     from .sample import IMAGE_PLACEHOLDER, ROLE_MAP, MLLMSampleKit
     from .types import CanonicalMedia, CanonicalMLLMSample, ModelInputs
+    from .video import VideoMediaKit
 
 
 def MLLMCollator(
@@ -66,6 +67,7 @@ __all__ = [
     "THOUGHT_SUFFIX",
     "VISION_END_TOKEN",
     "VISION_START_TOKEN",
+    "VideoMediaKit",
     "build_packed_block_causal_mask",
     "CanonicalMedia",
     "CanonicalMLLMSample",
@@ -91,6 +93,7 @@ _EXPORT_MODULES = {
     "THOUGHT_SUFFIX": ".data",
     "VISION_END_TOKEN": ".media",
     "VISION_START_TOKEN": ".media",
+    "VideoMediaKit": ".video",
     "build_packed_block_causal_mask": ".packing",
     "CanonicalMedia": ".types",
     "CanonicalMLLMSample": ".types",

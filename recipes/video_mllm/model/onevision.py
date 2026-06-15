@@ -234,3 +234,35 @@ def apply_onevision_swap(
     )
     model = patch_visual_feature_routing(model)
     return model
+
+
+VIDEO_LAYOUT_KEYS = (
+    "video_token_positions",
+    "video_token_counts",
+    "video_frame_grid_thw",
+    "video_merge_sizes",
+    "video_frame_counts",
+)
+
+
+def bind_video_layout(inner_model, batch: dict) -> dict:
+    """Bind per-batch OneVision visual-token layout onto the model, return remaining kwargs.
+
+    ``get_video_features`` (patched by :func:`patch_visual_feature_routing`) reads the layout
+    off hidden ``inner_model._video_vlm_*`` attributes. Both the training engine and the eval
+    path call this single helper, so train and eval feed the OneVision tower identically — the
+    layout protocol lives in one place and cannot drift between the two.
+
+    Args:
+        inner_model: The inner module ``get_video_features`` is bound to (``model.model``).
+        batch: A collated batch carrying the ``video_*`` layout tensors.
+
+    Returns:
+        The batch without the layout keys (i.e. the kwargs to pass to the model forward).
+    """
+    inner_model._video_vlm_token_positions = batch.get("video_token_positions")
+    inner_model._video_vlm_token_counts = batch.get("video_token_counts")
+    inner_model._video_vlm_frame_grid_thw = batch.get("video_frame_grid_thw")
+    inner_model._video_vlm_merge_sizes = batch.get("video_merge_sizes")
+    inner_model._video_vlm_frame_counts = batch.get("video_frame_counts")
+    return {key: value for key, value in batch.items() if key not in VIDEO_LAYOUT_KEYS}
