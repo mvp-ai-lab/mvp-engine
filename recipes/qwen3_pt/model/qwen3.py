@@ -32,7 +32,6 @@ def calculate_model_flops(
         batch=batch,
         tokens=tokens,
         attention_mask=attention_mask,
-        attn_implementation=getattr(config, "_attn_implementation", None),
     )
 
     per_layer = (
@@ -59,7 +58,6 @@ def _count_attention_token_pairs(
     batch: int,
     tokens: int,
     attention_mask: torch.Tensor | None,
-    attn_implementation: str | None,
 ) -> int:
     """Count logical attention token pairs for padded or packed text tokens."""
     attention_token_pairs = batch * tokens * tokens
@@ -77,7 +75,10 @@ def _count_attention_token_pairs(
                 continue
             segment_lengths = torch.bincount(segment_ids, minlength=max_mask_value + 1)[1:]
             attention_token_pairs += int(torch.square(segment_lengths).sum().item())
-    elif attn_implementation == "flash_attention_2":
+    else:
+        # A 0/1 mask is a padding mask (or a single packed segment): padded
+        # tokens never participate in attention, so count only valid lengths.
+        # This is the logical attention pattern for sdpa/eager and FA2 alike.
         valid_lengths = mask.ne(0).sum(dim=-1)
         attention_token_pairs = int(torch.square(valid_lengths).sum().item())
 
