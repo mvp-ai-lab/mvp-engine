@@ -1,0 +1,72 @@
+dev_mode: false
+engine: PanguvlEngine
+
+seed: 219
+deterministic: false
+
+project:
+  name: "panguvl"
+  dir: "./outputs"
+
+log:
+  interval: 1
+  backends: ["terminal", "file", "wandb"]
+  accumulation_size: 1
+  timer_window_size: 10
+
+init_from_checkpoint: /home/k00885418/projects/mvp-engine/outputs/panguvl-qwen3vl_8b-alignment_20260522164724_7d1c/checkpoints/iter_1544
+parallel:
+  mesh:
+    replicate: -1
+    shard: 16
+    tensor: 1
+  dist_timeout: 7200
+data:
+  train_path: "/home/k00885418/projects/mvp-engine/data/Open-Bee/Open-Bee-shuffle-v2/stage2/*.parquet"
+  thinking_mode: "non-empty"
+  cache: false
+  shuffle_buffer: 4096
+  packing: true
+  packing_selection_strategy: "best_fit"
+  packing_open_pack_limit: 8
+  packing_buffer_size: 64
+  max_seq_len: 8192
+  batch_size: 1
+  num_workers: 16
+model:
+  pretrained_model_name_or_path: "/home/k00885418/projects/test_checkpoint/OpenPangu-VL-7B-vanilla/openPangu-VL-7B"
+  attn_implementation: "flash_attention_2"
+  image_max_pixels: 1280000
+  gradient_checkpointing:
+    enabled: true
+    use_reentrant: true
+  # Freeze flags — set true to stop gradient for the corresponding sub-module.
+  # Defaults follow the alignment-stage convention: train merger only.
+  freeze_vit: false
+  freeze_merger: false
+  freeze_llm: false
+  compile:
+    enabled: true
+    backend: "inductor"
+    mode: "default"
+optim:
+  optimizer: "AdamW"
+  lr: 4.0e-5
+  weight_decay: 0.0
+  global_batch_size: 256
+  gradient_accumulation_steps: -1
+  mixed_precision: "bf16"
+  warmup_ratio: 0.002
+  clip_grad_norm: 1.0
+  loss_spike_skip_multiplier: null
+  loss_spike_skip_window_size: 8
+  loss_spike_skip_min_history: 3
+
+loop:
+  policy: "iter"
+  total_steps: -1
+
+checkpoint:
+  interval: 200
+  keep_n: 2
+  hf_enable: true

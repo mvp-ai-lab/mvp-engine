@@ -1,0 +1,69 @@
+dev_mode: false
+engine: PanguvlEngine
+
+seed: 42
+deterministic: false
+
+project:
+  name: "panguvl-qwen3vl_8b-sft"
+  dir: "./outputs"
+
+log:
+  interval: 1
+  backends: ["terminal", "file", "wandb"]
+  accumulation_size: 1
+  timer_window_size: 10
+
+parallel:
+  mesh:
+    replicate: -1
+    shard: 8
+    tensor: 1
+data:
+  train_path: "./data/panguvl/stage3/**/*.parquet"
+  thinking_mode: "non-empty"
+  cache: false
+  shuffle_buffer: 1000
+  packing: true
+  packing_selection_strategy: "best_fit"
+  packing_open_pack_limit: 8
+  packing_buffer_size: 64
+  max_seq_len: 16384
+  batch_size: 1
+  num_workers: 12
+model:
+  pretrained_model_name_or_path: "./pretrained/Qwen3-VL-8B-Base-woDS-stage2"
+  attn_implementation: "flash_attention_2"
+  image_max_pixels: 1048576
+  gradient_checkpointing:
+    enabled: true
+    use_reentrant: false
+  # Freeze flags — set true to stop gradient for the corresponding sub-module.
+  # Defaults follow the alignment-stage convention: train merger only.
+  freeze_vit: false
+  freeze_merger: false
+  freeze_llm: false
+  compile:
+    enabled: true
+    backend: "inductor"
+    mode: "default"
+optim:
+  optimizer: "AdamW"
+  lr: 5.0e-5
+  weight_decay: 0.0
+  gradient_accumulation_steps: 2
+  mixed_precision: "bf16"
+  warmup_ratio: 0.0
+  clip_grad_norm: 1.0
+  loss_spike_skip_multiplier: null
+  loss_spike_skip_window_size: 8
+  loss_spike_skip_min_history: 3
+
+loop:
+  policy: "iter"
+  total_steps: -1
+
+checkpoint:
+  interval: 200
+  keep_n: 2
+  hf_enable: true
