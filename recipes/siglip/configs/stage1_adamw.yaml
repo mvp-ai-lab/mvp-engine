@@ -1,0 +1,43 @@
+dev_mode: false
+engine: SigLipEngine
+project:
+  name: "siglip"
+data:
+  dataset_type: "webdataset"
+  data_path: "/mnt/data-alpha-sg-01/team-camera/shared/SigLIP/data/"
+  resize: 224
+  color_jitter: 0.0
+  hflip: 0.5
+  no_aug: True
+  auto_augment: rand-m7-mstd0.5-inc1
+  batch_size: 1024
+  num_workers: 2
+  shuffle_buffer: 5000
+model:
+  name: "PotatoSigLIP"
+  vision_config:
+    depth: 12
+    hidden_size: 768
+    num_heads: 8
+    intermediate_size: 3072
+    temporal_patch_size: 1
+    hidden_act: "gelu"
+    fullatt_block_indexes: [2, 5, 8, 11]
+  text_config:
+    hidden_size: 768
+    intermediate_size: 3072
+optim:
+  name: adamw
+  lr: 0.001
+  weight_decay: 0.05
+  gradient_accumulation_steps: 1
+  mixed_precision: "bf16"
+  warmup_ratio: 0.1
+  clip_grad_norm: 1
+  compile: False
+loop:
+  policy: "iter"
+  total_steps: 10000
+  checkpoint:
+    keep_n: 5
+    interval: 5000
