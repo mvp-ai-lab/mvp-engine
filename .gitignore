@@ -187,3 +187,9 @@ slurmlogs
 CUSTOM.md
 /references
 .codex
+
+#user-output
+batch_files/
+slurm/
+notebooks/
+slurmlog/
