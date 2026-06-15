@@ -42,16 +42,23 @@ def test_engine_structure(engine_class: type) -> None:
 
 
 def assert_before_train_end(engine) -> None:
-    """After setup, verify enabled Liger config reaches the built model.
+    """After setup, verify enabled module-class Liger kernels reach the built model.
 
-    Module-class scanning covers norm/MLP swaps (present in every official family
-    and typical custom maps); function-only swaps such as rope are validated by
-    the smoke loss comparison instead.
+    Only module-class kernels (rms_norm, layer_norm, swiglu, geglu) appear as
+    ``nn.Module`` instances. Function-level patches (rope, cross_entropy,
+    fused_linear_cross_entropy) are not modules and are validated by the smoke loss
+    comparison instead of this scan.
     """
+    module_class_kernels = {"rms_norm", "layer_norm", "swiglu", "geglu"}
     liger = getattr(engine.config.model, "liger_kernel", None)
     if liger is None or not liger.enabled:
         return
+    modules = getattr(liger, "modules", "auto")
+    if isinstance(modules, dict) and not (module_class_kernels & {name for name, on in modules.items() if on}):
+        return  # only function-level kernels enabled -> nothing to scan for
+
+    model = engine.unwrapped_model if hasattr(engine, "unwrapped_model") else engine.model
     liger_modules = [
-        name for name, module in engine.model.named_modules() if module.__class__.__module__.startswith("liger_kernel")
+        name for name, module in model.named_modules() if module.__class__.__module__.startswith("liger_kernel")
     ]
-    assert liger_modules, "Liger is enabled but no liger_kernel modules are present in the built model."
+    assert liger_modules, "Liger module-class kernels are enabled but none are present in the built model."
