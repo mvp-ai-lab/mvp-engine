@@ -162,6 +162,11 @@ class Engine(ABC):
             raise NotImplementedError(f"Unsupported loop policy: {self.loop_policy}")
 
     @property
+    def max_grad_norm(self) -> float | None:
+        """Maximum gradient norm for clipping, or None to disable."""
+        return self.config.optim.clip_grad_norm
+
+    @property
     def project_dir(self) -> Path:
         """Root directory for outputs and checkpoints."""
         return Path(self.config.runtime.output_dir)
@@ -435,10 +440,18 @@ class Engine(ABC):
             )
 
         logger.info("Initializing Timer...")
+        # FIXME: use progress rather than total_steps.
         self.timer = Timer(
             total_progress=self.total_steps,
             window_size=self.config.log.timer_window_size,
         )
+
+        if self.config.init_from_checkpoint is not None:
+            self.load(
+                self.config.init_from_checkpoint,
+                restore_training_state=False,
+                restore_rng_state=False,
+            )
 
     def do_train(self) -> None:
         """Execute the main training loop based on loop_policy."""

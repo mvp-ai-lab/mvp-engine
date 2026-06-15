@@ -120,6 +120,7 @@ class BaseEngineConfig(BaseModel):
     engine: str = "Engine"
     seed: int = 42
     deterministic: bool = False
+    init_from_checkpoint: str | None = None
     project: BaseProjectConfig = Field(default_factory=BaseProjectConfig)
     runtime: BaseRuntimeInfo = Field(default_factory=BaseRuntimeInfo)
     log: BaseLogConfig = Field(default_factory=BaseLogConfig)
@@ -127,3 +128,16 @@ class BaseEngineConfig(BaseModel):
     optim: BaseOptimConfig = Field(default_factory=BaseOptimConfig)
     loop: BaseLoopConfig = Field(default_factory=BaseLoopConfig)
     checkpoint: BaseCheckpointConfig = Field(default_factory=BaseCheckpointConfig)
+
+    @field_validator("init_from_checkpoint", mode="before")
+    @classmethod
+    def validate_init_from_checkpoint(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise TypeError("`init_from_checkpoint` must be a string or null.")
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("`init_from_checkpoint` must not be empty.")
+        return normalized
