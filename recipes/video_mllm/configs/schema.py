@@ -20,7 +20,7 @@ class VideoMLLMDataConfig(BaseModel):
     model_config = ConfigDict(frozen=False, extra="forbid")
 
     train_path: str = "./data/video_mllm/smoke.jsonl"
-    source: Literal["jsonl", "parquet"] = "jsonl"
+    source: Literal["jsonl", "parquet", "lance"] = "jsonl"
     video_root: str | None = None
     max_seq_len: int = Field(8192, ge=1)
     batch_size: int = 1

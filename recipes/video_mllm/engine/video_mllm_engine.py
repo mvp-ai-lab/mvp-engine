@@ -205,6 +205,13 @@ class VideoMLLMEngine(Engine):
         pixel_values_videos = device_batch.get("pixel_values_videos")
         if pixel_values_videos is not None and pixel_values_videos.is_floating_point():
             device_batch["pixel_values_videos"] = pixel_values_videos.to(self.dtype)
+            # NaN probe: flag non-finite decoded video tensors (data-side bug) with the offending rank.
+            if not torch.isfinite(device_batch["pixel_values_videos"]).all():
+                _r = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+                logger.error(
+                    f"[NAN-PROBE] non-finite pixel_values_videos rank={_r} node={_r // 8} "
+                    f"shape={tuple(pixel_values_videos.shape)}"
+                )
 
         # Bind visual-token layout onto the OneVision adapter and keep the remaining model kwargs.
         # Shared with the eval path (one feeding implementation) so train and eval never drift.
@@ -228,6 +235,19 @@ class VideoMLLMEngine(Engine):
                 key: value for key, value in data.items() if key not in {"total_tokens", "effective_tokens"}
             }
             outputs = self.model(**model_inputs)
+
+        # NaN probe: when local loss is non-finite, log the rank/node and whether the input video
+        # tensors vs the logits are the source (data-side vs model/hardware). Cheap: only on nan.
+        if not torch.isfinite(outputs.loss).all():
+            _r = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+            _pv = data.get("pixel_values_videos")
+            _logits = getattr(outputs, "logits", None)
+            logger.error(
+                f"[NAN-PROBE] non-finite loss rank={_r} node={_r // 8} "
+                f"pixel_values_finite={bool(torch.isfinite(_pv).all()) if _pv is not None else None} "
+                f"logits_finite={bool(torch.isfinite(_logits).all()) if _logits is not None else None} "
+                f"input_ids_shape={tuple(data['input_ids'].shape)} effective_tokens={data.get('effective_tokens')}"
+            )
 
         # `video_grid_thw` here is a synthetic [1, visual_token_count, 1] placeholder row, not a
         # real spatial grid, and the visual tower is the (frozen) OneVision encoder rather than the
