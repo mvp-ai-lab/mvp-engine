@@ -1,14 +1,13 @@
 ---
 name: loss-spike-guard
-description: Add, review, update, and validate recipe-local loss spike guards for scalar-loss or per-token-loss training, including config thresholds, micro-batch skip wiring, distributed loss reduction.
+description: Add, review, update, and validate loss spike guards for scalar-loss or per-token-loss training, including config thresholds, micro-batch skip wiring, distributed loss reduction.
 ---
 
 # Loss Spike Guard
 
 ## Goal
 
-Add a recipe-local guard that skips anomalous micro-batch loss contributions
-without moving training-policy logic into `mvp_engine/`:
+Use the shared loss-kit guards to skip anomalous micro-batch loss contributions:
 
 - keep the guard disabled by default unless a recipe stage intentionally enables
   it;
@@ -26,6 +25,8 @@ Identify these before editing:
 - engine `prepare_optimizer()` or initialization path;
 - engine `forward_step()` and `backward_step()` loss shape;
 - whether `outputs["loss"]` is scalar or unreduced per-token loss;
+- if using token-normalized training, where `TokenNormedLossKit` accumulates the
+  micro-batch loss sum;
 - distributed context used for scalar reductions;
 - recipe-local `tests/test_structure.py` and `tests/test_smoke.py`.
 
@@ -46,6 +47,7 @@ Find:
 
 - where optimizer-related state is initialized;
 - where micro-batch loss is converted into `ctx.loss`;
+- whether token loss is accumulated through `TokenNormedLossKit`;
 - where metrics consume loss sums or scalar loss values;
 - where distributed token/loss reductions already happen;
 - which YAML stage should enable the guard, if any.
@@ -74,41 +76,45 @@ Only enable the guard in YAML configs where spike skipping is intended. Do not
 add explicit disabled keys to unrelated stage YAMLs just to restate schema
 defaults.
 
-### 3. Add Guard Logic
+### 3. Use Guard Logic
 
-Keep guard code recipe-local, for example:
-
-```text
-recipes/<recipe>/guards/loss.py
-```
-
-Implement:
+Use the shared loss-kit guard implementations:
 
 - `LossGuard` for scalar losses;
 - `PerTokenLossGuard` only when the recipe uses unreduced per-token loss sums.
 
 Read `references/guard_logic.md` before implementing or changing the check
-semantics.
+semantics in `mvp_engine/kit/loss/loss.py` or
+`mvp_engine/kit/loss/token_loss.py`.
 
 ### 4. Wire The Engine
 
-Create the guard during engine initialization, commonly in `prepare_optimizer()`
-or another path that runs before the first training step:
+Create the guard during engine initialization or another path that runs before
+the first training step:
 
 ```python
-self.loss_guard = LossGuard(...)
+self.loss_kit.build_loss_guard(...)
 ```
 
-In `backward_step()`, call the guard before backward and before final metric
-updates for the current micro-batch.
+For token-normalized per-token loss, use `self.token_loss_kit.build_loss_guard(...)`.
+
+In `backward_step()`, call `self.loss_kit.guard_loss(...)` or
+`self.token_loss_kit.guard_loss(...)` before backward and before final metric
+updates for the current micro-batch. `guard_loss(...)`
+returns `True` when the loss should participate in backward.
 
 For scalar loss, skip by zeroing the backward loss and the logged micro-batch
 loss contribution.
 
 For per-token loss, call the guard with local loss sum and local supervised token
 count, then zero the local loss sum and backward loss when the guard returns
-`True`. Do not set token count to zero unless the recipe already treats skipped
+`False`. Do not set token count to zero unless the recipe already treats skipped
 samples as removed from denominators.
+
+When the recipe uses `TokenNormedLossKit`, zero `local_micro_loss_sum` before
+calling `TokenNormedLossKit.accumulate_microbatch(...)`; keep token counts
+unchanged unless the recipe explicitly removes skipped samples from the
+normalization denominator.
 
 ### 5. Preserve Training Semantics
 

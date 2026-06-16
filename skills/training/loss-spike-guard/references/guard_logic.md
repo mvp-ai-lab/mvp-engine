@@ -48,9 +48,12 @@ Do not feed unreduced tensors directly into the scalar guard.
 Call the guard before backward:
 
 ```python
-if self.loss_guard.check(loss_value, step=int(self.step)):
+if not self.loss_kit.guard_loss(loss_value, step=int(self.step)):
     loss = loss * 0.0
 ```
+
+For per-token loss handled by `TokenNormedLossKit`, call
+`self.token_loss_kit.guard_loss(loss_sum, token_count, step=int(self.step))`.
 
 For per-token loss, zero the local loss sum used by metric accumulation when the
 micro-batch is skipped. Keep token counts unchanged unless the recipe's existing

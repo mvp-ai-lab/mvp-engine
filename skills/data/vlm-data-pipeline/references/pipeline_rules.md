@@ -1,21 +1,21 @@
 # VLM Data Pipeline Rules
 
-Use this reference when implementing or reviewing a recipe-local VLM data
-pipeline.
+Use this reference when implementing or reviewing a VLM data pipeline that uses
+or extends `MLLMDataKit`, `MLLMSampleKit`, and `MLLMMediaKit`.
 
 ## Reference Shape
 
-`recipes/basic_vlm` is the richest local reference:
+Primary kit references:
 
-- `dataset/dataset.py`: dataset backend, transform order, reference resolution,
-  and materialization boundary;
-- `dataset/preprocess.py`: raw schema normalization, media placeholder handling,
-  chat rendering, tokenization, and label construction;
-- `dataset/processor.py`: processor loading, padding, pixel limits, and cache
-  fingerprinting;
-- `dataset/collator.py`: text/media collation and text-only local-batch handling;
-- `dataset/types.py`: model-facing batch fields;
-- `guards/data.py`: staged raw and processed sample guards.
+- `mvp_engine/kit/mllm/data/data.py`: processor, dataset, packing, collation,
+  and dataloader orchestration;
+- `mvp_engine/kit/mllm/data/sample.py`: raw schema normalization;
+- `mvp_engine/kit/mllm/data/media.py`: model-family media token and tensor
+  behavior;
+- `mvp_engine/kit/mllm/data/guard.py`: staged raw and processed sample guards.
+
+`recipes/openbee/engine/openbee_engine.py` and `recipes/openbee/utils/misc.py`
+show one recipe's kit wiring and total-step inference.
 
 Use these as patterns, but replace processor-specific details for non-Qwen
 recipes.
@@ -59,6 +59,7 @@ Validate cheap schema errors before tokenization or media IO.
 ## Preprocess Rules
 
 Preprocess one valid raw row into model-facing tensors and lightweight metadata.
+In the standard kit this is split across SampleKit, DataKit, and MediaKit.
 
 Rules:
 
@@ -117,7 +118,9 @@ Do not hard-code Qwen image token or resize rules into a non-Qwen recipe.
 
 ## Collator Rules
 
-The collator builds one model batch:
+The collator builds one model batch. In the standard kit, use
+`MLLMDataKit.build_collator(...)` and override `MLLMMediaKit.collate(...)` for
+model-family media tensors:
 
 - pad `input_ids` with the tokenizer pad id;
 - pad `attention_mask` consistently with the model forward path;

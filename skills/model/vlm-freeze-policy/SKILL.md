@@ -1,175 +1,79 @@
 ---
 name: vlm-freeze-policy
-description: Add, review, update, and validate recipe-local VLM freeze policy for independently configurable vision encoder, connector/projector, and language model parameter groups, including optimizer and optional FLOPs/MFU integration.
+description: Add, review, update, and validate VLM freeze policy using
+  MLLMModelKit when possible, including vision/projector/language prefix groups,
+  optimizer interaction, trainable dtype handling, and MFU impacts.
 ---
 
 # VLM Freeze Policy
 
 ## Goal
 
-Add or maintain recipe-local VLM freeze policy without changing model math:
-
-- expose independent trainability controls for vision, connector, and language
-  components;
-- derive parameter groups from the real model's `named_parameters()`;
-- apply freezing before optimizer construction and distributed wrapping;
-- keep optimizer, trainable-parameter logs, precision upcasting, and optional
-  FLOPs/MFU paths consistent with `requires_grad`.
+Use `MLLMModelKit.apply_freeze_policy()` for standard VLM trainability control.
+Add recipe-local freeze logic only when prefix groups are not expressive enough
+for the target model.
 
 ## Required Inputs
 
-Identify these before editing:
-
-- target recipe path;
-- config schema and YAML configs;
-- model builder and engine `prepare_model()` / `prepare_optimizer()` paths;
-- loaded model class and real parameter names;
-- VLM component boundaries: vision encoder, connector/projector/resampler, and
-  language model;
-- optional FLOPs/MFU implementation if the recipe reports training FLOPs;
-- recipe-local `tests/test_structure.py` and `tests/test_smoke.py`.
-
-Ask the user only if component ownership or intended stage defaults cannot be
-derived from the model and recipe configs.
+- target recipe path and `prepare_model()` / optimizer paths;
+- freeze config fields and stage defaults;
+- real `named_parameters()` output;
+- model component boundaries: vision, projector/connector, language model;
+- optional FLOPs/MFU dependency on freeze state.
 
 ## Workflow
 
-### 1. Locate Runtime Integration Points
+### 1. Prefer MLLMModelKit
 
-Search the recipe first:
-
-```bash
-rg -n "freeze_|requires_grad|named_parameters|apply_freeze|trainable|calculate_model_flops|mfu" recipes/<recipe>
+```python
+model = self.model_kit.apply_freeze_policy(
+    model,
+    freeze_vit=self.config.model.freeze_vit,
+    freeze_projector=self.config.model.freeze_projector,
+    freeze_llm=self.config.model.freeze_llm,
+)
 ```
 
-Find:
+For non-Qwen names, pass explicit `vit_prefixes`, `projector_prefixes`, and
+`llm_prefixes`.
 
-- where the model is loaded and patched;
-- where the optimizer collects parameters;
-- where trainable parameter counts or dtype upcasting happen;
-- where distributed wrapping happens;
-- whether FLOPs/MFU depends on trainability.
+### 2. Preserve Build Order
 
-### 2. Define Parameter Groups
-
-Use the real loaded model's `named_parameters()` output. Do not assume Qwen,
-LLaVA, CLIP, or HF naming conventions.
-
-Typical groups:
-
-- vision encoder: patch embedding, vision tower, ViT blocks, visual trunk;
-- connector: projector, merger, adapter, resampler, Q-former, cross-modal bridge;
-- language model: text backbone, decoder blocks, embeddings, and output head.
-
-Prefer explicit prefixes or module-path predicates. Keep groups deterministic,
-non-overlapping, and easy to audit. Read `references/patterns.md` for naming and
-grouping examples.
-
-### 3. Add Config
-
-Expose freeze controls under `model`. Preserve existing field names when the
-recipe already has them:
-
-```yaml
-model:
-  freeze_vit: true
-  freeze_merger: false
-  freeze_llm: true
-```
-
-For new recipes, choose names that match the recipe's model vocabulary, such as
-`freeze_vision_encoder`, `freeze_projector`, and `freeze_language_model`.
-
-Defaults should describe the recipe's intended default training stage. Keep
-stage YAMLs explicit when different stages train different components.
-
-### 4. Apply Freeze Policy
-
-Apply freezing after the model has all trainable modules attached or patched,
-and before anything consumes `requires_grad`:
+Use this order unless the recipe documents a concrete exception:
 
 ```text
-1. load model
-2. apply recipe model patches, checkpointing hooks, and forward injections
-3. apply freeze policy
-4. upcast or count trainable parameters
-5. compile if enabled
-6. parallelize model
-7. build optimizer from trainable parameters
+load model -> recipe patches -> token-loss/FLOPs patches -> freeze policy
+-> trainable dtype upcast/counts -> checkpointing -> compile -> parallelize
+-> build optimizer
 ```
 
-The freeze helper should set `parameter.requires_grad = False` only for matched
-frozen groups. It should leave unmatched parameters unchanged or fail loudly if
-the recipe requires complete coverage.
+### 3. Fall Back Only For Non-Prefix Policies
 
-### 5. Update Dependent Paths
-
-Check every path that depends on trainability:
-
-- optimizer parameter collection must use `parameter.requires_grad`;
-- trainable parameter counts and logs must reflect the freeze policy;
-- fp32 trainable-parameter upcasting must skip frozen parameters;
-- distributed wrapping must not happen before freeze state is set;
-- FLOPs/MFU, if present, must receive freeze state where the estimate is
-  computed.
-
-For FLOPs, do not assume frozen means forward-only. A frozen module can still
-need input-gradient compute if gradients flow through it into trainable upstream
-or downstream modules. Use the MFU skill's FLOPs reference when the recipe
-reports MFU.
+Use recipe-local logic only for policies based on module type, regex, partial
+layer ranges, or dynamic trainability. Keep the result visible through
+`parameter.requires_grad` before optimizer construction.
 
 ## Validation
 
 ### Soft Validation
 
-Review the modified recipe without running tests:
-
-- parameter group predicates match real model parameter names;
-- groups are non-overlapping and cover the intended VLM components;
-- config exposes the intended freeze flags and stage YAMLs set them explicitly
-  when stages differ;
-- every freeze flag is consumed by the model builder or freeze helper;
-- freeze policy runs before optimizer construction and distributed wrapping;
-- optimizer, trainable-parameter logging, and trainable dtype upcasting use
-  `requires_grad`;
-- the intended stage has at least one trainable parameter;
-- optional FLOPs/MFU logic accounts for freeze state without treating every
-  frozen module as automatically forward-only;
-- no repo-wide freeze wrapper was added to `mvp_engine/`;
-- CPU-only or structure-only checks are not reported as completed runtime
-  freeze-policy validation.
+- freeze goes through `MLLMModelKit` or the fallback is justified;
+- prefixes match real parameter names and groups are non-overlapping;
+- at least one parameter remains trainable for each intended stage;
+- optimizer, trainable dtype upcast, logs, and MFU use `requires_grad`;
+- freeze happens before distributed wrapping and optimizer construction.
 
 ### Hard Validation
 
-Copy and adapt `references/asserts.py` into:
-
-```text
-recipes/<recipe>/tests/skills/vlm-freeze-policy/asserts.py
-```
-
-Ensure the recipe has `tests/test_structure.py` and `tests/test_smoke.py`; use
-`tests/templates/` if missing.
-
-Run in fresh subagents, in order, stopping on first failure:
-
-```bash
-pytest recipes/<recipe>/tests/test_structure.py -q
-pytest recipes/<recipe>/tests/test_smoke.py -q
-```
-
-If the recipe has multiple freeze stages, run smoke validation for the stage or
-config overrides changed by the task.
+Run structure and smoke tests for every changed stage or representative config.
 
 ## Output
 
-- State which component groups and config flags were used.
-- State where freeze policy is applied relative to model patches, compile,
-  distributed wrapping, and optimizer construction.
-- State optimizer, trainable-parameter logging, and optional FLOPs/MFU impacts.
-- Report soft validation and hard validation status.
-- Call out any remaining gap, such as no GPU/NPU environment for runtime smoke.
+- State freeze flags and component prefixes.
+- State build-order placement and optimizer/MFU impacts.
+- Report validation and remaining runtime gaps.
 
 ## Read On Demand
 
-- `references/asserts.py`: recipe-local hard-validation assertion template.
-- `references/patterns.md`: parameter-group, build-order, and FLOPs/MFU patterns.
+- `skills/kit/mllm-model-kit/references/freeze-policy.md`.
+- `references/patterns.md`: legacy grouping and FLOPs notes.
