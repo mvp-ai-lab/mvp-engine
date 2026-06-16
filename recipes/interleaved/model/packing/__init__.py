@@ -1,0 +1,21 @@
+"""Packed-attention helpers for the interleaved recipe."""
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .prepare import build_packed_fa2_varlen_kwargs, prepare_packed_model_inputs
+
+__all__ = [
+    "build_packed_fa2_varlen_kwargs",
+    "prepare_packed_model_inputs",
+]
+
+
+def __getattr__(name: str):
+    """Lazily resolve interleaved packing helper exports."""
+    if name not in __all__:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    from . import prepare
+
+    return getattr(prepare, name)
