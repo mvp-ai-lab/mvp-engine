@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from functools import partial
+from operator import methodcaller
 from typing import Any
 
 import torch
@@ -141,7 +142,7 @@ class MLLMDataKit:
         dataset = dataset.assemble(partial(assembler_cls, spec.packing))
         if spec.source.resolve_refs and spec.source.ref_columns:
             dataset = dataset.resolve_ref(ref_names=spec.source.ref_columns)
-        dataset = dataset.map(lambda pack: pack.to_model_inputs())
+        dataset = dataset.map(methodcaller("to_model_inputs"))
         dataset = dataset.assemble(
             partial(
                 MLLMModelInputGuard,
