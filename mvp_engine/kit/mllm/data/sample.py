@@ -265,14 +265,19 @@ class MLLMPack(list):
         """
         return len(self.samples)
 
-    def to_model_inputs(self) -> dict[str, Any]:
+    def to_model_inputs(self, *, load_media: bool = True) -> dict[str, Any]:
         """Load media and merge source samples into one packed model-input dict.
+
+        Args:
+            load_media: Whether to materialize media tensors before finalizing the pack.
 
         Returns:
             A packed model-input dictionary with concatenated token fields,
             ``pack_segment_ids``, ``source_sample_num``, and merged media fields.
         """
-        samples = [sample.load_media() for sample in self.samples if sample.token_length > 0]
+        samples = [sample for sample in self.samples if sample.token_length > 0]
+        if load_media:
+            samples = [sample.load_media() for sample in samples]
         samples = [sample for sample in samples if sample.token_length > 0]
         if not samples:
             empty = empty_model_sample()
@@ -296,5 +301,6 @@ class MLLMPack(list):
             ),
             "source_sample_num": len(samples),
         }
-        packed_sample.update(self.media_handler.merge_pack([sample.to_model_inputs() for sample in samples]))
+        if load_media:
+            packed_sample.update(self.media_handler.merge_pack([sample.to_model_inputs() for sample in samples]))
         return packed_sample

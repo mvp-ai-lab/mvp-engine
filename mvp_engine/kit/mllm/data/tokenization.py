@@ -54,8 +54,10 @@ class MLLMTokenizationHandler:
 
         input_ids: list[int] = []
         labels: list[int] = []
-        for segment in rendered_segments:
+        for segment_index, segment in enumerate(rendered_segments):
             if len(input_ids) >= self.max_seq_len:
+                if any(item.type != "text" for item in rendered_segments[segment_index:]):
+                    raise ValueError("truncation would skip media tokens.")
                 break
             if not isinstance(segment.value, str):
                 raise TypeError("rendered segment value must be a string.")
@@ -64,6 +66,10 @@ class MLLMTokenizationHandler:
             keep_len = min(len(segment_ids), self.max_seq_len - len(input_ids))
             if segment.type != "text" and keep_len < len(segment_ids):
                 raise ValueError("truncation would cut media tokens.")
+            if keep_len < len(segment_ids) and any(
+                item.type != "text" for item in rendered_segments[segment_index + 1 :]
+            ):
+                raise ValueError("truncation would skip media tokens.")
 
             kept_ids = segment_ids[:keep_len]
             input_ids.extend(kept_ids)

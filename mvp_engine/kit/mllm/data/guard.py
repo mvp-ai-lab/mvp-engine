@@ -90,41 +90,52 @@ class MLLMTextOnlyBatchGuard:
             device=batch["attention_mask"].device,
             dtype=batch["attention_mask"].dtype,
         )
-        batch_size = int(batch["input_ids"].shape[0])
+        batch_size, current_length = batch["input_ids"].shape
         dummy_length = int(dummy_input_ids.numel())
-        next_segment_id = int(batch["pack_segment_ids"][0].max().item()) + 1
+        row_lengths = batch["attention_mask"].sum(dim=-1).to(dtype=torch.long)
+        output_length = max(current_length, int(row_lengths[0].item()) + dummy_length)
 
-        input_suffix = torch.full(
-            (batch_size, dummy_length),
+        new_input_ids = torch.full(
+            (batch_size, output_length),
             fill_value=self.pad_token_id,
             dtype=batch["input_ids"].dtype,
             device=batch["input_ids"].device,
         )
-        attention_suffix = torch.zeros(
-            (batch_size, dummy_length),
+        new_attention_mask = torch.zeros(
+            (batch_size, output_length),
             dtype=batch["attention_mask"].dtype,
             device=batch["attention_mask"].device,
         )
-        label_suffix = torch.full(
-            (batch_size, dummy_length),
+        new_labels = torch.full(
+            (batch_size, output_length),
             fill_value=self.ignore_index,
             dtype=batch["labels"].dtype,
             device=batch["labels"].device,
         )
-        segment_suffix = torch.zeros(
-            (batch_size, dummy_length),
+        new_pack_segment_ids = torch.zeros(
+            (batch_size, output_length),
             dtype=batch["pack_segment_ids"].dtype,
             device=batch["pack_segment_ids"].device,
         )
-        input_suffix[0] = dummy_input_ids
-        attention_suffix[0] = dummy_attention_mask
-        segment_suffix[0] = next_segment_id
+        for row_index in range(batch_size):
+            row_length = int(row_lengths[row_index].item())
+            new_input_ids[row_index, :row_length] = batch["input_ids"][row_index, :row_length]
+            new_attention_mask[row_index, :row_length] = batch["attention_mask"][row_index, :row_length]
+            new_labels[row_index, :row_length] = batch["labels"][row_index, :row_length]
+            new_pack_segment_ids[row_index, :row_length] = batch["pack_segment_ids"][row_index, :row_length]
+
+        dummy_start = int(row_lengths[0].item())
+        dummy_end = dummy_start + dummy_length
+        next_segment_id = int(new_pack_segment_ids[0, :dummy_start].max().item()) + 1
+        new_input_ids[0, dummy_start:dummy_end] = dummy_input_ids
+        new_attention_mask[0, dummy_start:dummy_end] = dummy_attention_mask
+        new_pack_segment_ids[0, dummy_start:dummy_end] = next_segment_id
 
         batch = dict(batch)
-        batch["input_ids"] = torch.cat([batch["input_ids"], input_suffix], dim=1)
-        batch["attention_mask"] = torch.cat([batch["attention_mask"], attention_suffix], dim=1)
-        batch["labels"] = torch.cat([batch["labels"], label_suffix], dim=1)
-        batch["pack_segment_ids"] = torch.cat([batch["pack_segment_ids"], segment_suffix], dim=1)
+        batch["input_ids"] = new_input_ids
+        batch["attention_mask"] = new_attention_mask
+        batch["labels"] = new_labels
+        batch["pack_segment_ids"] = new_pack_segment_ids
         for key in self.media_keys:
             value = self.dummy_inputs[key]
             batch[key] = value.detach().clone() if isinstance(value, torch.Tensor) else value

@@ -163,8 +163,8 @@ class QwenImageHandler(MLLMMediaTypeHandler):
             processor: Qwen VL processor.
 
         Returns:
-            ``pixel_values`` and ``image_grid_thw`` tensors, an empty dictionary for
-            unresolved files, or an empty-sample sentinel for unreadable media.
+            ``pixel_values`` and ``image_grid_thw`` tensors, or an empty-sample
+            sentinel when required image media cannot be read.
         """
         if not values:
             return {}
@@ -177,8 +177,8 @@ class QwenImageHandler(MLLMMediaTypeHandler):
             ]
             image_inputs = processor.image_processor(images=resized_images, do_resize=False, return_tensors="pt")
         except FileNotFoundError as exc:
-            simple_info(f"skipping unresolved image media: {exc}", level="debug")
-            return {}
+            simple_info(f"dropping sample with missing image media: {exc}", level="warning")
+            return empty_model_sample()
         except (OSError, ValueError) as exc:
             simple_info(f"dropping sample with unreadable media: {exc}", level="warning")
             return empty_model_sample()
