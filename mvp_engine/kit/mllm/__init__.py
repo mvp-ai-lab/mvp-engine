@@ -1,40 +1,69 @@
 """MLLM-specific kits."""
 
+# ruff: noqa: F401
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .data import (
-        MLLMCollator,
+        MLLMBatchCollator,
         MLLMDataKit,
-        MLLMMediaKit,
-        MLLMSampleKit,
+        MLLMDataSpec,
+        MLLMDistributionSpec,
+        MLLMLoaderSpec,
+        MLLMMediaHandler,
+        MLLMMediaSlot,
+        MLLMMediaTypeHandler,
+        MLLMPack,
+        MLLMPackingAssembler,
+        MLLMPackingSpec,
+        MLLMSample,
+        MLLMSampleSpec,
+        MLLMSchemaHandler,
+        MLLMSegment,
+        MLLMSourceSpec,
+        MLLMTextOnlyBatchGuard,
+        MLLMTokenizationHandler,
         ModelInputs,
-        PackingOptions,
-        StepEstimateResult,
+        QwenChatSchemaHandler,
+        QwenImageHandler,
+        QwenVLMediaHandler,
+        QwenVLTokenizationHandler,
     )
     from .model import MLLMModelKit
-
-__all__ = [
-    "MLLMCollator",
-    "MLLMDataKit",
-    "MLLMMediaKit",
-    "MLLMModelKit",
-    "MLLMSampleKit",
-    "ModelInputs",
-    "PackingOptions",
-    "StepEstimateResult",
-]
+    from .utils import Confidence, MLLMStepEstimationKit, StepEstimateResult
 
 _EXPORT_MODULES = {
-    "MLLMCollator": ".data",
+    "Confidence": ".utils",
+    "MLLMBatchCollator": ".data",
     "MLLMDataKit": ".data",
-    "MLLMMediaKit": ".data",
+    "MLLMDataSpec": ".data",
+    "MLLMDistributionSpec": ".data",
+    "MLLMLoaderSpec": ".data",
+    "MLLMMediaHandler": ".data",
+    "MLLMMediaSlot": ".data",
+    "MLLMMediaTypeHandler": ".data",
     "MLLMModelKit": ".model",
-    "MLLMSampleKit": ".data",
+    "MLLMPack": ".data",
+    "MLLMPackingAssembler": ".data",
+    "MLLMPackingSpec": ".data",
+    "MLLMSample": ".data",
+    "MLLMSampleSpec": ".data",
+    "MLLMSchemaHandler": ".data",
+    "MLLMSegment": ".data",
+    "MLLMSourceSpec": ".data",
+    "MLLMStepEstimationKit": ".utils",
+    "MLLMTextOnlyBatchGuard": ".data",
+    "MLLMTokenizationHandler": ".data",
     "ModelInputs": ".data",
-    "PackingOptions": ".data",
-    "StepEstimateResult": ".data",
+    "QwenChatSchemaHandler": ".data",
+    "QwenImageHandler": ".data",
+    "QwenVLMediaHandler": ".data",
+    "QwenVLTokenizationHandler": ".data",
+    "StepEstimateResult": ".utils",
 }
+
+__all__ = list(_EXPORT_MODULES)
 
 
 def __getattr__(name: str):
@@ -45,4 +74,6 @@ def __getattr__(name: str):
     from importlib import import_module
 
     module = import_module(_EXPORT_MODULES[name], __name__)
-    return getattr(module, name)
+    value = getattr(module, name)
+    globals()[name] = value
+    return value

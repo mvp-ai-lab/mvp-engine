@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import math
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import torch
@@ -16,10 +18,20 @@ from mvp_engine.engine import ENGINE_REGISTRY, Engine, TrainStepContext
 from mvp_engine.kit import (
     MFUKit,
     MLLMDataKit,
+    MLLMDataSpec,
+    MLLMLoaderSpec,
     MLLMModelKit,
+    MLLMPackingSpec,
+    MLLMSampleSpec,
+    MLLMSourceSpec,
+    MLLMStepEstimationKit,
+    MLLMTextOnlyBatchGuard,
     ModelInputs,
     OptimKit,
-    PackingOptions,
+    QwenChatSchemaHandler,
+    QwenImageHandler,
+    QwenVLMediaHandler,
+    QwenVLTokenizationHandler,
     TokenNormedLossKit,
 )
 from mvp_engine.utils.log import logger
@@ -44,6 +56,7 @@ class OpenBeeEngine(Engine):
 
     data_kit: MLLMDataKit
     model_kit: MLLMModelKit
+    step_estimation_kit: MLLMStepEstimationKit
     mfu_kit: MFUKit
     optim_kit: OptimKit
     token_loss_kit: TokenNormedLossKit
@@ -56,6 +69,7 @@ class OpenBeeEngine(Engine):
         self.config.resolve_batching_config(data_parallel_world_size=self.dp_world_size)
         self.data_kit = MLLMDataKit()
         self.model_kit = MLLMModelKit()
+        self.step_estimation_kit = MLLMStepEstimationKit()
         self.mfu_kit = MFUKit()
         self.optim_kit = OptimKit()
         self.token_loss_kit = TokenNormedLossKit(
@@ -90,30 +104,69 @@ class OpenBeeEngine(Engine):
             image_max_pixels=self.config.model.image_max_pixels,
         )
 
-        # Step 2: configure token packing shared by estimation and training.
-        packing = PackingOptions(
+        # Step 2: declare the Qwen sample handlers.
+        sample_spec = MLLMSampleSpec(
+            schema_handler=QwenChatSchemaHandler(
+                processor=self.processor,
+                thinking_mode=self.config.data.thinking_mode,
+            ),
+            media_handler=QwenVLMediaHandler(processor=self.processor),
+            tokenization_handler=QwenVLTokenizationHandler(
+                processor=self.processor,
+                max_seq_len=int(self.config.data.max_seq_len),
+            ),
+        )
+
+        # Step 3: declare distributed placement and the training data spec.
+        distribution = self.data_kit.build_distribution_spec(device_mesh=self.device_mesh)
+        packing_spec = MLLMPackingSpec(
+            max_seq_len=int(self.config.data.max_seq_len),
+            algorithm="multi_pack",
             selection_strategy=self.config.data.packing_selection_strategy,
             open_pack_limit=int(self.config.data.packing_open_pack_limit),
             buffer_size=int(self.config.data.packing_buffer_size),
+            block_causal=True,
+        )
+        loader_spec = MLLMLoaderSpec(
+            batch_size=int(self.config.data.batch_size),
+            num_workers=int(self.config.data.num_workers),
+        )
+        data_spec = MLLMDataSpec(
+            source=MLLMSourceSpec(
+                dataset_path=self.config.data.train_path,
+                dataset_source="lance",
+                ref_columns=tuple(self.config.data.ref_columns),
+                seed=int(self.config.seed),
+                resample=True,
+                resolve_refs=True,
+            ),
+            sample=sample_spec,
+            packing=packing_spec,
+            loader=loader_spec,
+            distribution=distribution,
         )
 
-        # Step 3: when total_steps=-1, consume one finite packed data pass to
-        # estimate one-epoch optimization steps.
+        # Step 4: when total_steps=-1, consume one finite packed data pass to estimate one-epoch steps.
         if int(self.config.loop.total_steps) == -1:
-            estimation_dataset = self.data_kit.build_dataset(
-                dataset_path=self.config.data.train_path,
-                processor=self.processor,
-                max_seq_len=int(self.config.data.max_seq_len),
-                resample=False,
-                resolve_refs=False,
-                ref_columns=self.config.data.ref_columns,
-                seed=self.config.seed,
-                packing=packing,
-                thinking_mode=self.config.data.thinking_mode,
-                device_mesh=self.device_mesh,
+            estimation_spec = MLLMDataSpec(
+                source=MLLMSourceSpec(
+                    dataset_path=self.config.data.train_path,
+                    dataset_source="lance",
+                    ref_columns=tuple(self.config.data.ref_columns),
+                    seed=int(self.config.seed),
+                    resample=False,
+                    resolve_refs=False,
+                ),
+                sample=sample_spec,
+                packing=packing_spec,
+                loader=loader_spec,
+                distribution=distribution,
             )
-            estimate = self.data_kit.estimate_total_steps(
+            estimation_dataset = self.data_kit.build_dataset(estimation_spec)
+            dataset_meta = json.loads(Path(estimation_spec.source.dataset_path).read_text())
+            estimate = self.step_estimation_kit.estimate_total_steps(
                 estimation_dataset,
+                total_source_samples=int(dataset_meta["row_count"]),
                 batch_size=int(self.config.data.batch_size),
                 gradient_accumulation_steps=int(self.config.optim.gradient_accumulation_steps),
                 data_parallel_world_size=self.dp_world_size,
@@ -122,32 +175,22 @@ class OpenBeeEngine(Engine):
             )
             self.config.loop.total_steps = estimate.total_steps
 
-        # Step 4: build the real training/eval dataset with the full preprocess.
-        dataset = self.data_kit.build_dataset(
-            dataset_path=self.config.data.train_path,
-            processor=self.processor,
-            max_seq_len=int(self.config.data.max_seq_len),
-            resample=True,
-            resolve_refs=True,
-            ref_columns=self.config.data.ref_columns,
-            seed=self.config.seed,
-            packing=packing,
-            thinking_mode=self.config.data.thinking_mode,
-            device_mesh=self.device_mesh,
-        )
+        # Step 5: build the real training dataset with the full preprocess.
+        dataset = self.data_kit.build_dataset(data_spec)
 
-        # Step 5: wrap the dataset in the normal TorchLoader and return the
-        # batched dataloader used by the engine.
-        collate_fn = self.data_kit.build_collator(
-            pad_token_id=int(self.processor.tokenizer.pad_token_id),
-            processor=self.processor,
-        )
-        return self.data_kit.build_dataloader(
-            dataset,
-            batch_size=int(self.config.data.batch_size),
-            num_workers=int(self.config.data.num_workers),
-            pin_memory=self.device.type in ["cuda", "npu"],
-            collate_fn=collate_fn,
+        # Step 6: wrap the dataset in the normal TorchLoader.
+        dataloader = self.data_kit.build_dataloader(dataset, data_spec, device=self.device)
+
+        # Step 7: OpenBee forward requires one image tensor even for text-only batches.
+        tokenizer = self.processor.tokenizer
+        image_handler = QwenImageHandler()
+        return dataloader.map(
+            MLLMTextOnlyBatchGuard(
+                dummy_inputs=image_handler.build_dummy_inputs(self.processor),
+                media_keys=image_handler.OUTPUT_TENSOR_KEYS,
+                pad_token_id=int(tokenizer.pad_token_id),
+                ignore_index=sample_spec.tokenization_handler.ignore_index,
+            )
         )
 
     def prepare_model(self) -> torch.nn.Module:
