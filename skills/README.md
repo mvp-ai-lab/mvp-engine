@@ -61,6 +61,7 @@ patterns in `references/`.
 
 Kit APIs:
 
+- `kit/liger-kernel-kit`: [kit/liger-kernel-kit/SKILL.md](kit/liger-kernel-kit/SKILL.md)
 - `kit/mllm-data-kit`: [kit/mllm-data-kit/SKILL.md](kit/mllm-data-kit/SKILL.md)
 - `kit/mllm-model-kit`: [kit/mllm-model-kit/SKILL.md](kit/mllm-model-kit/SKILL.md)
 - `kit/token-loss-kit`: [kit/token-loss-kit/SKILL.md](kit/token-loss-kit/SKILL.md)
@@ -75,6 +76,7 @@ Data:
 Model:
 
 - `model/gradient-checkpointing`: [model/gradient-checkpointing/SKILL.md](model/gradient-checkpointing/SKILL.md)
+- `model/liger-kernel`: [model/liger-kernel/SKILL.md](model/liger-kernel/SKILL.md)
 - `model/model-compile`: [model/model-compile/SKILL.md](model/model-compile/SKILL.md)
 - `model/model-migration`: [model/model-migration/SKILL.md](model/model-migration/SKILL.md)
 - `model/vlm-freeze-policy`: [model/vlm-freeze-policy/SKILL.md](model/vlm-freeze-policy/SKILL.md)

@@ -41,6 +41,7 @@ if TYPE_CHECKING:
         QwenVLTokenizationHandler,
         StepEstimateResult,
     )
+    from .model import LigerKernelKit, LigerKernelReport, LigerPatch
     from .optim import OptimKit
     from .perf.mfu import MFUKit
     from .util import StepCountingKit, StepCountResult
@@ -50,6 +51,9 @@ _EXPORT_MODULES = {
     "LossGuard": ".loss.loss",
     "LossKit": ".loss.loss",
     "MFUKit": ".perf.mfu",
+    "LigerKernelKit": ".model",
+    "LigerKernelReport": ".model",
+    "LigerPatch": ".model",
     "MLLMBatchCollator": ".mllm",
     "MLLMDataKit": ".mllm",
     "MLLMDataSpec": ".mllm",
