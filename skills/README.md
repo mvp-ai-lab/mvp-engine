@@ -15,12 +15,13 @@ One-off experiment behavior?       -> keep it in recipes/<recipe>/
 
 A kit is a user/agent callable suite of APIs. A skill should explain how to use
 that suite, what each API does, and where extension or override points live. A
-skill should not ask the agent to reimplement behavior already covered by a kit.
+skill should route agents to existing kit behavior before describing custom glue.
 
 Examples:
 
-- `MLLMDataKit`, `MLLMSampleKit`, `MLLMMediaKit`, and `PackingOptions` cover the
-  standard MLLM data pipeline.
+- `MLLMDataKit` plus explicit data specs, `MLLMSample`, schema handlers, media
+  handlers, tokenization handlers, `MLLMPackingAssembler`, and data guards cover
+  the standard MLLM data pipeline.
 - `MLLMModelKit` covers common MLLM model loading, patching, freeze,
   checkpointing, and compile wiring.
 - `LossKit`, `TokenNormedLossKit`, `MFUKit`, and `OptimKit` cover standard training
@@ -81,7 +82,8 @@ Model:
 Training:
 
 - `training/loss-spike-guard`: [training/loss-spike-guard/SKILL.md](training/loss-spike-guard/SKILL.md)
-- `training/model-flops-utilization`: [training/model-flops-utilization/SKILL.md](training/model-flops-utilization/SKILL.md)
+- `training/model-flops-utilization`:
+  [training/model-flops-utilization/SKILL.md](training/model-flops-utilization/SKILL.md)
 - `training/token-normalized-loss`: [training/token-normalized-loss/SKILL.md](training/token-normalized-loss/SKILL.md)
 
 Parallel:
