@@ -173,6 +173,7 @@ output/
 outputs/
 trainer_output/
 checkpoints/
+mvp-dataset/
 .vscode
 *.pth
 slurmlogs
@@ -187,3 +188,4 @@ slurmlogs
 CUSTOM.md
 /references
 .codex
+
