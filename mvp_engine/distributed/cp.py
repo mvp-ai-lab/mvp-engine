@@ -22,11 +22,6 @@ from mvp_engine.utils.log import logger
 _HOOK_ATTR = "APPLY_LONG_CONTEXT_ATTENTION"
 
 
-def is_long_context_enabled(config: Mapping[str, Any] | None) -> bool:
-    """Return whether long-context attention is enabled in backend kwargs."""
-    return bool((config or {}).get("enabled", False))
-
-
 def prepare_long_context_attention(
     model: nn.Module,
     device_mesh: DeviceMesh,

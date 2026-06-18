@@ -10,6 +10,7 @@ from mvp_dataset import TorchLoader
 from transformers import get_scheduler
 
 from mvp_engine.distributed.parallelize import parallelize_model
+from mvp_engine.distributed.utils import get_context_parallel_size
 from mvp_engine.engine import ENGINE_REGISTRY, Engine, TrainStepContext
 from mvp_engine.kit import CPKit
 from mvp_engine.utils.log import logger
@@ -144,7 +145,7 @@ class MinimalVLMEngine(Engine):
                 batch[key] = value.to(self.device, non_blocking=True)
             else:
                 batch[key] = value
-        if self.config.parallel.backend_kwargs.long_context.enabled:
+        if self._uses_long_context():
             batch = self._prepare_long_context_batch(batch)
         ctx.data = batch
         return ctx
@@ -246,21 +247,21 @@ class MinimalVLMEngine(Engine):
             ctx: Current training step context.
         """
         data: ModelInputs = ctx.data
-        long_context_enabled = self.config.parallel.backend_kwargs.long_context.enabled
+        uses_long_context = self._uses_long_context()
         model_inputs = dict(data)
-        labels = model_inputs.pop("labels") if long_context_enabled else None
-        if long_context_enabled:
+        labels = model_inputs.pop("labels") if uses_long_context else None
+        if uses_long_context:
             model_inputs["use_cache"] = False
         with torch.autocast(
             device_type=self.device_type,
             dtype=self.dtype,
             enabled=self.dtype != torch.float32,
         ):
-            outputs = self.model(**model_inputs) if long_context_enabled else self.model(**data)
+            outputs = self.model(**model_inputs) if uses_long_context else self.model(**data)
 
-        loss = self._compute_long_context_loss(outputs.logits, labels) if long_context_enabled else outputs.loss
+        loss = self._compute_long_context_loss(outputs.logits, labels) if uses_long_context else outputs.loss
         log_loss = float(loss.item())
-        if long_context_enabled:
+        if uses_long_context:
             loss_stats = self._last_long_context_loss_stats
             log_loss = float((loss_stats.global_loss_sum / loss_stats.global_valid_tokens).item())
 
@@ -281,6 +282,9 @@ class MinimalVLMEngine(Engine):
         )
         self._last_long_context_loss_stats = loss_stats
         return loss_stats.loss
+
+    def _uses_long_context(self) -> bool:
+        return get_context_parallel_size(self.device_mesh) > 1
 
 
 def _iter_contiguous_ranges(values: list[int]):

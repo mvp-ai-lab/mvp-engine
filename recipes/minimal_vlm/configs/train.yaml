@@ -22,7 +22,6 @@ parallel:
   backend_kwargs:
     sequence_parallel: false
     long_context:
-      enabled: false
       attn_impl: "fa"
       grad_sync: true
 data:

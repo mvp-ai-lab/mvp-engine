@@ -75,7 +75,6 @@ class BaseDDPConfig(BaseModel):
 class BaseLongContextConfig(BaseModel):
     model_config = ConfigDict(frozen=False, extra="forbid")
 
-    enabled: bool = False
     attn_impl: str = "fa"
     grad_sync: bool = True
 

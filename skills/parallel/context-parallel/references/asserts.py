@@ -45,14 +45,12 @@ def test_config_structure(config) -> None:
     assert isinstance(mesh.context, int), "parallel.mesh.context must be an int."
     assert mesh.context >= 1 or mesh.context == -1, "parallel.mesh.context must be >= 1 or -1."
     assert hasattr(backend_kwargs, "sequence_parallel"), "sequence_parallel must remain available."
-    assert isinstance(long_context.enabled, bool), "long_context.enabled must be a bool."
     assert isinstance(long_context.attn_impl, str), "long_context.attn_impl must be a string."
     assert isinstance(long_context.grad_sync, bool), "long_context.grad_sync must be a bool."
 
-    if long_context.enabled:
-        assert not backend_kwargs.sequence_parallel, "long_context and sequence_parallel must not both be enabled."
-        assert mesh.context > 1 or mesh.context == -1, "long_context requires parallel.mesh.context > 1 or -1."
-        assert mesh.shard != 1, "This repo requires FSDP2 shard > 1 when long_context is enabled."
+    if mesh.context > 1 or mesh.context == -1:
+        assert not backend_kwargs.sequence_parallel, "context mesh and sequence_parallel must not both be enabled."
+        assert mesh.shard != 1, "This repo requires FSDP2 shard > 1 when context mesh is active."
 
 
 def test_engine_structure(engine_class: type) -> None:
@@ -74,11 +72,9 @@ def test_engine_structure(engine_class: type) -> None:
 def assert_before_train_end(engine) -> None:
     """After setup, verify a long-context smoke run produced expected runtime state."""
     long_context = engine.config.parallel.backend_kwargs.long_context
-    if not long_context.enabled:
-        return
-
     context_size = get_context_parallel_size(engine.device_mesh)
-    assert context_size > 1, "Long-context smoke run must use context mesh size > 1."
+    if context_size <= 1:
+        return
 
     model = engine.unwrapped_model if hasattr(engine, "unwrapped_model") else engine.model
     assert getattr(model, "_long_context_attention_configured", False), (
@@ -92,13 +88,12 @@ def assert_before_train_end(engine) -> None:
 
 def assert_train_pre_step_end(engine, ctx) -> None:
     """Verify token batches are sharded along sequence over context ranks."""
-    long_context = engine.config.parallel.backend_kwargs.long_context
-    if not long_context.enabled:
+    context_size = get_context_parallel_size(engine.device_mesh)
+    if context_size <= 1:
         return
     if not isinstance(ctx.data, dict) or "input_ids" not in ctx.data:
         return
 
-    context_size = get_context_parallel_size(engine.device_mesh)
     local_seq_len = int(ctx.data["input_ids"].shape[1])
     global_seq_len = int(getattr(engine, "_long_context_global_seq_len", local_seq_len * context_size))
     assert global_seq_len == local_seq_len * context_size, (

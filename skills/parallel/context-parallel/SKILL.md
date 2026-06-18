@@ -24,7 +24,7 @@ Add long-context attention without changing model math:
 The repo runtime contract is fixed:
 `mvp_engine/distributed/parallelize.py` calls
 `model.__class__.APPLY_LONG_CONTEXT_ATTENTION(model, device_mesh,
-long_context_config)` before TP/FSDP2 wrapping. When `grad_sync=true`, replicated
+long_context_config)` before TP/FSDP2 wrapping when `parallel.mesh.context > 1`. When `grad_sync=true`, replicated
 parameter grads are summed across the context mesh after FSDP2 wrapping.
 
 ## Required Inputs
@@ -70,18 +70,17 @@ parallel:
     tensor: <tp size>
   backend_kwargs:
     long_context:
-      enabled: true
       attn_impl: fa
       grad_sync: true
 ```
 
 Rules:
 
-- `context > 1` is required when enabled;
+- `context > 1` activates long-context attention;
 - Ulysses degree is inferred from `parallel.mesh.context`;
 - `shard > 1` is required because this repo rejects pure model parallelism
   without FSDP2;
-- `sequence_parallel` and `long_context.enabled` must not both be true;
+- `sequence_parallel` and `context > 1` must not both be true;
 - all ranks that differ only by `context` must read the same samples;
 - exclude `tensor` and `context` from data-loader sharding and global batch
   accounting.
@@ -163,7 +162,6 @@ pytest recipes/<recipe>/tests/test_smoke.py -q --run-smoke \
   --world-size 4 \
   --config-override parallel.mesh.shard=2 \
   --config-override parallel.mesh.context=2 \
-  --config-override parallel.backend_kwargs.long_context.enabled=true \
   --config-override optim.mixed_precision=bf16
 ```
 

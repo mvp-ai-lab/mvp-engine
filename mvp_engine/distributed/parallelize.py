@@ -66,7 +66,7 @@ def parallelize_model(
             For Tensor Parallel and Sequence Parallel (if tensor mesh is active):
                 - sequence_parallel: Enables sequence parallel layouts on the tensor mesh before FSDP2 (default: False)
 
-            For Long-Context Attention (if context mesh is active):
+            For Long-Context Attention (if parallel.mesh.context > 1):
                 - long_context: Installs local Ulysses attention before TP/FSDP2 and context grad sync.
 
     Returns:
@@ -99,19 +99,14 @@ def parallelize_model(
     long_context_kwargs = backend_kwargs.pop("long_context", {}) or {}
     from mvp_engine.distributed.cp import (
         install_context_grad_sync,
-        is_long_context_enabled,
         prepare_long_context_attention,
     )
 
-    long_context = is_long_context_enabled(long_context_kwargs)
+    long_context = context_size > 1
     if sequence_parallel and tensor_size <= 1:
         raise ValueError("Sequence parallel requires an active tensor mesh with parallel.mesh.tensor > 1.")
     if long_context and sequence_parallel:
         raise ValueError("Long-context attention and tensor-mesh sequence_parallel cannot be enabled together.")
-    if long_context and context_size <= 1:
-        raise ValueError("Long-context attention requires parallel.mesh.context > 1.")
-    if context_size > 1 and not long_context:
-        raise ValueError("parallel.mesh.context > 1 requires parallel.backend_kwargs.long_context.enabled=true.")
 
     if shard_size * tensor_size * context_size == 1:
         # For Pure DDP: [N, 1, 1]

@@ -15,6 +15,7 @@ FSDP2 when `parallel.backend_kwargs.long_context.grad_sync=true`.
 ## Mesh Rules
 
 - `parallel.mesh.context` is the long-context model-parallel size.
+- `parallel.mesh.context > 1` activates long-context attention.
 - Ulysses degree is inferred from `parallel.mesh.context`.
 - `context` is not data parallel and must not multiply global batch size.
 - Exclude both `tensor` and `context` from samplers/loaders that choose dataset
@@ -105,11 +106,11 @@ When TP also syncs a parameter, coordinate hooks:
 
 ## Common Failure Cases
 
-- `long_context.enabled=true` with `parallel.mesh.context == 1`.
+- `parallel.mesh.context > 1` on a model without `APPLY_LONG_CONTEXT_ATTENTION`.
 - context ranks read different samples.
 - RoPE positions restart from zero on every context rank.
 - recipes compute labels with a local-only shift.
 - multimodal placeholder spans are split across context ranks.
-- `sequence_parallel=true` and `long_context.enabled=true` are both enabled.
+- `sequence_parallel=true` and `parallel.mesh.context > 1` are both enabled.
 - context grad sync is disabled while parameters see local-sequence activations.
 - CP and TP hooks both delta-sync the same parameter independently.
