@@ -1,26 +1,27 @@
 ---
 name: vlm-packing
-description: Add, review, update, and validate VLM packing behavior around the
-  MLLM data kits, including PackingOptions, packed metadata, model input
-  preparation, attention isolation, token accounting, and custom fallback paths.
+description: Add, review, update, and validate VLM/MLLM packing behavior around
+  the current MLLMDataKit design, including MLLMPackingSpec,
+  MLLMPackingAssembler, MLLMPack metadata, block-causal masks, model-specific
+  packed input preparation, token accounting, and step estimation.
 ---
 
 # VLM Packing
 
 ## Goal
 
-Use `MLLMDataKit.build_dataset(..., packing=PackingOptions(...))` for standard
-sample packing. This skill is for packing knobs and model-specific packed
-semantics, not for reimplementing the generic packer.
+Use `MLLMPackingSpec` through `MLLMDataKit.build_dataset(data_spec)` for standard
+MLLM packing. This skill covers packing knobs and model-specific packed
+semantics around the generic DataKit packer.
 
 ## Required Inputs
 
 - target recipe path;
-- existing `MLLMDataKit` and `PackingOptions` wiring;
-- `max_seq_len`, packing strategy, open-pack limit, and buffer size;
+- existing `MLLMDataSpec` and `MLLMPackingSpec` wiring;
+- `max_seq_len`, strategy, open-pack limit, and buffer size;
 - packed batch fields consumed by model preparation;
 - attention backend and position-id requirements;
-- token accounting and step-inference paths.
+- token accounting and total-step estimation path.
 
 Ask only if packed attention semantics or accounting boundaries are unclear.
 
@@ -31,69 +32,67 @@ Ask only if packed attention semantics or accounting boundaries are unclear.
 Search:
 
 ```bash
-rg -n "PackingOptions|build_packing_assembler|pack_segment_ids|source_sample_num|prepare_packed" recipes/<recipe> mvp_engine/kit
+rg -n \
+  "MLLMPackingSpec|MLLMPackingAssembler|MLLMPack|pack_segment_ids|source_sample_num|prepare_packed" \
+  recipes/<recipe> mvp_engine/kit
 ```
 
-For standard MLLM recipes, packing is always enabled. Do not add a config field
-that disables it. Keep config to strategy/buffer/open-pack knobs.
+For standard MLLM recipes, packing is part of the DataKit pipeline. Active
+configuration lives in `MLLMPackingSpec`.
 
-### 2. Leave Generic Packing In The Kit
+### 2. Leave Generic Packing In DataKit
 
 DataKit owns:
 
-- grouping tokenized samples;
-- concatenating `input_ids`, `attention_mask`, and `labels`;
+- grouping tokenized `MLLMSample` objects;
+- producing `MLLMPack`;
+- concatenating token fields in `MLLMPack.to_model_inputs()`;
 - creating `pack_segment_ids` and `source_sample_num`;
-- merging media refs/tensors through MediaKit finalization hooks.
+- merging media fields through `MLLMMediaHandler.merge_pack`.
 
-Do not duplicate these in the recipe unless the recipe intentionally avoids
-`MLLMDataKit`.
+Recipe code consumes these packed fields and adds model-specific preparation.
 
 ### 3. Implement Model-Specific Packed Preparation
 
-Recipe/model code may still need to transform packed metadata into:
+Recipe/model code may transform packed metadata into:
 
-- block causal masks;
+- block-causal masks;
 - packed position ids;
 - FlashAttention/cu-seqlens metadata;
 - multimodal position rules;
-- packed FLOPs or token accounting metadata.
+- backend-specific mask patches;
+- FLOPs, token, and loss accounting metadata.
 
 Keep this near the model or engine path that prepares model inputs.
 
 ## Validation
 
-### Soft Validation
+Soft checks:
 
-- packing knobs map to `PackingOptions`;
+- packing knobs map to `MLLMPackingSpec`;
+- custom algorithms use `MLLMPackingSpec(assembler_cls=...)`;
 - packed samples include `pack_segment_ids` and `source_sample_num`;
 - collator pads packed metadata with inactive values;
 - model preparation prevents cross-sample attention and preserves multimodal
   position behavior;
-- total/effective token counts and step inference count packed outputs
-  consistently;
-- no standard MLLM config adds `data.packing`.
+- total/effective token counts and step estimation count packed outputs
+  consistently.
 
-### Hard Validation
-
-Run:
+Hard checks when requested:
 
 ```bash
-pytest recipes/<recipe>/tests/test_structure.py -q
-pytest recipes/<recipe>/tests/test_smoke.py -q
+.venv/bin/python -m compileall -q mvp_engine/kit/mllm/data recipes/<recipe>
+.venv/bin/python -m pytest recipes/<recipe>/tests/test_structure.py -q
+.venv/bin/python -m pytest recipes/<recipe>/tests/test_smoke.py -q
 ```
-
-Add impact validation only when attention isolation or packed position behavior
-cannot be verified by smoke tests.
 
 ## Output
 
-- State DataKit packing knobs and model-specific packed preparation.
-- State attention/position/token accounting behavior.
-- Report validation and any untested packed-boundary risks.
+- State DataKit packing knobs and any custom assembler.
+- State attention, position, and token accounting behavior.
+- Report validation and untested packed-boundary risks.
 
 ## Read On Demand
 
-- `skills/kit/mllm-data-kit/references/packing.md`: standard DataKit packing
-  contract.
-- `references/packing_rules.md`: detailed legacy checks for custom packers.
+- `skills/kit/mllm-data-kit/references/packing.md`: standard DataKit packing contract.
+- `references/packing_rules.md`: detailed checks for custom packed model behavior.

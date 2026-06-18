@@ -1,29 +1,36 @@
 ---
 name: vlm-data-pipeline
-description: Add, review, update, and validate VLM data pipelines using the
-  MLLM data kits first, including raw schema normalization, media extensions,
-  processor setup, always-on packing, materialization, collation, and recipe
-  integration.
+description: Add, review, update, and validate VLM/MLLM data pipelines using
+  the current spec/handler-based MLLMDataKit design. Use for raw schema
+  normalization, MLLMDataSpec wiring, source resample/resolve_refs policy, media
+  extensions, processor setup, packing, guards, collation, step estimation, and
+  recipe integration.
 ---
 
 # VLM Data Pipeline
 
 ## Goal
 
-Use `MLLMDataKit`, `MLLMSampleKit`, `MLLMMediaKit`, and `PackingOptions` as the
-default VLM data implementation. Add recipe-local code only for schema,
-modality, model-family, or backend behavior that the standard kits do not cover.
+Use `MLLMDataKit` and explicit `MLLMDataSpec` objects as the default VLM data
+implementation. Recipe-local code should describe recipe-specific schema,
+modality, tokenization, packing, model-input preparation, or backend lifecycle
+behavior.
+
+Read `skills/kit/mllm-data-kit/SKILL.md` before implementing custom MLLM data
+behavior. Treat that skill as the authoritative API contract.
 
 ## Required Inputs
 
 - target recipe path and engine data entrypoint;
 - raw row schema and media placeholder convention;
 - target processor and model-facing batch fields;
-- dataset backend and `resolve_ref` lifecycle;
-- whether default Qwen-style image media is sufficient;
-- recipe-local `tests/test_structure.py` and `tests/test_smoke.py`.
+- dataset backend and whether refs should be resolved;
+- training versus estimation source policy: `resample` and `resolve_refs`;
+- packing knobs and packed model-input preparation path;
+- recipe-local structure/smoke tests.
 
-Ask only if raw schema, media semantics, or dataset backend cannot be derived.
+Ask only if raw schema, media semantics, or dataset backend cannot be derived
+from the repository.
 
 ## Workflow
 
@@ -32,78 +39,91 @@ Ask only if raw schema, media semantics, or dataset backend cannot be derived.
 Search:
 
 ```bash
-rg -n "MLLMDataKit|MLLMSampleKit|MLLMMediaKit|PackingOptions|build_dataset|build_collator" recipes/<recipe>
+rg -n \
+  "MLLMDataKit|MLLMDataSpec|MLLMSampleSpec|MLLMSourceSpec|MLLMPackingSpec|QwenChatSchemaHandler|build_dataset" \
+  recipes/<recipe>
 ```
 
-If the recipe can use the standard pipeline, wire `MLLMDataKit` instead of
-copying preprocessing, packing, materialization, or collation logic.
+For standard MLLM recipes, build specs directly in the engine. Express
+preprocessing, packing, media materialization, and collation differences through
+handlers or specs.
 
 ### 2. Choose The Extension Point
 
-- Raw field names, role aliases, placeholder parsing, and media ordering:
-  subclass or configure `MLLMSampleKit`.
-- Media token counts, placeholder expansion, label masking, image/video/audio
-  loading, processor media tensors, and batch media fields: subclass
-  `MLLMMediaKit`.
-- Dataset backend, guard placement, chat-SFT turn construction, packing
-  lifecycle, or dataloader policy: subclass `MLLMDataKit`.
-
-Read `skills/kit/mllm-data-kit/SKILL.md` before implementing any custom data
-behavior.
+- Source path, backend, sharding, `resample`, or `resolve_refs`:
+  `MLLMSourceSpec` / `MLLMDistributionSpec`.
+- Raw row format, role aliases, prompt/target split, placeholders, media slot
+  binding, or label policy: `MLLMSchemaHandler`.
+- Placeholder rendering, image/video/audio decode, model media tensors, pack
+  merge, or batch collation: `MLLMMediaTypeHandler` registered in
+  `MLLMMediaHandler`.
+- Tokenization, truncation, or ignore-index behavior:
+  `MLLMTokenizationHandler`.
+- Packing strategy, buffer, open-pack limit, or custom packer:
+  `MLLMPackingSpec`.
+- Dataloader batch shape and worker settings: `MLLMLoaderSpec`.
+- Model-specific packed attention, position ids, FlashAttention metadata, or
+  dummy media paths: recipe/model preparation code outside generic DataKit.
+- Dataset stage order or backend lifecycle: extend `MLLMDataKit`.
 
 ### 3. Preserve The Standard Lifecycle
 
-The normal flow is:
+The current flow is:
 
 ```text
-raw row -> SampleKit.normalize -> MediaKit.prepare/render_text
--> tokenize/mask labels -> pack -> resolve_ref -> MediaKit.materialize
--> finalize packed media -> collate -> model batch
+source -> raw guard -> MLLMSample -> sample guard -> packing
+-> optional resolve_ref -> MLLMPack.to_model_inputs -> model-input guard
+-> MLLMBatchCollator -> optional recipe/model batch preparation
 ```
 
-Heavy media IO, such as video frame sampling, should happen in
-`MLLMMediaKit.materialize()` after refs are resolved.
+Keep heavy media IO after reference resolution. Keep label policy in schema
+segments. Keep model-specific attention and position semantics outside the
+generic data kit.
 
-### 4. Keep Packing Integrated
+### 4. Keep Train And Estimation Specs Explicit
 
-The standard MLLM DataKit pipeline is always packed. Do not add a `data.packing`
-boolean for OpenBee-style recipes. Expose only active `PackingOptions` knobs.
+Training source spec normally uses:
 
-Use `skills/data/vlm-packing/SKILL.md` only for model-specific packed attention,
-position ids, or accounting behavior outside DataKit's generic packing.
+```python
+MLLMSourceSpec(..., resample=True, resolve_refs=True)
+```
+
+Step-estimation source spec normally uses:
+
+```python
+MLLMSourceSpec(..., resample=False, resolve_refs=False)
+```
+
+Pass the finite packed estimation dataset to `MLLMStepEstimationKit`. Keep these
+choices visible on the source spec used at each engine callsite.
 
 ## Validation
 
-### Soft Validation
+Soft checks:
 
-- standard data flow uses kit APIs instead of duplicated recipe-local logic;
-- custom SampleKit, MediaKit, or DataKit code has a clear boundary;
-- media refs stay aligned with placeholders through packing and materialization;
-- labels supervise only intended assistant tokens;
-- text-only, single-media, multi-media, and invalid samples have explicit
-  behavior;
-- no stale `data.packing` boolean is introduced for standard MLLM recipes.
+- engine builds `MLLMDataSpec` from explicit source/sample/packing/loader specs;
+- media refs stay aligned with placeholders through packing and loading;
+- labels supervise only intended segments;
+- text-only, single-media, multi-media, invalid rows, and unreadable media have
+  explicit behavior;
+- packed model-input preparation preserves segment isolation.
 
-### Hard Validation
-
-Run:
+Hard checks when requested:
 
 ```bash
-pytest recipes/<recipe>/tests/test_structure.py -q
-pytest recipes/<recipe>/tests/test_smoke.py -q
+.venv/bin/python -m compileall -q mvp_engine/kit/mllm/data recipes/<recipe>
+.venv/bin/python -m pytest recipes/<recipe>/tests/test_structure.py -q
+.venv/bin/python -m pytest recipes/<recipe>/tests/test_smoke.py -q
 ```
-
-Add recipe-local skill assertions only when a custom schema or modality contract
-is not covered by existing tests.
 
 ## Output
 
-- State which kit APIs were used or extended.
-- State raw schema, media lifecycle, packing knobs, and collator outputs.
+- State which specs and handlers were used or extended.
+- State source schema, media lifecycle, packing knobs, and collator outputs.
+- State model-specific packed input preparation.
 - Report validation and remaining untested modality cases.
 
 ## Read On Demand
 
-- `skills/kit/mllm-data-kit/SKILL.md`: authoritative kit API and extension
-  guide.
-- `references/pipeline_rules.md`: legacy backend and sample-matrix checks.
+- `skills/kit/mllm-data-kit/SKILL.md`: authoritative kit API and extension guide.
+- `references/pipeline_rules.md`: detailed review checklist for custom pipelines.

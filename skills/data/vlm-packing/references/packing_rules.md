@@ -5,132 +5,85 @@ standard MLLM data kit.
 
 ## Reference Shape
 
-Primary kit references:
+Primary files:
 
-- `mvp_engine/kit/mllm/data/data.py`: DataKit packing lifecycle;
-- `mvp_engine/kit/mllm/data/packing.py`: `PackingOptions`,
-  `PackingAssembler`, finalization, segment metadata, and block causal masks;
-- `mvp_engine/kit/mllm/data/media.py`: packed media merge and collation hooks;
+- `mvp_engine/kit/mllm/data/spec.py`: `MLLMPackingSpec`;
+- `mvp_engine/kit/mllm/data/packing.py`: `MLLMPackingAssembler` and
+  `build_packed_block_causal_mask`;
+- `mvp_engine/kit/mllm/data/sample.py`: `MLLMPack.to_model_inputs`;
+- `mvp_engine/kit/mllm/data/media.py`: packed media merge and batch collation hooks;
+- `mvp_engine/kit/mllm/utils/step_estimation.py`: packed total-step estimation.
 
-`recipes/openbee` shows one concrete integration:
+Recipe examples:
 
-- `configs/schema.py` and `configs/stage*.yaml`: active packing knobs;
-- `model/packing/`: packed model-input preparation and attention backend patches;
-- `engine/openbee_engine.py`: packed preparation, token accounting, logging;
-- `utils/misc.py`: packed total-step inference.
-
-Use these files as patterns, but adapt model-specific attention and position
-logic for non-Qwen recipes.
-
-## Lifecycle Rules
-
-Packing combines tokenized samples, so it should normally run after preprocess
-has produced `input_ids`, `attention_mask`, and `labels`.
-
-Choose placement deliberately:
-
-- pack before media materialization when media IO is expensive;
-- finalize after media materialization if the final packed sample needs tensor
-  payloads;
-- avoid packing inside the collator unless the recipe intentionally makes the
-  collated batch the packing boundary;
-- define flush, finish, and `drop_last` behavior for the active backend.
-
-For non-`mvp_dataset` backends, do not assume `Assembler`, `RuntimeContext`,
-`resolve_ref`, worker slots, or `TorchLoader` exist. Either adapt `MLLMDataKit`
-or define equivalent lifecycle and seed behavior explicitly.
+- `recipes/qwen3_vl/engine/qwen3_vl_engine.py`;
+- `recipes/openbee/engine/openbee_engine.py`;
+- recipe-local `model/packing/` modules for packed attention and position logic.
 
 ## Packer Rules
 
-The DataKit packer owns grouping. It should:
+The DataKit packer should:
 
 - use tokenized length, not raw text length;
-- respect `max_seq_len`;
-- treat overlength samples according to explicit recipe policy;
-- make random packing deterministic from recipe seed, worker id, rank, and epoch
-  where available;
-- bound memory with `packing_buffer_size` and `packing_open_pack_limit`;
-- preserve source order inside a finalized pack.
+- respect `MLLMPackingSpec.max_seq_len`;
+- be deterministic from mvp-dataset assembler context and spec settings;
+- bound memory with `buffer_size` and `open_pack_limit`;
+- preserve source-sample order inside finalized packs;
+- emit `MLLMPack` objects, not final model dictionaries.
 
-Common strategies:
+For custom algorithms, implement an assembler with the same mvp-dataset
+`push`/`finish` contract and pass it via `MLLMPackingSpec.assembler_cls`.
 
-- `best_fit`: better length utilization, more deterministic ordering pressure;
-- `random`: simpler distribution, often lower utilization;
-- standalone overlength: keeps rare long samples without corrupting other packs.
+## Final Model-Input Rules
 
-## Finalizer Rules
+`MLLMPack.to_model_inputs()` should:
 
-The finalizer turns a sample group into one packed sample:
-
+- call `sample.load_media()` after refs have been resolved;
+- skip samples marked empty by tokenization or media loading;
 - concatenate `input_ids`, `attention_mask`, and `labels`;
-- create segment metadata such as `pack_segment_ids`;
-- merge `pixel_values`, `image_grid_thw`, video tensors, refs, or metadata in
-  source-sample order;
+- create `pack_segment_ids` with segment ids starting at `1`;
 - record `source_sample_num`;
-- drop raw text and large unused fields;
-- ensure labels never supervise padding or dummy media tokens.
-
-Boundary metadata should use inactive padding values that cannot be confused
-with a real segment.
+- merge media fields in source-sample order.
 
 ## Collator Rules
 
 The collator should:
 
-- pad packed token fields normally;
-- pad packed boundary metadata with an inactive value such as `0`;
-- reject mixed packed/unpacked batches unless explicitly supported;
-- keep text-only and multimodal packed samples model-valid;
-- keep dummy media payload labels ignored and segment-isolated.
+- pad token fields normally;
+- pad `pack_segment_ids` with inactive `0`;
+- reject or guard invalid text-only backend cases explicitly;
+- keep dummy media payload labels ignored and segment-isolated;
+- keep media tensor order aligned with placeholders.
 
-Do not use the collator as a hidden packer without documenting the changed
-training unit and accounting implications.
+Packing is completed before collation.
 
 ## Model Preparation Rules
 
-Packed metadata must be converted before model forward:
+Packed metadata must be converted before model forward when the model/backend
+requires it:
 
-- block causal masks for eager/SDPA paths;
-- packed segment-id masks or cu-seqlens for FlashAttention paths;
+- block-causal masks for eager/SDPA paths;
+- segment-id masks or cu-seqlens for FlashAttention paths;
 - packed multimodal position ids for VLM RoPE rules;
-- backend-specific mask or position patches when the model library discards
-  custom metadata.
+- backend-specific patches when the model library discards custom metadata.
 
-Check:
+Check that:
 
-- no source segment attends to another source segment;
-- position ids restart or offset exactly as the model expects;
-- image/video grid metadata is consumed in the same order as placeholders;
-- packed text-only and multimodal segments can coexist;
-- every attention implementation used by the config receives compatible packed
-  metadata.
+- source segments are attention-isolated from each other;
+- causal order still holds inside each segment;
+- position ids match the model's expected text/media convention;
+- image/video grid rows are consumed in placeholder order.
 
 ## Accounting Rules
 
-Packing changes the unit of consumption:
+Packing changes the consumption unit:
 
-- step inference should count packed outputs, not raw rows;
-- token counts should use actual packed tokens after padding/masking rules;
+- step estimation counts packed outputs, not raw rows;
+- source-sample counts come from `source_sample_num`;
+- token counts should use actual packed tokens after padding/masking;
 - effective tokens should come from supervised labels after shifting when
   applicable;
-- throughput and MFU should use the same token convention as the training loss;
-- late media failures must not silently desynchronize packed-output counts.
+- late media failures preserve packed-output accounting consistency.
 
-When the backend cannot infer packed total steps robustly, document that
-limitation and require explicit `loop.total_steps`.
-
-## Attention Isolation Impact Validation
-
-Use this optional impact test when changing model preparation, attention masks,
-position ids, or backend patches.
-
-Prove that:
-
-- segment A cannot attend to segment B;
-- segment B cannot attend to segment A;
-- causal order still holds inside each segment;
-- position ids are valid for text and media spans;
-- image/video grid rows are consumed by the intended source segment.
-
-This validation proves packed-boundary semantics. It does not prove throughput
-or model quality.
+Require explicit `loop.total_steps` if the backend cannot provide a reliable
+finite packed stream for estimation.
