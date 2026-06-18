@@ -1,5 +1,7 @@
 """Reusable training kits."""
 
+# ruff: noqa: F401
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -11,55 +13,85 @@ if TYPE_CHECKING:
         apply_chunked_token_loss_patch,
     )
     from .mllm import (
-        MLLMCollator,
+        Confidence,
+        MLLMBatchCollator,
         MLLMDataKit,
-        MLLMMediaKit,
+        MLLMDataSpec,
+        MLLMDistributionSpec,
+        MLLMLoaderSpec,
+        MLLMMediaHandler,
+        MLLMMediaSlot,
+        MLLMMediaTypeHandler,
         MLLMModelKit,
-        MLLMSampleKit,
+        MLLMPack,
+        MLLMPackingAssembler,
+        MLLMPackingSpec,
+        MLLMSample,
+        MLLMSampleSpec,
+        MLLMSchemaHandler,
+        MLLMSegment,
+        MLLMSourceSpec,
+        MLLMStepEstimationKit,
+        MLLMTextOnlyBatchGuard,
+        MLLMTokenizationHandler,
         ModelInputs,
-        PackingOptions,
+        QwenChatSchemaHandler,
+        QwenImageHandler,
+        QwenVLMediaHandler,
+        QwenVLTokenizationHandler,
+        StepEstimateResult,
     )
+    from .model import LigerKernelKit, LigerKernelReport, LigerPatch
     from .optim import OptimKit
     from .parallel import CPKit
     from .perf.mfu import MFUKit
-
-__all__ = [
-    "LossGuard",
-    "LossKit",
-    "CPKit",
-    "MFUKit",
-    "MLLMCollator",
-    "MLLMDataKit",
-    "MLLMMediaKit",
-    "MLLMModelKit",
-    "MLLMSampleKit",
-    "ModelInputs",
-    "OptimKit",
-    "PackingOptions",
-    "PerTokenLossGuard",
-    "TokenNormedLossKit",
-    "TokenLossStats",
-    "apply_chunked_token_loss_patch",
-]
+    from .util import StepCountingKit, StepCountResult
 
 _EXPORT_MODULES = {
+    "Confidence": ".mllm",
     "LossGuard": ".loss.loss",
     "LossKit": ".loss.loss",
     "CPKit": ".parallel",
     "MFUKit": ".perf.mfu",
-    "MLLMCollator": ".mllm",
+    "LigerKernelKit": ".model",
+    "LigerKernelReport": ".model",
+    "LigerPatch": ".model",
+    "MLLMBatchCollator": ".mllm",
     "MLLMDataKit": ".mllm",
-    "MLLMMediaKit": ".mllm",
+    "MLLMDataSpec": ".mllm",
+    "MLLMDistributionSpec": ".mllm",
+    "MLLMLoaderSpec": ".mllm",
+    "MLLMMediaHandler": ".mllm",
+    "MLLMMediaSlot": ".mllm",
+    "MLLMMediaTypeHandler": ".mllm",
     "MLLMModelKit": ".mllm",
-    "MLLMSampleKit": ".mllm",
+    "MLLMPack": ".mllm",
+    "MLLMPackingAssembler": ".mllm",
+    "MLLMPackingSpec": ".mllm",
+    "MLLMSample": ".mllm",
+    "MLLMSampleSpec": ".mllm",
+    "MLLMSchemaHandler": ".mllm",
+    "MLLMSegment": ".mllm",
+    "MLLMSourceSpec": ".mllm",
+    "MLLMStepEstimationKit": ".mllm",
+    "MLLMTextOnlyBatchGuard": ".mllm",
+    "MLLMTokenizationHandler": ".mllm",
     "ModelInputs": ".mllm",
     "OptimKit": ".optim",
-    "PackingOptions": ".mllm",
     "PerTokenLossGuard": ".loss.token_loss",
+    "QwenChatSchemaHandler": ".mllm",
+    "QwenImageHandler": ".mllm",
+    "QwenVLMediaHandler": ".mllm",
+    "QwenVLTokenizationHandler": ".mllm",
+    "StepCountResult": ".util",
+    "StepCountingKit": ".util",
+    "StepEstimateResult": ".mllm",
     "TokenLossStats": ".loss.token_loss",
     "TokenNormedLossKit": ".loss.token_loss",
     "apply_chunked_token_loss_patch": ".loss.token_loss",
 }
+
+__all__ = list(_EXPORT_MODULES)
 
 
 def __getattr__(name: str):
@@ -70,4 +102,6 @@ def __getattr__(name: str):
     from importlib import import_module
 
     module = import_module(_EXPORT_MODULES[name], __name__)
-    return getattr(module, name)
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
