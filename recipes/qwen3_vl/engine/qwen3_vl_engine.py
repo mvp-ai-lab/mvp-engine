@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import math
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import torch
@@ -16,20 +18,26 @@ from mvp_engine.engine import ENGINE_REGISTRY, Engine, TrainStepContext
 from mvp_engine.kit import (
     MFUKit,
     MLLMDataKit,
+    MLLMDataSpec,
+    MLLMLoaderSpec,
     MLLMModelKit,
+    MLLMPackingSpec,
+    MLLMSampleSpec,
+    MLLMSourceSpec,
+    MLLMStepEstimationKit,
     ModelInputs,
     OptimKit,
-    PackingOptions,
+    QwenChatSchemaHandler,
+    QwenVLMediaHandler,
+    QwenVLTokenizationHandler,
     TokenNormedLossKit,
 )
 from mvp_engine.utils.log import logger
 from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
 from ..configs.schema import Qwen3VLConfig
-from ..guards.loss import PerTokenLossGuard
 from ..model import patch_qwen3vl_conv3d, patch_qwen3vl_model_flops
 from ..model.packing import prepare_packed_model_inputs
-from ..utils.misc import infer_total_steps
 
 if TYPE_CHECKING:
     from transformers import ProcessorMixin
@@ -43,10 +51,10 @@ class Qwen3VLEngine(Engine):
     config: Qwen3VLConfig
 
     processor: ProcessorMixin
-    loss_guard: PerTokenLossGuard
 
     data_kit: MLLMDataKit
     model_kit: MLLMModelKit
+    step_estimation_kit: MLLMStepEstimationKit
     mfu_kit: MFUKit
     optim_kit: OptimKit
     token_loss_kit: TokenNormedLossKit
@@ -59,12 +67,18 @@ class Qwen3VLEngine(Engine):
         self.config.resolve_batching_config(data_parallel_world_size=self.dp_world_size)
         self.data_kit = MLLMDataKit()
         self.model_kit = MLLMModelKit()
+        self.step_estimation_kit = MLLMStepEstimationKit()
         self.mfu_kit = MFUKit()
         self.optim_kit = OptimKit()
         self.token_loss_kit = TokenNormedLossKit(
             device=self.device,
             dp_world_size=self.dp_world_size,
             dp_group=self.dp_group,
+        )
+        self.token_loss_kit.build_loss_guard(
+            spike_multiplier=self.config.optim.loss_spike_skip_multiplier,
+            window_size=int(self.config.optim.loss_spike_skip_window_size),
+            min_history=int(self.config.optim.loss_spike_skip_min_history),
         )
 
     def prepare_dataloader(self, workflow: str = "train"):
@@ -88,48 +102,82 @@ class Qwen3VLEngine(Engine):
             image_max_pixels=self.config.model.image_max_pixels,
         )
 
-        # Step 2: when total_steps=-1, run one finite lightweight data pass to
-        # count packed samples and infer one-epoch optimization steps.
-        if int(self.config.loop.total_steps) == -1:
-            self.config.loop.total_steps = infer_total_steps(
-                self.config,
+        # Step 2: declare the Qwen sample handlers.
+        sample_spec = MLLMSampleSpec(
+            schema_handler=QwenChatSchemaHandler(
                 processor=self.processor,
-                device=self.device,
-                data_parallel_world_size=self.dp_world_size,
-                data_parallel_group=self.dp_group,
-            )
+                thinking_mode=self.config.data.thinking_mode,
+            ),
+            media_handler=QwenVLMediaHandler(processor=self.processor),
+            tokenization_handler=QwenVLTokenizationHandler(
+                processor=self.processor,
+                max_seq_len=int(self.config.data.max_seq_len),
+            ),
+        )
 
-        # Step 3: build the real training/eval dataset with the full preprocess.
-        packing = PackingOptions(
+        # Step 3: declare distributed placement and the training data spec.
+        distribution = self.data_kit.build_distribution_spec(device_mesh=self.device_mesh)
+        packing_spec = MLLMPackingSpec(
+            max_seq_len=int(self.config.data.max_seq_len),
+            algorithm="multi_pack",
             selection_strategy=self.config.data.packing_selection_strategy,
             open_pack_limit=int(self.config.data.packing_open_pack_limit),
             buffer_size=int(self.config.data.packing_buffer_size),
+            block_causal=True,
         )
-        dataset = self.data_kit.build_dataset(
-            dataset_path=self.config.data.train_path,
-            processor=self.processor,
-            max_seq_len=int(self.config.data.max_seq_len),
-            resample=True,
-            resolve_refs=True,
-            ref_columns=self.config.data.ref_columns,
-            seed=self.config.seed,
-            packing=packing,
-            thinking_mode=self.config.data.thinking_mode,
-        )
-
-        # Step 4: wrap the dataset in the normal TorchLoader and return the
-        # batched dataloader used by the engine.
-        collate_fn = self.data_kit.build_collator(
-            pad_token_id=int(self.processor.tokenizer.pad_token_id),
-            processor=self.processor,
-        )
-        return self.data_kit.build_dataloader(
-            dataset,
+        loader_spec = MLLMLoaderSpec(
             batch_size=int(self.config.data.batch_size),
             num_workers=int(self.config.data.num_workers),
-            pin_memory=self.device.type in ["cuda", "npu"],
-            collate_fn=collate_fn,
         )
+        data_spec = MLLMDataSpec(
+            source=MLLMSourceSpec(
+                dataset_path=self.config.data.train_path,
+                dataset_source="lance",
+                ref_columns=tuple(self.config.data.ref_columns),
+                seed=int(self.config.seed),
+                resample=True,
+                resolve_refs=True,
+            ),
+            sample=sample_spec,
+            packing=packing_spec,
+            loader=loader_spec,
+            distribution=distribution,
+        )
+
+        # Step 4: when total_steps=-1, consume one finite packed data pass to estimate one-epoch steps.
+        if int(self.config.loop.total_steps) == -1:
+            estimation_spec = MLLMDataSpec(
+                source=MLLMSourceSpec(
+                    dataset_path=self.config.data.train_path,
+                    dataset_source="lance",
+                    ref_columns=tuple(self.config.data.ref_columns),
+                    seed=int(self.config.seed),
+                    resample=False,
+                    resolve_refs=False,
+                ),
+                sample=sample_spec,
+                packing=packing_spec,
+                loader=loader_spec,
+                distribution=distribution,
+            )
+            estimation_dataset = self.data_kit.build_dataset(estimation_spec)
+            dataset_meta = json.loads(Path(estimation_spec.source.dataset_path).read_text())
+            estimate = self.step_estimation_kit.estimate_total_steps(
+                estimation_dataset,
+                total_source_samples=int(dataset_meta["row_count"]),
+                batch_size=int(self.config.data.batch_size),
+                gradient_accumulation_steps=int(self.config.optim.gradient_accumulation_steps),
+                data_parallel_world_size=self.dp_world_size,
+                data_parallel_group=self.dp_group,
+                device=self.device,
+            )
+            self.config.loop.total_steps = estimate.total_steps
+
+        # Step 5: build the real training dataset with the full preprocess.
+        dataset = self.data_kit.build_dataset(data_spec)
+
+        # Step 6: wrap the dataset in the normal TorchLoader.
+        return self.data_kit.build_dataloader(dataset, data_spec, device=self.device)
 
     def prepare_model(self) -> torch.nn.Module:
         """Build, patch, compile, and parallelize the recipe model.
@@ -181,18 +229,11 @@ class Qwen3VLEngine(Engine):
         return parallelized_model
 
     def prepare_optimizer(self) -> torch.optim.Optimizer:
-        """Construct AdamW and initialize the per-token loss guard.
+        """Construct AdamW.
 
         Returns:
             The optimizer used by this recipe.
         """
-        self.loss_guard = PerTokenLossGuard(
-            spike_multiplier=self.config.optim.loss_spike_skip_multiplier,
-            window_size=int(self.config.optim.loss_spike_skip_window_size),
-            min_history=int(self.config.optim.loss_spike_skip_min_history),
-            group=self.dp_group,
-            group_world_size=self.dp_world_size,
-        )
         return self.optim_kit.build_optimizer(
             self.model,
             optimizer=self.config.optim.optimizer,
@@ -303,11 +344,10 @@ class Qwen3VLEngine(Engine):
             * int(self.config.optim.gradient_accumulation_steps)
         )
 
-        if self.loss_guard.check(
+        if not self.token_loss_kit.guard_loss(
             local_micro_loss_sum,
             micro_effective_token_count,
             step=int(self.step),
-            device=self.device,
         ):
             local_micro_loss_sum = local_micro_loss_sum * 0.0
 
