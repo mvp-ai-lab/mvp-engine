@@ -83,6 +83,8 @@ jobs:
             }
 
             function extractResponseText(data) {
+              if (typeof data === "string") return data;
+              if (data?.response) return extractResponseText(data.response);
               if (typeof data.output_text === "string") return data.output_text;
               const parts = [];
               for (const item of data.output || []) {
@@ -97,6 +99,74 @@ jobs:
             function parseJson(text) {
               const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
               return JSON.parse(cleaned);
+            }
+
+            function extractCodexEventText(data) {
+              const candidates = [data, data.item, data.msg, data.payload].filter(Boolean);
+              for (const candidate of candidates) {
+                if (typeof candidate.delta === "string") return { kind: "delta", text: candidate.delta };
+                if (candidate.type === "agent_message" && typeof candidate.text === "string") {
+                  return { kind: "message", text: candidate.text };
+                }
+                if (candidate.type === "agent_message" && typeof candidate.message === "string") {
+                  return { kind: "message", text: candidate.message };
+                }
+                if (candidate.type === "response.output_text.done" && typeof candidate.text === "string") {
+                  return { kind: "message", text: candidate.text };
+                }
+                if (candidate.type === "response.output_text.delta" && typeof candidate.delta === "string") {
+                  return { kind: "delta", text: candidate.delta };
+                }
+              }
+              return null;
+            }
+
+            function extractSseResponseText(body) {
+              const deltas = [];
+              let finalMessage = "";
+              for (const block of body.split(/\r?\n\r?\n/)) {
+                const dataLines = block
+                  .split(/\r?\n/)
+                  .filter((line) => line.startsWith("data:"))
+                  .map((line) => line.slice("data:".length).trimStart());
+                if (dataLines.length === 0) continue;
+                const dataText = dataLines.join("\n").trim();
+                if (!dataText || dataText === "[DONE]") continue;
+
+                let data;
+                try {
+                  data = JSON.parse(dataText);
+                } catch {
+                  continue;
+                }
+                if (Object.prototype.hasOwnProperty.call(data, "approve")) return JSON.stringify(data);
+
+                const eventText = extractCodexEventText(data);
+                if (eventText?.kind === "delta") deltas.push(eventText.text);
+                if (eventText?.kind === "message") finalMessage = eventText.text;
+
+                const responseText = data.response ? extractResponseText(data.response) : "";
+                if (responseText) finalMessage = responseText;
+              }
+              return finalMessage || deltas.join("").trim();
+            }
+
+            function parseAiDecisionBody(body) {
+              const trimmed = body.trim();
+              try {
+                const parsed = JSON.parse(trimmed);
+                if (Object.prototype.hasOwnProperty.call(parsed, "approve")) return parsed;
+                return parseJson(extractResponseText(parsed));
+              } catch (jsonError) {
+                if (!trimmed.startsWith("event:") && !trimmed.includes("\ndata:")) {
+                  throw jsonError;
+                }
+                const sseText = extractSseResponseText(trimmed);
+                if (!sseText) {
+                  throw new Error("SSE response did not contain model text.");
+                }
+                return parseJson(sseText);
+              }
             }
 
             function asList(value, fallback) {
@@ -323,9 +393,10 @@ jobs:
               }
 
               try {
+                const responseBody = await aiResponse.text();
                 return {
                   ...fallback,
-                  ...parseJson(extractResponseText(await aiResponse.json())),
+                  ...parseAiDecisionBody(responseBody),
                 };
               } catch (error) {
                 return {
