@@ -67,11 +67,11 @@ Kits are intentionally practical: a kit is a small suite of APIs that a user or 
 
 ## Project Layout
 
-- `mvp_engine` — core orchestration logic, Engine base class, reusable kits, logging, distributed helpers, training utilities
-- `mvp_engine/kit` — callable API suites for common training capabilities
-- `recipes/` — experiment-specific configs and custom engine/model/data definitions
-- `skills/` — reusable agent skills used by coding AI to use kits and implement recipe customization patterns
-- `outputs/` — run outputs, logs, and checkpoints
+- `mvp_engine` — core orchestration logic, Engine base class, reusable kits, logging, distributed helpers, training utilities.
+- `mvp_engine/kit` — callable API suites for common training capabilities.
+- `recipes/` — experiment-specific configs and custom engine/model/data definitions.
+- `skills/` — reusable agent skills used by coding AI to use kits and implement recipe customization patterns.
+- `outputs/` — run outputs, logs, and checkpoints.
 
 
 ## Getting Started
