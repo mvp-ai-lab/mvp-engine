@@ -6,7 +6,6 @@ import math
 from functools import partial
 
 import torch
-from mvp_dataset import TorchLoader
 
 from mvp_engine.distributed.parallelize import parallelize_model
 from mvp_engine.distributed.utils import (
@@ -14,37 +13,45 @@ from mvp_engine.distributed.utils import (
     get_data_parallel_world_size,
 )
 from mvp_engine.engine import ENGINE_REGISTRY, Engine, TrainStepContext
-from mvp_engine.kit import MFUKit, MLLMModelKit, OptimKit, TokenNormedLossKit
+from mvp_engine.kit import (
+    MFUKit,
+    MLLMDataKit,
+    MLLMDataSpec,
+    MLLMLoaderSpec,
+    MLLMModelKit,
+    MLLMPackingSpec,
+    MLLMSampleSpec,
+    MLLMSourceSpec,
+    MLLMTokenizationHandler,
+    ModelInputs,
+    OptimKit,
+    TokenNormedLossKit,
+)
 from mvp_engine.utils.log import logger
 from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
 from ..configs.schema import VideoMLLMConfig
-from ..dataset.collator import VideoMLLMCollator
-from ..dataset.dataset import build_dataset
+from ..dataset.media import build_video_media_handler
 from ..dataset.processor import build_qwen3_vl_processor
-from ..guards.loss import PerTokenLossGuard
+from ..dataset.schema import VideoChatSchemaHandler
 from ..model import patch_qwen3vl_model_flops
 from ..model.onevision import apply_onevision_swap, bind_video_layout
+from ..model.packing import prepare_packed_video_model_inputs
 
 
 @ENGINE_REGISTRY.register()
 class VideoMLLMEngine(Engine):
     """Recipe-local engine for supervised Qwen3-VL video fine-tuning.
 
-    Mirrors the Qwen3-VL recipe engine but keeps video samples unpacked: uniform
-    frame sampling and decode-then-expand preprocessing live in the recipe-local
-    dataset. Both the uniform and codec paths deliberately omit
-    ``mm_token_type_ids``, so ``compute_3d_position_ids`` returns None and the LLM
-    falls back to default **1-D** positions (M-RoPE is not active). Proper M-RoPE
-    (expanding ``video_grid_thw`` into ``grid_t`` rows of ``(1, h, w)``) is a
-    tracked follow-up.
+    DataKit owns source loading, chat tokenization, packing, media loading, and
+    collation. Recipe-local schema/media handlers keep video strategy dispatch
+    and OneVision tensor layout outside the generic kit.
     """
 
     ConfigClass = VideoMLLMConfig
     config: VideoMLLMConfig
 
-    loss_guard: PerTokenLossGuard
-
+    data_kit: MLLMDataKit
     model_kit: MLLMModelKit
     mfu_kit: MFUKit
     optim_kit: OptimKit
@@ -56,6 +63,7 @@ class VideoMLLMEngine(Engine):
         self.dp_world_size = get_data_parallel_world_size(self.device_mesh)
         self.dp_group = get_data_parallel_group(self.device_mesh)
         self.config.resolve_batching_config(data_parallel_world_size=self.dp_world_size)
+        self.data_kit = MLLMDataKit()
         self.model_kit = MLLMModelKit()
         self.mfu_kit = MFUKit()
         self.optim_kit = OptimKit()
@@ -63,6 +71,11 @@ class VideoMLLMEngine(Engine):
             device=self.device,
             dp_world_size=self.dp_world_size,
             dp_group=self.dp_group,
+        )
+        self.token_loss_kit.build_loss_guard(
+            spike_multiplier=self.config.optim.loss_spike_skip_multiplier,
+            window_size=int(self.config.optim.loss_spike_skip_window_size),
+            min_history=int(self.config.optim.loss_spike_skip_min_history),
         )
 
     def prepare_dataloader(self, workflow: str = "train"):
@@ -80,21 +93,44 @@ class VideoMLLMEngine(Engine):
             logger.warning(f"Video MLLM engine does not support workflow '{workflow}'.")
             return
 
-        self.processor = build_qwen3_vl_processor(self.config.model)
-
-        dataset = build_dataset(self.config, processor=self.processor)
-        collate_fn = VideoMLLMCollator(pad_token_id=int(self.processor.tokenizer.pad_token_id))
-
-        loader = TorchLoader(
-            dataset,
-            num_workers=int(self.config.data.num_workers),
-            pin_memory=self.device.type in ["cuda", "npu"],
+        self.processor = build_qwen3_vl_processor(self.config.model, data_kit=self.data_kit)
+        sample_spec = MLLMSampleSpec(
+            schema_handler=VideoChatSchemaHandler(processor=self.processor),
+            media_handler=build_video_media_handler(self.config, processor=self.processor),
+            tokenization_handler=MLLMTokenizationHandler(
+                processor=self.processor,
+                max_seq_len=int(self.config.data.max_seq_len),
+            ),
         )
-        return loader.batch(
+        distribution = self.data_kit.build_distribution_spec(device_mesh=self.device_mesh)
+        packing_spec = MLLMPackingSpec(
+            max_seq_len=int(self.config.data.max_seq_len),
+            algorithm="multi_pack",
+            selection_strategy=self.config.data.packing_selection_strategy,
+            open_pack_limit=int(self.config.data.packing_open_pack_limit),
+            buffer_size=int(self.config.data.packing_buffer_size),
+            block_causal=True,
+        )
+        loader_spec = MLLMLoaderSpec(
             batch_size=int(self.config.data.batch_size),
-            drop_last=True,
-            collate_fn=collate_fn,
+            num_workers=int(self.config.data.num_workers),
         )
+        data_spec = MLLMDataSpec(
+            source=MLLMSourceSpec(
+                dataset_path=self.config.data.train_path,
+                dataset_source=self.config.data.source,
+                ref_columns=tuple(self.config.data.ref_columns),
+                seed=int(self.config.seed),
+                resample=True,
+                resolve_refs=True,
+            ),
+            sample=sample_spec,
+            packing=packing_spec,
+            loader=loader_spec,
+            distribution=distribution,
+        )
+        dataset = self.data_kit.build_dataset(data_spec)
+        return self.data_kit.build_dataloader(dataset, data_spec, device=self.device)
 
     def prepare_model(self) -> torch.nn.Module:
         """Build, patch, compile, and parallelize the recipe model.
@@ -157,18 +193,11 @@ class VideoMLLMEngine(Engine):
         return parallelized_model
 
     def prepare_optimizer(self) -> torch.optim.Optimizer:
-        """Construct AdamW and initialize the per-token loss guard.
+        """Construct AdamW.
 
         Returns:
             The optimizer used by this recipe.
         """
-        self.loss_guard = PerTokenLossGuard(
-            spike_multiplier=self.config.optim.loss_spike_skip_multiplier,
-            window_size=int(self.config.optim.loss_spike_skip_window_size),
-            min_history=int(self.config.optim.loss_spike_skip_min_history),
-            group=self.dp_group,
-            group_world_size=self.dp_world_size,
-        )
         return self.optim_kit.build_optimizer(
             self.model,
             optimizer=self.config.optim.optimizer,
@@ -191,16 +220,8 @@ class VideoMLLMEngine(Engine):
         )
 
     def train_pre_step(self, ctx: TrainStepContext) -> TrainStepContext:
-        """Move one micro-batch to device and cast visual tensors to the active dtype.
-
-        Video samples are unpacked, so this only relocates tensors and casts
-        ``pixel_values_videos`` to the mixed-precision dtype. ``mm_token_type_ids``
-        is not provided, so the LLM uses default **1-D** positions (M-RoPE is not
-        active); see the class docstring.
-        """
-        device_batch = {}
-        for key, value in ctx.data.items():
-            device_batch[key] = value.to(self.device) if isinstance(value, torch.Tensor) else value
+        """Move one packed DataKit batch to device and prepare model inputs."""
+        device_batch: ModelInputs = self.data_kit.to_device(ctx.data, self.device)
 
         pixel_values_videos = device_batch.get("pixel_values_videos")
         if pixel_values_videos is not None and pixel_values_videos.is_floating_point():
@@ -212,6 +233,12 @@ class VideoMLLMEngine(Engine):
                     f"[NAN-PROBE] non-finite pixel_values_videos rank={_r} node={_r // 8} "
                     f"shape={tuple(pixel_values_videos.shape)}"
                 )
+
+        device_batch = prepare_packed_video_model_inputs(
+            device_batch,
+            attn_implementation=getattr(self.unwrapped_model.config, "_attn_implementation", None),
+            mask_dtype=self.dtype if self.dtype.is_floating_point else torch.float32,
+        )
 
         # Bind visual-token layout onto the OneVision adapter and keep the remaining model kwargs.
         # Shared with the eval path (one feeding implementation) so train and eval never drift.
@@ -232,7 +259,9 @@ class VideoMLLMEngine(Engine):
             enabled=self.dtype != torch.float32,
         ):
             model_inputs = {
-                key: value for key, value in data.items() if key not in {"total_tokens", "effective_tokens"}
+                key: value
+                for key, value in data.items()
+                if key not in {"pack_segment_ids", "total_tokens", "effective_tokens"}
             }
             outputs = self.model(**model_inputs)
 
@@ -253,11 +282,14 @@ class VideoMLLMEngine(Engine):
         # real spatial grid, and the visual tower is the (frozen) OneVision encoder rather than the
         # native Qwen3-VL ViT that the FLOPs estimator models. Skip the vision-FLOPs term instead of
         # feeding a placeholder grid into the native-ViT formula; the dominant trained-LLM FLOPs are unaffected.
+        flops_attention_mask = data.get("pack_segment_ids")
+        if flops_attention_mask is None:
+            flops_attention_mask = data.get("attention_mask")
         self.mfu_kit.accumulate_microbatch(
             model=self.unwrapped_model,
             batch_size=int(data["input_ids"].shape[0]),
             seq_len=int(data["input_ids"].shape[1]),
-            attention_mask=data.get("attention_mask"),
+            attention_mask=flops_attention_mask,
             image_grid_thw=None,
             is_training=True,
             freeze_vit=bool(self.config.model.freeze_vit),
@@ -300,11 +332,10 @@ class VideoMLLMEngine(Engine):
             * int(self.config.optim.gradient_accumulation_steps)
         )
 
-        if self.loss_guard.check(
+        if not self.token_loss_kit.guard_loss(
             local_micro_loss_sum,
             micro_effective_token_count,
             step=int(self.step),
-            device=self.device,
         ):
             local_micro_loss_sum = local_micro_loss_sum * 0.0
 

@@ -12,19 +12,22 @@ VideoEncodingStrategy = Literal["uniform", "codec_patch", "keyframe_lowres"]
 class VideoMLLMDataConfig(BaseModel):
     """Dataset and batching options for the video MLLM recipe.
 
-    Video samples are kept unpacked. ``video_encoding_strategy`` selects the
-    recipe-local video preprocessing path; all strategies feed the OneVision
-    visual encoder.
+    ``video_encoding_strategy`` selects the recipe-local video media handler;
+    DataKit owns sample packing, token collation, and dataloader construction.
     """
 
     model_config = ConfigDict(frozen=False, extra="forbid")
 
     train_path: str = "./data/video_mllm/smoke.jsonl"
     source: Literal["jsonl", "parquet", "lance"] = "jsonl"
+    ref_columns: list[str] = Field(default_factory=list)
     video_root: str | None = None
     max_seq_len: int = Field(8192, ge=1)
     batch_size: int = 1
     num_workers: int = Field(0, ge=0)
+    packing_selection_strategy: Literal["random", "best_fit"] = "best_fit"
+    packing_open_pack_limit: int = Field(8, ge=1)
+    packing_buffer_size: int = Field(64, ge=0)
     # Uniform frame-sampling budget; the swappable seam lives in dataset/sampling.py.
     num_frames: int = Field(16, ge=1)
     video_frame_size: int = Field(224, ge=1)

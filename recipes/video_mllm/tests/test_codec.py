@@ -1,17 +1,17 @@
 """Codec patchification tests for the video MLLM recipe."""
 
-from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import torch
 import torch.nn as nn
-from mvp_dataset.cache.fingerprint import callable_fingerprint
 from omegaconf import OmegaConf
 
+from mvp_engine.kit import MLLMTokenizationHandler
 from recipes.video_mllm.configs.schema import VideoMLLMConfig
 from recipes.video_mllm.dataset import codec as codec_module
+from recipes.video_mllm.dataset import media as media_module
 from recipes.video_mllm.dataset.codec import (
     CodecPatchConfig,
     _load_cv_reader_residual_arrays,
@@ -22,8 +22,10 @@ from recipes.video_mllm.dataset.codec import (
     pack_video_patches,
     process_video_with_codec,
 )
-from recipes.video_mllm.dataset.collator import VideoMLLMCollator
+from recipes.video_mllm.dataset.media import OneVisionVideoHandler, VideoMLLMMediaHandler
+from recipes.video_mllm.dataset.schema import VideoChatSchemaHandler
 from recipes.video_mllm.dataset.video_encoding import (
+    DenseVideoConfig,
     KeyframeLowresVideoConfig,
     VideoEncodingResult,
     process_video_with_keyframe_lowres,
@@ -31,6 +33,57 @@ from recipes.video_mllm.dataset.video_encoding import (
 from recipes.video_mllm.model.onevision import OneVisionVisualTower
 
 CODEC_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "codec.yaml"
+
+
+class _FakeTokenizer:
+    def __call__(self, text, add_special_tokens=False):
+        del add_special_tokens
+        return {"input_ids": [200 if ch == "V" else ord(ch) for ch in text]}
+
+
+class _FakeProcessor:
+    video_token = "V"
+    video_token_id = 200
+    tokenizer = _FakeTokenizer()
+
+    def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False):
+        del tokenize, add_generation_prompt
+        has_assistant = any(message["role"] == "assistant" for message in messages)
+        text = "P" + self.video_token
+        if has_assistant:
+            text += "ANS"
+        return text
+
+
+def _sample() -> dict:
+    return {
+        "messages": [
+            {"role": "user", "content": "<video>describe"},
+            {"role": "assistant", "content": "ANS"},
+        ],
+        "video": "demo.mp4",
+    }
+
+
+def _build_datakit_video_sample(
+    video_handler: OneVisionVideoHandler,
+    *,
+    max_length: int,
+) -> dict:
+    processor = _FakeProcessor()
+    media_handler = VideoMLLMMediaHandler(processor=processor, video_handler=video_handler)
+    segments, slots, _ = VideoChatSchemaHandler(processor).normalize(_sample())
+    rendered_segments = media_handler.render(segments, slots)
+    input_ids, labels, attention_mask = MLLMTokenizationHandler(
+        processor=processor,
+        max_seq_len=max_length,
+    ).tokenize(rendered_segments)
+    return {
+        "input_ids": torch.tensor(input_ids, dtype=torch.long),
+        "labels": torch.tensor(labels, dtype=torch.long),
+        "attention_mask": torch.tensor(attention_mask, dtype=torch.long),
+        **video_handler.load(slots, ["demo.mp4"], processor=processor),
+    }
 
 
 def _load_codec_config() -> VideoMLLMConfig:
@@ -81,9 +134,6 @@ def test_schema_rejects_keyframe_lowres_larger_than_full_resolution():
 
 
 def test_build_uniform_sample_expands_dense_video_pads_and_masks_labels(monkeypatch):
-    from recipes.video_mllm.dataset import preprocess as preprocess_module
-    from recipes.video_mllm.dataset.video_encoding import DenseVideoConfig
-
     config = DenseVideoConfig(num_frames=2, frame_size=4, patch_size=2)
 
     fake_outputs = VideoEncodingResult(
@@ -94,34 +144,12 @@ def test_build_uniform_sample_expands_dense_video_pads_and_masks_labels(monkeypa
         frame_grid_thw=torch.tensor([[1, 2, 2], [1, 2, 2]], dtype=torch.long),
         merge_sizes=torch.ones(2, dtype=torch.long),
     )
-    monkeypatch.setattr(preprocess_module, "process_video_with_dense_frames", lambda *a, **k: fake_outputs)
+    monkeypatch.setattr(media_module, "process_video_with_dense_frames", lambda *a, **k: fake_outputs)
 
-    class FakeTokenizer:
-        def __call__(self, text, add_special_tokens=False):
-            ids = [200 if ch == "V" else ord(ch) for ch in text]
-            return {"input_ids": ids}
-
-    class FakeProcessor:
-        video_token = "V"
-        video_token_id = 200
-        tokenizer = FakeTokenizer()
-
-        def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False):
-            has_assistant = any(m["role"] == "assistant" for m in messages)
-            text = "P" + FakeProcessor.video_token
-            if has_assistant and not add_generation_prompt:
-                text += "ANS"
-            return text
-
-    sample = {
-        "messages": [
-            {"role": "user", "content": "<video>describe"},
-            {"role": "assistant", "content": "ANS"},
-        ],
-        "video": "demo.mp4",
-    }
-
-    out = preprocess_module._build_uniform_sample(sample, processor=FakeProcessor(), max_length=64, dense_config=config)
+    out = _build_datakit_video_sample(
+        OneVisionVideoHandler(strategy="uniform", dense_config=config),
+        max_length=64,
+    )
 
     input_ids = out["input_ids"]
     labels = out["labels"]
@@ -131,13 +159,11 @@ def test_build_uniform_sample_expands_dense_video_pads_and_masks_labels(monkeypa
     assert out["video_grid_thw"].tolist() == [[1, 8, 1]]
     assert out["pixel_values_videos"].shape == (8, 3, 2, 2)
     assert out["video_token_positions"].shape == (8, 3)
-    assert int(out["visual_token_count"].item()) == 8
+    assert out["video_token_counts"].tolist() == [8]
     assert torch.equal(out["attention_mask"], torch.ones_like(input_ids))
 
 
 def test_build_codec_sample_expands_video_pads_and_masks_labels(monkeypatch):
-    from recipes.video_mllm.dataset import preprocess as preprocess_module
-
     config = CodecPatchConfig(num_frames=2, packed_frames=1, frame_size=4, patch_size=2, k_keep=4)
 
     fake_outputs = VideoEncodingResult(
@@ -146,37 +172,12 @@ def test_build_codec_sample_expands_video_pads_and_masks_labels(monkeypatch):
         frame_grid_thw=torch.tensor([[1, 2, 2], [1, 2, 2]], dtype=torch.long),
         merge_sizes=torch.ones(2, dtype=torch.long),
     )
-    monkeypatch.setattr(preprocess_module, "process_video_with_codec", lambda *a, **k: fake_outputs)
+    monkeypatch.setattr(media_module, "process_video_with_codec", lambda *a, **k: fake_outputs)
 
-    class FakeTokenizer:
-        def __call__(self, text, add_special_tokens=False):
-            # Tokenize char-by-char, mapping the (single-char stand-in) video pad to its id.
-            ids = [200 if ch == "V" else ord(ch) for ch in text]
-            return {"input_ids": ids}
-
-    class FakeProcessor:
-        # Single-char video token keeps the char tokenizer trivial; one pad per video block.
-        video_token = "V"
-        video_token_id = 200
-        tokenizer = FakeTokenizer()
-
-        def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False):
-            # One leading prompt char + the single video pad, then the assistant answer when present.
-            has_assistant = any(m["role"] == "assistant" for m in messages)
-            text = "P" + FakeProcessor.video_token
-            if has_assistant and not add_generation_prompt:
-                text += "ANS"
-            return text
-
-    sample = {
-        "messages": [
-            {"role": "user", "content": "<video>describe"},
-            {"role": "assistant", "content": "ANS"},
-        ],
-        "video": "demo.mp4",
-    }
-
-    out = preprocess_module._build_codec_sample(sample, processor=FakeProcessor(), max_length=64, codec_config=config)
+    out = _build_datakit_video_sample(
+        OneVisionVideoHandler(strategy="codec_patch", codec_config=config),
+        max_length=64,
+    )
 
     input_ids = out["input_ids"]
     labels = out["labels"]
@@ -188,13 +189,11 @@ def test_build_codec_sample_expands_video_pads_and_masks_labels(monkeypatch):
     assert out["video_token_positions"].shape == (config.k_keep, 3)
     assert out["video_grid_thw"].tolist() == [[1, config.k_keep, 1]]
     assert out["pixel_values_videos"].shape == (config.k_keep, 3, 2, 2)
-    assert int(out["visual_token_count"].item()) == config.k_keep
+    assert out["video_token_counts"].tolist() == [config.k_keep]
     assert torch.equal(out["attention_mask"], torch.ones_like(input_ids))
 
 
 def test_build_keyframe_lowres_sample_expands_actual_visual_tokens(monkeypatch):
-    from recipes.video_mllm.dataset import preprocess as preprocess_module
-
     config = KeyframeLowresVideoConfig(
         num_frames=3,
         full_frame_size=4,
@@ -208,38 +207,11 @@ def test_build_keyframe_lowres_sample_expands_actual_visual_tokens(monkeypatch):
         frame_grid_thw=torch.tensor([[1, 4, 4], [1, 2, 2], [1, 4, 4]], dtype=torch.long),
         merge_sizes=torch.ones(3, dtype=torch.long),
     )
-    monkeypatch.setattr(preprocess_module, "process_video_with_keyframe_lowres", lambda *a, **k: fake_outputs)
+    monkeypatch.setattr(media_module, "process_video_with_keyframe_lowres", lambda *a, **k: fake_outputs)
 
-    class FakeTokenizer:
-        def __call__(self, text, add_special_tokens=False):
-            ids = [200 if ch == "V" else ord(ch) for ch in text]
-            return {"input_ids": ids}
-
-    class FakeProcessor:
-        video_token = "V"
-        video_token_id = 200
-        tokenizer = FakeTokenizer()
-
-        def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False):
-            has_assistant = any(m["role"] == "assistant" for m in messages)
-            text = "P" + FakeProcessor.video_token
-            if has_assistant and not add_generation_prompt:
-                text += "ANS"
-            return text
-
-    sample = {
-        "messages": [
-            {"role": "user", "content": "<video>describe"},
-            {"role": "assistant", "content": "ANS"},
-        ],
-        "video": "demo.mp4",
-    }
-
-    out = preprocess_module._build_keyframe_lowres_sample(
-        sample,
-        processor=FakeProcessor(),
+    out = _build_datakit_video_sample(
+        OneVisionVideoHandler(strategy="keyframe_lowres", keyframe_config=config),
         max_length=128,
-        keyframe_config=config,
     )
 
     input_ids = out["input_ids"]
@@ -252,6 +224,10 @@ def test_build_keyframe_lowres_sample_expands_actual_visual_tokens(monkeypatch):
 
 
 def test_collator_concats_visual_token_layout_and_counts():
+    handler = OneVisionVideoHandler(
+        strategy="uniform",
+        dense_config=DenseVideoConfig(num_frames=1, frame_size=2, patch_size=1),
+    )
     first_video = VideoEncodingResult(
         patch_values=torch.zeros(2, 3, 2, 2),
         token_positions=torch.tensor([[0, 0, 0], [0, 0, 1]], dtype=torch.long),
@@ -279,7 +255,7 @@ def test_collator_concats_visual_token_layout_and_counts():
         },
     ]
 
-    out = VideoMLLMCollator(pad_token_id=0)(batch)
+    out = handler.collate([handler.merge_pack(batch)])
 
     assert out["pixel_values_videos"].shape == (5, 3, 2, 2)
     assert out["video_token_positions"].tolist() == [
@@ -294,8 +270,6 @@ def test_collator_concats_visual_token_layout_and_counts():
     assert out["video_frame_grid_thw"].tolist() == [[1, 1, 2], [1, 2, 1], [1, 1, 1]]
     assert out["video_frame_counts"].tolist() == [1, 2]
     assert out["video_merge_sizes"].tolist() == [1, 1, 1]
-    assert out["total_tokens"] == 9
-    assert out["effective_tokens"] == 2
 
 
 def test_onevision_patch_sequence_uses_per_sample_token_positions():
@@ -329,7 +303,7 @@ def test_onevision_patch_sequence_uses_per_sample_token_positions():
     tower = OneVisionVisualTower.__new__(OneVisionVisualTower)
     nn.Module.__init__(tower)
     tower.encoder = FakeEncoder()
-    tower.projection = nn.Identity()
+    tower.merger = nn.Identity()
 
     outputs = tower(
         torch.zeros(5, 3, 2, 2),
@@ -444,14 +418,11 @@ def test_patch_positions_length_matches_visual_tokens():
 
 
 def test_codec_config_is_cache_fingerprintable():
-    def fn(*, codec_config):
-        return codec_config.k_keep
-
     config = CodecPatchConfig()
-    fingerprint = callable_fingerprint(partial(fn, codec_config=config))
+    fingerprint = config.__fingerprint__()
 
     assert isinstance(fingerprint, str)
-    assert len(fingerprint) == 64
+    assert "k_keep=" in fingerprint
 
 
 def test_codec_video_processor_keeps_packed_frame_size(monkeypatch, tmp_path):

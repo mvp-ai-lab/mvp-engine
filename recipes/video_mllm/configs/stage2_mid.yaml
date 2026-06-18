@@ -1,0 +1,59 @@
+dev_mode: false
+engine: VideoMLLMEngine
+
+# Stage 2 — MID-TRAINING. Encoder frozen; train projector + LLM on a larger video-caption mix
+# (OV2 30s/60s/180s captions) to build temporal + broad multimodal knowledge. Starts from the
+# Stage-1 aligned checkpoint. Same raw-video / online-decode pipeline.
+
+seed: 42
+deterministic: false
+
+parallel:
+  mesh:
+    replicate: -1
+    shard: 1
+    tensor: 1
+
+data:
+  train_path: "/mnt/data-alpha-sg-01/team-camera/home/d84417809/datasets/ov2_data/lance/mid_30s60s180s.lance"
+  source: "lance"
+  video_root: null
+  max_seq_len: 8192
+  batch_size: 1
+  num_workers: 8
+  num_frames: 16
+  video_frame_size: 224
+  video_encoding_strategy: "uniform"
+
+model:
+  # Set to the Stage-1 aligned hf checkpoint at launch, e.g.:
+  #   model.pretrained_model_name_or_path=outputs/<stage1_run>/checkpoints/iter_4000/hf_model
+  pretrained_model_name_or_path: "./pretrained/Qwen3-VL-8B-Base-woDS-stage0"
+  attn_implementation: "flash_attention_2"
+  freeze_vit: true
+  freeze_projector: false
+  freeze_llm: false      # <-- mid-training trains projector + LLM
+  vision_encoder_name_or_path: "/mnt/data-alpha-sg-01/team-camera/home/c84391361/projects/OVEncoder-align/checkpoints/onevision-encoder-large-lang"
+  freeze_vision_encoder: true
+
+optim:
+  optimizer: "AdamW"
+  lr: 1.0e-5             # OV2 mid/instruct lr
+  weight_decay: 0.05
+  gradient_accumulation_steps: 2
+  mixed_precision: "bf16"
+  warmup_ratio: 0.05
+  clip_grad_norm: 1.0
+
+loop:
+  policy: "iter"
+  total_steps: 8000
+
+checkpoint:
+  interval: 2000
+  keep_n: 2
+  hf_enable: true        # Stage 3 (SFT) loads this ckpt
+
+log:
+  interval: 10
+  backends: ["terminal", "file", "wandb"]

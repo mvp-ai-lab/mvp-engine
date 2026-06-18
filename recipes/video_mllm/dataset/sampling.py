@@ -3,8 +3,8 @@
 This is the swappable seam: :func:`sample_frame_indices` decides which frames are
 fed to the model. The default is uniform sampling across the whole clip. To try
 another strategy (dynamic per-frame resolution, keyframe + cross-frame patch
-selection, ...), edit this function and the matching ``preprocess.py`` /
-model-side code, following the ``skills/data/video-frame-sampling`` skill. Keep
+selection, ...), edit this function and the matching media handler /
+model-side code. Keep
 the strategy concrete here rather than adding a registry or config dispatch.
 """
 

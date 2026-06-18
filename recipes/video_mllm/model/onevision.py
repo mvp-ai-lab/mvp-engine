@@ -41,7 +41,7 @@ class OneVisionVisualTower(nn.Module):
         attn_implementation: str,
         freeze_encoder: bool,
     ) -> None:
-        """Load the OneVision encoder and a projection into the LLM hidden size."""
+        """Load the OneVision encoder and merger into the LLM hidden size."""
         super().__init__()
         self.encoder = AutoModel.from_pretrained(
             vision_encoder_name_or_path,
@@ -49,7 +49,11 @@ class OneVisionVisualTower(nn.Module):
             attn_implementation=attn_implementation,
         )
         encoder_hidden_size = int(getattr(self.encoder.config, "hidden_size"))
-        self.projection = nn.Linear(encoder_hidden_size, int(output_hidden_size), bias=True)
+        self.merger = OneVisionPatchMerger(
+            input_hidden_size=encoder_hidden_size,
+            output_hidden_size=int(output_hidden_size),
+            layer_norm_eps=float(getattr(self.encoder.config, "layer_norm_eps", 1e-6)),
+        )
 
         if freeze_encoder:
             for parameter in self.encoder.parameters():
@@ -88,7 +92,7 @@ class OneVisionVisualTower(nn.Module):
         if hidden_states is None:
             hidden_states = outputs.hidden_states[-1]
         hidden_states = hidden_states.reshape(-1, hidden_states.shape[-1])
-        projected = self.projection(hidden_states)
+        projected = self.merger(hidden_states)
 
         return BaseModelOutputWithDeepstackFeatures(
             last_hidden_state=projected,
@@ -148,12 +152,30 @@ class OneVisionVisualTower(nn.Module):
             start = end
 
         hidden_states = torch.cat(outputs, dim=0)
-        projected = self.projection(hidden_states)
+        projected = self.merger(hidden_states)
         return BaseModelOutputWithDeepstackFeatures(
             last_hidden_state=projected,
             pooler_output=projected,
             deepstack_features=[],
         )
+
+
+class OneVisionPatchMerger(nn.Module):
+    """Qwen3/OneVision-style visual-token merger without changing token count."""
+
+    def __init__(self, *, input_hidden_size: int, output_hidden_size: int, layer_norm_eps: float) -> None:
+        super().__init__()
+        self.norm = nn.LayerNorm(input_hidden_size, eps=layer_norm_eps)
+        self.linear_fc1 = nn.Linear(input_hidden_size, input_hidden_size)
+        self.act_fn = nn.GELU()
+        self.linear_fc2 = nn.Linear(input_hidden_size, output_hidden_size)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """Project OneVision hidden states into the language-model hidden size."""
+        hidden_states = self.norm(hidden_states)
+        hidden_states = self.linear_fc1(hidden_states)
+        hidden_states = self.act_fn(hidden_states)
+        return self.linear_fc2(hidden_states)
 
 
 def replace_visual_tower_with_onevision(

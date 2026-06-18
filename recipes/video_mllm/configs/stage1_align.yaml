@@ -1,0 +1,59 @@
+dev_mode: false
+engine: VideoMLLMEngine
+
+# Stage 1 — ALIGNMENT (projector warmup). Freeze the OneVision encoder AND the Qwen3-VL LLM;
+# train ONLY the connector/projector so the swapped OneVision features align to the LLM's input
+# space (this is the step our earlier SFT runs skipped — projector was frozen and never aligned).
+# Data: a subset of OV2 short-video captions (mid_training_video/30s → build_ov2_mid_jsonl → lance).
+# All raw-video / online-decode (same validated pipeline as the SFT recipe).
+
+seed: 42
+deterministic: false
+
+parallel:
+  mesh:
+    replicate: -1
+    shard: 1
+    tensor: 1
+
+data:
+  train_path: "/mnt/data-alpha-sg-01/team-camera/home/d84417809/datasets/ov2_data/lance/align_30s.lance"
+  source: "lance"
+  video_root: null
+  max_seq_len: 8192
+  batch_size: 1
+  num_workers: 8
+  num_frames: 16
+  video_frame_size: 224
+  video_encoding_strategy: "uniform"
+
+model:
+  pretrained_model_name_or_path: "./pretrained/Qwen3-VL-8B-Base-woDS-stage0"
+  attn_implementation: "flash_attention_2"
+  freeze_vit: true
+  freeze_projector: false   # <-- the only trainable part in alignment
+  freeze_llm: true
+  vision_encoder_name_or_path: "/mnt/data-alpha-sg-01/team-camera/home/c84391361/projects/OVEncoder-align/checkpoints/onevision-encoder-large-lang"
+  freeze_vision_encoder: true
+
+optim:
+  optimizer: "AdamW"
+  lr: 1.0e-3            # projector warmup uses a higher lr than SFT (classic LLaVA alignment ~1e-3)
+  weight_decay: 0.0
+  gradient_accumulation_steps: 2
+  mixed_precision: "bf16"
+  warmup_ratio: 0.03
+  clip_grad_norm: 1.0
+
+loop:
+  policy: "iter"
+  total_steps: 4000
+
+checkpoint:
+  interval: 2000
+  keep_n: 1
+  hf_enable: true        # save safetensors so Stage 2 can load this aligned ckpt
+
+log:
+  interval: 10
+  backends: ["terminal", "file", "wandb"]
