@@ -405,12 +405,6 @@ def _normalize_2d_attention_mask(attention_mask: torch.Tensor) -> torch.Tensor:
     return attention_mask.to(dtype=torch.bool)
 
 
-def _cu_seqlens_from_lengths(lengths: torch.Tensor) -> torch.Tensor:
-    cu_seqlens = torch.zeros(lengths.numel() + 1, device=lengths.device, dtype=torch.int32)
-    cu_seqlens[1:] = torch.cumsum(lengths, dim=0)
-    return cu_seqlens
-
-
 def _flash_attention(
     query: torch.Tensor,
     key: torch.Tensor,
@@ -480,7 +474,8 @@ def _flash_attention(
 
         flat_mask = attention_mask.reshape(-1)
         indices = torch.nonzero(flat_mask, as_tuple=False).flatten()
-        cu_seqlens = _cu_seqlens_from_lengths(lengths)
+        cu_seqlens = torch.zeros(lengths.numel() + 1, device=lengths.device, dtype=torch.int32)
+        cu_seqlens[1:] = torch.cumsum(lengths, dim=0)
         max_seqlen = int(lengths.max().item())
         output = flash_attn_varlen_func(
             query.reshape(total_q, query.shape[2], query.shape[3]).index_select(0, indices),
@@ -580,8 +575,8 @@ def _npu_attention(
             total_k=total_k,
             device=query.device,
         )
-        actual_seq_qlen = _npu_actual_seq_lengths(cu_seq_lens_q)
-        actual_seq_kvlen = _npu_actual_seq_lengths(cu_seq_lens_k)
+        actual_seq_qlen = [int(length) for length in cu_seq_lens_q[1:].detach().cpu().tolist()]
+        actual_seq_kvlen = [int(length) for length in cu_seq_lens_k[1:].detach().cpu().tolist()]
 
     output = torch_npu.npu_fusion_attention_v2(
         query,
@@ -607,10 +602,6 @@ def _build_npu_attention_mask(attention_mask: torch.Tensor, *, is_causal: bool) 
         causal_blocked = positions[None, :] > positions[:, None]
         blocked = blocked | causal_blocked[None, None, :, :]
     return blocked.expand(batch_size, 1, seq_len, seq_len).contiguous()
-
-
-def _npu_actual_seq_lengths(cu_seq_lens: torch.Tensor) -> list[int]:
-    return [int(length) for length in cu_seq_lens[1:].detach().cpu().tolist()]
 
 
 def _torch_attention(
