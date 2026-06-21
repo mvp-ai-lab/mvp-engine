@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from mvp_engine.distributed.cp import sync_cp_grads
 from mvp_engine.distributed.parallelize import parallelize_model
 from mvp_engine.distributed.utils import (
     get_data_parallel_group,
@@ -372,8 +371,6 @@ class Qwen3VLEngine(Engine):
 
         self.scaler.unscale_(self.optimizer)
         self.token_loss_kit.rescale_gradients(self.model.parameters(), token_loss_stats)
-        sync_cp_grads(self.model)
-
         max_grad_norm = self.config.optim.clip_grad_norm
         if max_grad_norm is not None:
             clip_grad_norm_(self.model, max_grad_norm)
