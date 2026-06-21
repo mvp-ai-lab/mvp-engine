@@ -89,9 +89,8 @@ def parallelize_model(
     shard_size = device_mesh["shard"].size()
     context_size = device_mesh["context"].size()
 
-    legacy_sequence_parallel = bool(backend_kwargs.pop("sequence_parallel", False))
     tp_backend_kwargs = dict(backend_kwargs.pop("tp", {}))
-    tp_backend_kwargs.setdefault("builtin_sequence_parallel", legacy_sequence_parallel)
+    tp_backend_kwargs.setdefault("builtin_sequence_parallel", False)
     if tp_backend_kwargs["builtin_sequence_parallel"] and tensor_size <= 1:
         raise ValueError("TP builtin sequence parallel requires an active tensor mesh with parallel.mesh.tensor > 1.")
 
