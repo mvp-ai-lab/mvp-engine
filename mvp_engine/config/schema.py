@@ -38,9 +38,10 @@ class BaseMeshConfig(BaseModel):
 
     replicate: int = 1
     shard: int = 8
+    context: int = 1
     tensor: int = 1
 
-    @field_validator("replicate", "shard", "tensor")
+    @field_validator("replicate", "shard", "context", "tensor")
     @classmethod
     def validate_mesh_dim(cls, v: int) -> int:
         if v == 0 or v < -1:
@@ -71,12 +72,30 @@ class BaseDDPConfig(BaseModel):
     model_config = ConfigDict(frozen=False, extra="allow")
 
 
+class BaseTPConfig(BaseModel):
+    model_config = ConfigDict(frozen=False, extra="allow")
+
+    builtin_sequence_parallel: bool = False
+
+
+class BaseCPConfig(BaseModel):
+    model_config = ConfigDict(frozen=False, extra="allow")
+
+    implementation: Literal["ulysses", "ring", "usp"] = "ulysses"
+
+    attn_implementation: Literal["sdpa", "flash_attention_2"] = "flash_attention_2"
+    grad_sync: bool = True
+    grad_bucket_mb: int = Field(128, ge=1)
+    grad_sync_exclude: list[str] = Field(default_factory=list)
+
+
 class BaseBackendKwargsConfig(BaseModel):
     model_config = ConfigDict(frozen=False)
 
-    sequence_parallel: bool = False
+    tp: BaseTPConfig = Field(default_factory=BaseTPConfig)
     fsdp2: BaseFSDP2Config = Field(default_factory=BaseFSDP2Config)
     ddp: BaseDDPConfig = Field(default_factory=BaseDDPConfig)
+    cp: BaseCPConfig = Field(default_factory=BaseCPConfig)
 
 
 class BaseParallelConfig(BaseModel):

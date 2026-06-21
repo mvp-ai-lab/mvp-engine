@@ -22,6 +22,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
 from mvp_engine.config.schema import BaseEngineConfig
+from mvp_engine.distributed.cp import sync_cp_grads
 from mvp_engine.distributed.device_mesh import initialize_device_mesh
 from mvp_engine.distributed.init import initialize_process_group
 from mvp_engine.distributed.utils import (
@@ -544,6 +545,7 @@ class Engine(ABC):
             return
 
         self.scaler.unscale_(self.optimizer)
+        sync_cp_grads(self.model)
 
         max_grad_norm = self.config.optim.clip_grad_norm
         if max_grad_norm is not None:
