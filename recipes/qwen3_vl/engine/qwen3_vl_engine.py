@@ -371,7 +371,6 @@ class Qwen3VLEngine(Engine):
 
         self.scaler.unscale_(self.optimizer)
         self.token_loss_kit.rescale_gradients(self.model.parameters(), token_loss_stats)
-
         max_grad_norm = self.config.optim.clip_grad_norm
         if max_grad_norm is not None:
             clip_grad_norm_(self.model, max_grad_norm)

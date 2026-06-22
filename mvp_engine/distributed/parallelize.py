@@ -53,8 +53,15 @@ def parallelize_model(
                   parsed and handled inside fsdp2.py
                 - Additional kwargs passed to fully_shard()
 
-            For Tensor Parallel and Sequence Parallel (if tensor mesh is active):
-                - sequence_parallel: Enables sequence parallel layouts on the tensor mesh before FSDP2 (default: False)
+            For Tensor Parallel and TP built-in Sequence Parallel (if tensor mesh is active):
+                - tp.builtin_sequence_parallel: Enables sequence parallel layouts on the tensor mesh before FSDP2
+                  (default: False)
+
+            For Context Parallel:
+                - cp.implementation: ulysses, ring, or usp, with ulysses as the default
+                - cp.attn_implementation: The attention implementation to use,
+                  either sdpa or flash_attention_2 (default: flash_attention_2)
+                - cp.grad_sync: Whether to synchronize gradients across devices (default: True)
 
     Returns:
         The parallelized model wrapped with the specified backend.
@@ -80,12 +87,17 @@ def parallelize_model(
     backend_kwargs = dict(backend_kwargs)
     tensor_size = device_mesh["tensor"].size()
     shard_size = device_mesh["shard"].size()
+    context_size = device_mesh["context"].size()
 
-    sequence_parallel = bool(backend_kwargs.pop("sequence_parallel", False))
-    if sequence_parallel and tensor_size <= 1:
-        raise ValueError("Sequence parallel requires an active tensor mesh with parallel.mesh.tensor > 1.")
+    tp_backend_kwargs = dict(backend_kwargs.pop("tp", {}))
+    tp_backend_kwargs.setdefault("builtin_sequence_parallel", False)
+    if tp_backend_kwargs["builtin_sequence_parallel"] and tensor_size <= 1:
+        raise ValueError("TP builtin sequence parallel requires an active tensor mesh with parallel.mesh.tensor > 1.")
 
-    if device_mesh["shard"].shape[0] * device_mesh["tensor"].shape[0] == 1:
+    if tp_backend_kwargs["builtin_sequence_parallel"] and context_size > 1:
+        raise ValueError("TP builtin sequence parallel is not compatible with context parallel.")
+
+    if shard_size * tensor_size * context_size == 1:
         # For Pure DDP: [N, 1, 1]
         from torch.nn.parallel import DistributedDataParallel
 
@@ -95,16 +107,38 @@ def parallelize_model(
         parallelized_model = DistributedDataParallel(model, **backend_kwargs)
     else:
         # For FSDP2: [N, M, ...]
-        if shard_size == 1 and tensor_size > 1:
+        if shard_size == 1 and (tensor_size > 1 or context_size > 1):
             raise ValueError(
                 f"Invalid device mesh shape {device_mesh.shape}. "
-                "Tensor/sequence parallel should be used with FSDP rather than the pure DDP"
+                "Tensor/context parallel should be used with FSDP rather than the pure DDP"
             )
 
         from mvp_engine.distributed.fsdp2 import parallelize_model_with_fsdp2
 
         fsdp2_mesh = device_mesh["replicate", "shard"]
-        tp_mesh = device_mesh["tensor"] if device_mesh.ndim > 2 else None
+
+        cp_backend_kwargs = dict(backend_kwargs.pop("cp", {}))
+        cp_backend_kwargs.setdefault("implementation", "ulysses")
+        cp_backend_kwargs.setdefault("attn_implementation", "flash_attention_2")
+        cp_backend_kwargs.setdefault("grad_sync", True)
+        if context_size > 1:
+            if cp_backend_kwargs["implementation"] not in ["ulysses"]:
+                raise NotImplementedError(
+                    f"Context parallel implementation {cp_backend_kwargs['implementation']} is not supported."
+                )
+            if cp_backend_kwargs["attn_implementation"] not in ["sdpa", "flash_attention_2"]:
+                raise NotImplementedError(
+                    "Context parallel attention implementation "
+                    f"{cp_backend_kwargs['attn_implementation']} is not supported."
+                )
+
+            from mvp_engine.distributed.cp import (
+                parallelize_model_with_context_parallel,
+            )
+
+            parallelize_model_with_context_parallel(model, device_mesh["context"], cp_backend_kwargs)
+
+        tp_mesh = device_mesh["tensor"] if tensor_size > 1 else None
 
         if tp_mesh is not None and tp_mesh.size() > 1:
             from mvp_engine.distributed.tp import parallelize_model_with_tensor_parallel
@@ -114,7 +148,7 @@ def parallelize_model(
             parallelize_model_with_tensor_parallel(
                 model,
                 tp_mesh,
-                sequence_parallel=sequence_parallel,
+                sequence_parallel=tp_backend_kwargs.get("builtin_sequence_parallel", False),
             )
 
         parallelized_model = model
@@ -139,5 +173,15 @@ def parallelize_model(
                 backend_kwargs["offload_policy"] = CPUOffloadPolicy()
 
             parallelized_model = parallelize_model_with_fsdp2(model, backend_kwargs)
+
+        if context_size > 1 and cp_backend_kwargs["grad_sync"]:
+            from mvp_engine.distributed.cp import attach_cp_grad_sync
+
+            attach_cp_grad_sync(
+                parallelized_model,
+                device_mesh["context"],
+                bucket_mb=cp_backend_kwargs.get("grad_bucket_mb", 128),
+                exclude=cp_backend_kwargs.get("grad_sync_exclude", []),
+            )
 
     return parallelized_model

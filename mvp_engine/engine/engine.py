@@ -544,7 +544,6 @@ class Engine(ABC):
             return
 
         self.scaler.unscale_(self.optimizer)
-
         max_grad_norm = self.config.optim.clip_grad_norm
         if max_grad_norm is not None:
             clip_grad_norm_(self.model, max_grad_norm)
