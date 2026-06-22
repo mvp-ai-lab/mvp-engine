@@ -9,10 +9,13 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from mvp_engine.distributed.cp import sync_cp_grads
 from mvp_engine.distributed.parallelize import parallelize_model
 from mvp_engine.distributed.utils import (
     get_data_parallel_group,
     get_data_parallel_world_size,
+    get_token_stats_group,
+    get_token_stats_world_size,
 )
 from mvp_engine.engine import ENGINE_REGISTRY, Engine, TrainStepContext
 from mvp_engine.kit import (
@@ -62,9 +65,11 @@ class Qwen3VLEngine(Engine):
     def __init__(self, config):
         """Initialize Qwen3-VL-local distributed state and metric reducers."""
         super().__init__(config)
-        self.dp_world_size = get_data_parallel_world_size(self.device_mesh)
-        self.dp_group = get_data_parallel_group(self.device_mesh)
-        self.config.resolve_batching_config(data_parallel_world_size=self.dp_world_size)
+        self.data_parallel_world_size = get_data_parallel_world_size(self.device_mesh)
+        self.data_parallel_group = get_data_parallel_group(self.device_mesh)
+        self.token_stats_world_size = get_token_stats_world_size(self.device_mesh)
+        self.token_stats_group = get_token_stats_group(self.device_mesh)
+        self.config.resolve_batching_config(data_parallel_world_size=self.data_parallel_world_size)
         self.data_kit = MLLMDataKit()
         self.model_kit = MLLMModelKit()
         self.step_estimation_kit = MLLMStepEstimationKit()
@@ -72,8 +77,9 @@ class Qwen3VLEngine(Engine):
         self.optim_kit = OptimKit()
         self.token_loss_kit = TokenNormedLossKit(
             device=self.device,
-            dp_world_size=self.dp_world_size,
-            dp_group=self.dp_group,
+            data_parallel_world_size=self.data_parallel_world_size,
+            token_stats_world_size=self.token_stats_world_size,
+            token_stats_group=self.token_stats_group,
         )
         self.token_loss_kit.build_loss_guard(
             spike_multiplier=self.config.optim.loss_spike_skip_multiplier,
@@ -167,8 +173,8 @@ class Qwen3VLEngine(Engine):
                 total_source_samples=int(dataset_meta["row_count"]),
                 batch_size=int(self.config.data.batch_size),
                 gradient_accumulation_steps=int(self.config.optim.gradient_accumulation_steps),
-                data_parallel_world_size=self.dp_world_size,
-                data_parallel_group=self.dp_group,
+                data_parallel_world_size=self.data_parallel_world_size,
+                data_parallel_group=self.data_parallel_group,
                 device=self.device,
             )
             self.config.loop.total_steps = estimate.total_steps
@@ -371,6 +377,7 @@ class Qwen3VLEngine(Engine):
 
         self.scaler.unscale_(self.optimizer)
         self.token_loss_kit.rescale_gradients(self.model.parameters(), token_loss_stats)
+        sync_cp_grads(self.model)
         max_grad_norm = self.config.optim.clip_grad_norm
         if max_grad_norm is not None:
             clip_grad_norm_(self.model, max_grad_norm)

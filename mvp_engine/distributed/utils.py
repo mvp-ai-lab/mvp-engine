@@ -124,10 +124,28 @@ def get_world_size(group: dist.ProcessGroup | None = None) -> int:
     return dist.get_world_size(group)
 
 
+def _mesh_dim_names_except(device_mesh: DeviceMesh, excluded_dim_names: set[str]) -> tuple[str, ...]:
+    mesh_dim_names = tuple(getattr(device_mesh, "mesh_dim_names", ()) or ())
+    return tuple(dim_name for dim_name in mesh_dim_names if dim_name not in excluded_dim_names)
+
+
+def _mesh_group(device_mesh: DeviceMesh, dim_names: tuple[str, ...]) -> Optional[dist.ProcessGroup]:
+    world_size = 1
+    for dim_name in dim_names:
+        world_size *= int(device_mesh[dim_name].size())
+    if world_size <= 1:
+        return None
+
+    if len(dim_names) == 1:
+        return device_mesh[dim_names[0]].get_group()
+
+    flat_name = "_".join(dim_names)
+    return device_mesh[dim_names]._flatten(flat_name).get_group()
+
+
 def get_data_parallel_world_size(device_mesh: DeviceMesh) -> int:
     """Return the mesh world size that contributes samples to one optimizer step."""
-    mesh_dim_names = tuple(getattr(device_mesh, "mesh_dim_names", ()) or ())
-    dp_dim_names = tuple(dim_name for dim_name in mesh_dim_names if dim_name != "tensor")
+    dp_dim_names = _mesh_dim_names_except(device_mesh, {"tensor", "context"})
     if not dp_dim_names:
         return 1
 
@@ -142,22 +160,27 @@ def get_data_parallel_group(device_mesh: DeviceMesh) -> Optional[dist.ProcessGro
     if not dist.is_available() or not dist.is_initialized():
         return None
 
-    mesh_dim_names = tuple(getattr(device_mesh, "mesh_dim_names", ()) or ())
-    dp_dim_names = tuple(dim_name for dim_name in mesh_dim_names if dim_name != "tensor")
-    if not dp_dim_names:
+    return _mesh_group(device_mesh, _mesh_dim_names_except(device_mesh, {"tensor", "context"}))
+
+
+def get_token_stats_world_size(device_mesh: DeviceMesh) -> int:
+    """Return the mesh world size that contributes token/loss statistics."""
+    stats_dim_names = _mesh_dim_names_except(device_mesh, {"tensor"})
+    if not stats_dim_names:
+        return 1
+
+    stats_world_size = 1
+    for dim_name in stats_dim_names:
+        stats_world_size *= int(device_mesh[dim_name].size())
+    return stats_world_size
+
+
+def get_token_stats_group(device_mesh: DeviceMesh) -> Optional[dist.ProcessGroup]:
+    """Return the process group that contributes token/loss statistics."""
+    if not dist.is_available() or not dist.is_initialized():
         return None
 
-    dp_world_size = 1
-    for dim_name in dp_dim_names:
-        dp_world_size *= int(device_mesh[dim_name].size())
-    if dp_world_size <= 1:
-        return None
-
-    if len(dp_dim_names) == 1:
-        return device_mesh[dp_dim_names[0]].get_group()
-
-    flat_name = "_".join(dp_dim_names)
-    return device_mesh[dp_dim_names]._flatten(flat_name).get_group()
+    return _mesh_group(device_mesh, _mesh_dim_names_except(device_mesh, {"tensor"}))
 
 
 def is_main_process() -> bool:

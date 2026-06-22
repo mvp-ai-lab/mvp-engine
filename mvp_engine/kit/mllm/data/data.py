@@ -38,8 +38,8 @@ class MLLMDataKit:
         Args:
             device_mesh: Optional device mesh used by mvp-dataset for sharding.
             dp_dims: Data-parallel mesh dimension name or names. When omitted and
-                a mesh is provided, every mesh dimension except ``"tensor"`` is
-                treated as data-parallel.
+                a mesh is provided, every mesh dimension except ``"tensor"`` and
+                ``"context"`` is treated as data-parallel.
 
         Returns:
             A distribution spec ready to attach to ``MLLMDataSpec``.
@@ -50,7 +50,9 @@ class MLLMDataKit:
         resolved_dp_dims = dp_dims
         if resolved_dp_dims is None and device_mesh is not None:
             mesh_dim_names = tuple(getattr(device_mesh, "mesh_dim_names", ()) or ())
-            resolved_dp_dims = tuple(dim_name for dim_name in mesh_dim_names if dim_name != "tensor") or None
+            resolved_dp_dims = (
+                tuple(dim_name for dim_name in mesh_dim_names if dim_name not in {"tensor", "context"}) or None
+            )
         if device_mesh is None and resolved_dp_dims is not None:
             raise ValueError("`device_mesh` is required when `dp_dims` is provided.")
         return MLLMDistributionSpec(device_mesh=device_mesh, dp_dims=resolved_dp_dims)

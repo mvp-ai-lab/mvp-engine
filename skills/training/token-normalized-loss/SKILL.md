@@ -38,8 +38,9 @@ from mvp_engine.kit import TokenNormedLossKit
 
 self.token_loss_kit = TokenNormedLossKit(
     device=self.device,
-    dp_world_size=self.dp_world_size,
-    dp_group=self.dp_group,
+    data_parallel_world_size=self.data_parallel_world_size,
+    token_stats_world_size=self.token_stats_world_size,
+    token_stats_group=self.token_stats_group,
 )
 ```
 

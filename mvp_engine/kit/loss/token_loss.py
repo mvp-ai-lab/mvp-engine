@@ -93,14 +93,16 @@ class TokenNormedLossKit:
         self,
         *,
         device: torch.device,
-        dp_world_size: int,
-        dp_group: dist.ProcessGroup | None = None,
+        data_parallel_world_size: int,
+        token_stats_world_size: int,
+        token_stats_group: dist.ProcessGroup | None = None,
         loss_guard: PerTokenLossGuard | None = None,
     ) -> None:
         """Create an empty token-loss window on the given reduction device."""
         self.device = device
-        self.dp_world_size = int(dp_world_size)
-        self.dp_group = dp_group
+        self.data_parallel_world_size = int(data_parallel_world_size)
+        self.token_stats_world_size = int(token_stats_world_size)
+        self.token_stats_group = token_stats_group
         self.loss_guard = loss_guard
         self.reset()
 
@@ -132,8 +134,8 @@ class TokenNormedLossKit:
             spike_multiplier=spike_multiplier,
             window_size=window_size,
             min_history=min_history,
-            group=self.dp_group if group is None else group,
-            group_world_size=self.dp_world_size if group_world_size is None else group_world_size,
+            group=self.token_stats_group if group is None else group,
+            group_world_size=self.token_stats_world_size if group_world_size is None else group_world_size,
         )
         return self.loss_guard
 
@@ -183,15 +185,17 @@ class TokenNormedLossKit:
             dtype=torch.float64,
         )
         loss_sum = self._loss_sum.clone()
-        if dist.is_available() and dist.is_initialized() and self.dp_world_size > 1:
-            dist.all_reduce(token_values, op=dist.ReduceOp.SUM, group=self.dp_group)
-            dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM, group=self.dp_group)
+        if dist.is_available() and dist.is_initialized() and self.token_stats_world_size > 1:
+            dist.all_reduce(token_values, op=dist.ReduceOp.SUM, group=self.token_stats_group)
+            dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM, group=self.token_stats_group)
 
         global_effective_tokens = int(token_values[1].item())
         if global_effective_tokens <= 0:
             raise ValueError("Accumulation window must contain at least one supervised token.")
 
-        gradient_scale = float(self._backward_divisor) * float(self.dp_world_size) / float(global_effective_tokens)
+        gradient_scale = (
+            float(self._backward_divisor) * float(self.data_parallel_world_size) / float(global_effective_tokens)
+        )
         return TokenLossStats(
             global_total_tokens=int(token_values[0].item()),
             global_effective_tokens=global_effective_tokens,
