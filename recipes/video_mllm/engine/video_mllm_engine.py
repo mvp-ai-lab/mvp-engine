@@ -182,9 +182,25 @@ class VideoMLLMEngine(Engine):
 
             state = load_file(self.config.model.init_weights_from)
             result = model.load_state_dict(state, strict=False)
+            # Fail loudly if the trained projector/merger is absent from the checkpoint: strict=False
+            # would otherwise leave a randomly-initialized merger and silently train Stage-2 from scratch.
+            merger_keys = {k for k in model.state_dict() if "visual.merger." in k}
+            missing_merger = sorted(merger_keys - set(state))
+            if not merger_keys:
+                raise RuntimeError(
+                    f"init_weights_from {self.config.model.init_weights_from}: no visual.merger.* params found "
+                    "in the model; cannot verify the Stage-1 projector loaded."
+                )
+            if missing_merger:
+                raise RuntimeError(
+                    f"init_weights_from {self.config.model.init_weights_from}: {len(missing_merger)} visual.merger "
+                    f"weights absent from the checkpoint (e.g. {missing_merger[:3]}); Stage-2 would train from a "
+                    "random projector."
+                )
             logger.info(
-                f"init_weights_from {self.config.model.init_weights_from}: loaded {len(state)} tensors, "
-                f"missing={len(result.missing_keys)} unexpected={len(result.unexpected_keys)}"
+                f"init_weights_from {self.config.model.init_weights_from}: loaded {len(state)} tensors "
+                f"(merger keys={len(merger_keys)}), missing={len(result.missing_keys)} "
+                f"unexpected={len(result.unexpected_keys)}"
             )
 
         model = self.model_kit.apply_freeze_policy(
