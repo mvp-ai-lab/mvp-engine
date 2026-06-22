@@ -1,4 +1,4 @@
-"""Qwen3 text-model helpers for the pretraining recipe."""
+"""Qwen3 text-model helpers for the pretrain stage."""
 
 from __future__ import annotations
 

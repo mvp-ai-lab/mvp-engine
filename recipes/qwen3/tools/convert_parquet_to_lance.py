@@ -2,7 +2,7 @@
 HKdata-style ``text.lance`` table.
 
 Why this exists: our datasets land on the cluster as raw HuggingFace files, but
-the ``qwen3_pt`` recipe reads Lance (``text_field="data"``). This script *streams*
+the ``qwen3`` recipe reads Lance (``text_field="data"``). This script *streams*
 the source files, maps the document text onto the ``data`` column, drops empty
 rows, and writes a Lance table with the HKdata text schema
 (``id / info / data / tags``). It also writes a sibling ``meta.json`` so
@@ -26,7 +26,7 @@ Dependencies (``lance``/``pylance`` 7.0.0, ``pyarrow``) come with the cluster
 node, never the login node. For a big run pass ``--expected-files`` /
 ``--expected-rows`` so a silent under-scan fails loudly::
 
-    python recipes/qwen3_pt/tools/convert_parquet_to_lance.py \
+    python recipes/qwen3/tools/convert_parquet_to_lance.py \
         --input  /mnt/.../text/bigcode_starcoderdata \
         --output /mnt/.../text/lance/.staging/bigcode_starcoderdata/text.lance \
         --expected-files 863 --expected-rows 206642239
@@ -249,7 +249,7 @@ def to_hkdata_batches(source_batches, text_column, id_column, info_json, tag, co
         text = batch.column(text_column)
         if pa.types.is_list(text.type) or pa.types.is_large_list(text.type):
             text = join_pages(text)
-        # Keep only non-null, non-blank text (matches what the recipe's DataGuard accepts).
+        # Keep only non-null, non-blank text (matches what the recipe's raw row guard accepts).
         trimmed_len = pc.utf8_length(pc.utf8_trim_whitespace(text))
         keep = pc.and_(pc.is_valid(text), pc.fill_null(pc.greater(trimmed_len, 0), False))
 

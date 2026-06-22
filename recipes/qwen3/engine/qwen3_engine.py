@@ -1,7 +1,8 @@
-"""Training engine for the Qwen3 text-only pretraining recipe."""
+"""Training engine for the Qwen3 text-only recipe."""
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import torch
@@ -12,28 +13,42 @@ from mvp_engine.distributed.utils import (
     get_data_parallel_world_size,
 )
 from mvp_engine.engine import ENGINE_REGISTRY, Engine, TrainStepContext
-from mvp_engine.kit import MFUKit, OptimKit, TokenNormedLossKit
-from mvp_engine.kit.llm import LLMDataKit, LLMModelKit, ModelInputs, PackingOptions
+from mvp_engine.kit import (
+    LLMDataKit,
+    LLMDataSpec,
+    LLMLoaderSpec,
+    LLMModelKit,
+    LLMPackingSpec,
+    LLMPretrainTextSchemaHandler,
+    LLMPretrainTextTokenizationHandler,
+    LLMSampleSpec,
+    LLMSourceSpec,
+    LLMStepEstimationKit,
+    MFUKit,
+    OptimKit,
+    TokenNormedLossKit,
+)
+from mvp_engine.kit.llm import ModelInputs
 from mvp_engine.utils.log import logger
 from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
-from ..configs.schema import Qwen3PTConfig
+from ..configs.schema import Qwen3Config
 from ..model import patch_qwen3_model_flops
 from ..model.packing import prepare_packed_model_inputs
-from ..utils.misc import infer_total_steps
 
 
 @ENGINE_REGISTRY.register()
-class Qwen3PTEngine(Engine):
-    """Recipe-local engine for Qwen3 text-only pretraining."""
+class Qwen3Engine(Engine):
+    """Recipe-local engine for Qwen3 text-only stages."""
 
-    ConfigClass = Qwen3PTConfig
-    config: Qwen3PTConfig
+    ConfigClass = Qwen3Config
+    config: Qwen3Config
 
     tokenizer: Any
 
     data_kit: LLMDataKit
     model_kit: LLMModelKit
+    step_estimation_kit: LLMStepEstimationKit
     mfu_kit: MFUKit
     optim_kit: OptimKit
     token_loss_kit: TokenNormedLossKit
@@ -46,6 +61,7 @@ class Qwen3PTEngine(Engine):
         self.config.resolve_batching_config(data_parallel_world_size=self.dp_world_size)
         self.data_kit = LLMDataKit()
         self.model_kit = LLMModelKit()
+        self.step_estimation_kit = LLMStepEstimationKit()
         self.mfu_kit = MFUKit()
         self.optim_kit = OptimKit()
         self.token_loss_kit = TokenNormedLossKit(
@@ -60,51 +76,102 @@ class Qwen3PTEngine(Engine):
         )
 
     def prepare_dataloader(self, workflow: str = "train"):
-        """Build the train dataloader over packed text pretraining samples."""
-        if workflow != "train":
-            logger.warning(f"Qwen3 pretraining engine does not support workflow '{workflow}'.")
-            return None
+        """Build the train dataloader over packed text pretrain samples.
 
+        Args:
+            workflow: Workflow name passed by the shared engine. Only ``train``
+                is supported by this recipe.
+
+        Returns:
+            A ``TorchLoader`` pipeline that yields padded text-LM batches, or
+            ``None`` for unsupported non-training workflows.
+        """
+        if workflow != "train":
+            logger.warning(f"Qwen3 pretrain engine does not support workflow '{workflow}'.")
+            return
+
+        # Step 1: build the shared tokenizer.
         self.tokenizer = self.data_kit.build_tokenizer(self.config.model.pretrained_model_name_or_path)
 
-        # When total_steps=-1, do one finite data pass to count packed samples.
-        if int(self.config.loop.total_steps) == -1:
-            self.config.loop.total_steps = infer_total_steps(
-                self.config,
+        # Step 2: declare the Qwen pretrain sample handlers.
+        sample_spec = LLMSampleSpec(
+            schema_handler=LLMPretrainTextSchemaHandler(text_field=self.config.data.text_field),
+            tokenization_handler=LLMPretrainTextTokenizationHandler(
                 tokenizer=self.tokenizer,
-                device=self.device,
-                data_parallel_world_size=self.dp_world_size,
-                data_parallel_group=self.dp_group,
-            )
+                max_seq_len=int(self.config.data.max_seq_len),
+            ),
+        )
 
-        packing = PackingOptions(
-            selection_strategy=self.config.data.packing_selection_strategy,
-            open_pack_limit=int(self.config.data.packing_open_pack_limit),
-            buffer_size=int(self.config.data.packing_buffer_size),
-        )
-        dataset = self.data_kit.build_dataset(
-            dataset_path=self.config.data.train_path,
-            tokenizer=self.tokenizer,
+        # Step 3: declare distributed placement and the training data spec.
+        distribution = self.data_kit.build_distribution_spec()
+        packing_spec = LLMPackingSpec(
             max_seq_len=int(self.config.data.max_seq_len),
-            text_field=self.config.data.text_field,
-            seed=self.config.seed,
-            packing=packing,
+            tail_policy=self.config.data.packing_tail_policy,
+            isolate_attention=self.config.data.packing_isolate_attention,
+            isolate_position_ids=self.config.data.packing_isolate_position_ids,
         )
-        collate_fn = self.data_kit.build_collator(pad_token_id=int(self.tokenizer.pad_token_id))
-        return self.data_kit.build_dataloader(
-            dataset,
+        loader_spec = LLMLoaderSpec(
             batch_size=int(self.config.data.batch_size),
             num_workers=int(self.config.data.num_workers),
-            pin_memory=self.device.type in ["cuda", "npu"],
-            collate_fn=collate_fn,
+        )
+        data_spec = LLMDataSpec(
+            source=LLMSourceSpec(
+                dataset_path=self.config.data.train_path,
+                seed=int(self.config.seed),
+                resample=True,
+                shuffle_mode="chunk",
+            ),
+            sample=sample_spec,
+            packing=packing_spec,
+            loader=loader_spec,
+            distribution=distribution,
         )
 
+        # Step 4: when total_steps=-1, consume one finite packed data pass to estimate one-epoch steps.
+        if int(self.config.loop.total_steps) == -1:
+            estimation_spec = LLMDataSpec(
+                source=LLMSourceSpec(
+                    dataset_path=self.config.data.train_path,
+                    seed=int(self.config.seed),
+                    resample=False,
+                    shuffle_mode="none",
+                ),
+                sample=sample_spec,
+                packing=packing_spec,
+                loader=LLMLoaderSpec(
+                    batch_size=int(self.config.data.batch_size),
+                    num_workers=int(self.config.data.num_workers),
+                    drop_last=False,
+                ),
+                distribution=distribution,
+            )
+            estimation_dataset = self.data_kit.build_dataset(estimation_spec)
+            estimate = self.step_estimation_kit.estimate_total_steps(
+                estimation_dataset,
+                batch_size=int(self.config.data.batch_size),
+                gradient_accumulation_steps=int(self.config.optim.gradient_accumulation_steps),
+                data_parallel_world_size=self.dp_world_size,
+                data_parallel_group=self.dp_group,
+                device=self.device,
+            )
+            self.config.loop.total_steps = estimate.total_steps
+
+        # Step 5: build the real training dataset with resampling enabled.
+        dataset = self.data_kit.build_dataset(data_spec)
+
+        # Step 6: wrap the dataset in the normal TorchLoader.
+        return self.data_kit.build_dataloader(dataset, data_spec, device=self.device)
+
     def prepare_model(self) -> torch.nn.Module:
-        """Build, patch, and parallelize the Qwen3 text model."""
+        """Build, patch, compile, and parallelize the recipe model.
+
+        Returns:
+            The distributed-ready Qwen3 text model.
+        """
         model = self.model_kit.build_model(
             self.config.model.pretrained_model_name_or_path,
-            train_from_scratch=self.config.model.train_from_scratch,
-            init_seed=int(self.config.model.init_seed),
+            load_pretrained_model=self.config.model.load_pretrained_model,
+            random_init_seed=int(self.config.seed),
             torch_dtype=getattr(self.config.model, "torch_dtype", "auto"),
             attn_implementation=self.config.model.attn_implementation,
         ).to(self.device)
@@ -122,6 +189,7 @@ class Qwen3PTEngine(Engine):
             model = self.model_kit.apply_gradient_checkpointing(
                 model,
                 use_reentrant=self.config.model.gradient_checkpointing.use_reentrant,
+                mode="hf",
             )
 
         if self.config.model.compile.enabled:
@@ -144,17 +212,16 @@ class Qwen3PTEngine(Engine):
             optimizer=self.config.optim.optimizer,
             lr=float(self.config.optim.lr),
             weight_decay=float(self.config.optim.weight_decay),
-            betas=(float(self.config.optim.beta1), float(self.config.optim.beta2)),
         )
 
     def prepare_scheduler(self):
-        """Construct the cosine-with-min-lr schedule used by this recipe."""
+        """Construct the learning-rate schedule used by this recipe."""
+        warmup_steps = math.ceil(self.total_steps * float(self.config.optim.warmup_ratio))
         return self.optim_kit.build_lr_scheduler(
             optimizer=self.optimizer,
-            lr_scheduler="cosine_with_min_lr",
-            num_warmup_steps=int(self.config.optim.warmup_steps),
+            lr_scheduler="cosine",
+            num_warmup_steps=warmup_steps,
             num_training_steps=self.total_steps,
-            scheduler_specific_kwargs={"min_lr_rate": float(self.config.optim.min_lr_rate)},
         )
 
     def train_pre_step(self, ctx: TrainStepContext) -> TrainStepContext:
@@ -162,6 +229,7 @@ class Qwen3PTEngine(Engine):
         batch: ModelInputs = self.data_kit.to_device(ctx.data, self.device)
         ctx.data = prepare_packed_model_inputs(
             batch,
+            attn_implementation=getattr(self.unwrapped_model.config, "_attn_implementation", None),
             mask_dtype=self.dtype if self.dtype.is_floating_point else torch.float32,
         )
         return ctx

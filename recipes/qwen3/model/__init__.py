@@ -1,4 +1,4 @@
-"""Model helpers for the Qwen3 pretraining recipe."""
+"""Model helpers for the Qwen3 pretrain stage."""
 
 from typing import TYPE_CHECKING
 

@@ -1,11 +1,16 @@
-"""Packed-attention helpers for the Qwen3 pretraining recipe."""
+"""Packed-attention helpers for the Qwen3 pretrain stage."""
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .prepare import build_packed_text_position_ids, prepare_packed_model_inputs
+    from .prepare import (
+        build_packed_fa2_varlen_kwargs,
+        build_packed_text_position_ids,
+        prepare_packed_model_inputs,
+    )
 
 __all__ = [
+    "build_packed_fa2_varlen_kwargs",
     "build_packed_text_position_ids",
     "prepare_packed_model_inputs",
 ]

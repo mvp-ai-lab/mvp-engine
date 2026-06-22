@@ -13,9 +13,9 @@
 #   * optional --expected-files / --expected-rows so a silent under-scan fails loudly
 #
 # Usage (CPU node, never login):
-#   sbatch recipes/qwen3_pt/tools/convert_dataset.sbatch <dataset_dirname> [expected_files] [expected_rows] [text_column]
-#   e.g.  sbatch recipes/qwen3_pt/tools/convert_dataset.sbatch bigcode_starcoderdata 863 206642239
-#         sbatch recipes/qwen3_pt/tools/convert_dataset.sbatch institutional_institutional-books-1.0 9831 983004 text_by_page_gen
+#   sbatch recipes/qwen3/tools/convert_dataset.sbatch <dataset_dirname> [expected_files] [expected_rows] [text_column]
+#   e.g.  sbatch recipes/qwen3/tools/convert_dataset.sbatch bigcode_starcoderdata 863 206642239
+#         sbatch recipes/qwen3/tools/convert_dataset.sbatch institutional_institutional-books-1.0 9831 983004 text_by_page_gen
 #
 #SBATCH --job-name=lance-convert
 #SBATCH --partition=cpu
@@ -63,7 +63,7 @@ EXTRA=()
 [ -n "$TEXT_COLUMN" ]    && EXTRA+=(--text-column "$TEXT_COLUMN")
 
 echo "[$(date -u)] converting (streaming; text column -> data; row-index ids) ..."
-python recipes/qwen3_pt/tools/convert_parquet_to_lance.py \
+python recipes/qwen3/tools/convert_parquet_to_lance.py \
     --input  "$INPUT" \
     --output "$STAGING/text.lance" \
     "${EXTRA[@]}"

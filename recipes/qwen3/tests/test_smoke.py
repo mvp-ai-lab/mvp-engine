@@ -1,4 +1,4 @@
-"""Smoke tests for the Qwen3 pretraining recipe.
+"""Smoke tests for the Qwen3 pretrain stage.
 
 The smoke test runs the real ``engine.train()`` path in spawned distributed
 worker processes. Recipe-local skill assertions are injected dynamically around
@@ -74,7 +74,7 @@ def test_smoke(
     config_overrides: tuple[str, ...],
     tmp_path: Path,
 ):
-    """Run Qwen3 pretraining smoke validation across ``world_size`` spawned workers.
+    """Run Qwen3 pretrain smoke validation across ``world_size`` spawned workers.
 
     The test uses ``tmp_path`` as an isolated output root and passes
     ``config_overrides`` through to the smoke config loader. Multi-process

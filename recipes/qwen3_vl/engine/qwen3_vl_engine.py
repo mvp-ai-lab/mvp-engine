@@ -27,7 +27,7 @@ from mvp_engine.kit import (
     MLLMStepEstimationKit,
     ModelInputs,
     OptimKit,
-    QwenChatSchemaHandler,
+    QwenVLChatSchemaHandler,
     QwenVLMediaHandler,
     QwenVLTokenizationHandler,
     TokenNormedLossKit,
@@ -104,7 +104,7 @@ class Qwen3VLEngine(Engine):
 
         # Step 2: declare the Qwen sample handlers.
         sample_spec = MLLMSampleSpec(
-            schema_handler=QwenChatSchemaHandler(
+            schema_handler=QwenVLChatSchemaHandler(
                 processor=self.processor,
                 thinking_mode=self.config.data.thinking_mode,
             ),

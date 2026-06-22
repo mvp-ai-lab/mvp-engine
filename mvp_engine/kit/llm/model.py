@@ -20,8 +20,8 @@ class LLMModelKit:
         self,
         pretrained_model_name_or_path: str,
         *,
-        train_from_scratch: bool = False,
-        init_seed: int = 42,
+        load_pretrained_model: bool = True,
+        random_init_seed: int = 42,
         trust_remote_code: bool = True,
         torch_dtype: str | torch.dtype = "auto",
         attn_implementation: str | None = None,
@@ -29,36 +29,35 @@ class LLMModelKit:
     ):
         """Load a causal LM from Hugging Face, or randomly initialize one from its config.
 
-        When ``train_from_scratch`` is True we seed the RNG and build the model from
-        its config only (no pretrained weights) for from-scratch pretraining.
-        Otherwise we load the pretrained weights as usual.
+        When ``load_pretrained_model`` is False, seed the RNG and build the model
+        from its config only, without loading pretrained weights.
         """
         from transformers import AutoConfig, AutoModelForCausalLM
 
-        if train_from_scratch:
-            from accelerate.utils import set_seed
-
-            set_seed(init_seed)
-            config = AutoConfig.from_pretrained(
-                pretrained_model_name_or_path,
-                trust_remote_code=trust_remote_code,
+        if load_pretrained_model:
+            model_kwargs: dict[str, Any] = {
+                "trust_remote_code": trust_remote_code,
+                "torch_dtype": torch_dtype,
                 **kwargs,
-            )
+            }
             if attn_implementation is not None:
-                config._attn_implementation = attn_implementation
-            config_kwargs: dict[str, Any] = {"trust_remote_code": trust_remote_code}
-            if torch_dtype != "auto":
-                config_kwargs["torch_dtype"] = torch_dtype
-            return AutoModelForCausalLM.from_config(config, **config_kwargs)
+                model_kwargs["attn_implementation"] = attn_implementation
+            return AutoModelForCausalLM.from_pretrained(pretrained_model_name_or_path, **model_kwargs)
 
-        model_kwargs: dict[str, Any] = {
-            "trust_remote_code": trust_remote_code,
-            "torch_dtype": torch_dtype,
+        from accelerate.utils import set_seed
+
+        set_seed(random_init_seed)
+        config = AutoConfig.from_pretrained(
+            pretrained_model_name_or_path,
+            trust_remote_code=trust_remote_code,
             **kwargs,
-        }
+        )
         if attn_implementation is not None:
-            model_kwargs["attn_implementation"] = attn_implementation
-        return AutoModelForCausalLM.from_pretrained(pretrained_model_name_or_path, **model_kwargs)
+            config._attn_implementation = attn_implementation
+        config_kwargs: dict[str, Any] = {"trust_remote_code": trust_remote_code}
+        if torch_dtype != "auto":
+            config_kwargs["torch_dtype"] = torch_dtype
+        return AutoModelForCausalLM.from_config(config, **config_kwargs)
 
     def apply_freeze_policy(
         self,

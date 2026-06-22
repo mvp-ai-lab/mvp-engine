@@ -2,14 +2,14 @@
 # Convert ONE shard of a too-big dataset (e.g. dolma3) into shard_<I>/text.lance
 # under data/text/lance/<DATASET>/. Run as a Slurm ARRAY job — one task per shard:
 #
-#   sbatch --array=0-31%16 recipes/qwen3_pt/tools/convert_shard.sbatch \
+#   sbatch --array=0-31%16 recipes/qwen3/tools/convert_shard.sbatch \
 #          allenai_dolma3_mix-6T-1025-7B 32 143855 text
 #
 #   args: <DATASET> <NUM_SHARDS> [EXPECTED_FILES] [TEXT_COLUMN]
 #   shard index = $SLURM_ARRAY_TASK_ID ; %16 caps concurrency to spare JuiceFS IO.
 #
 # After ALL shards finish, build the dataset meta.json (with strict cover check):
-#   python recipes/qwen3_pt/tools/finalize_shards.py --dataset-dir <lance>/<DATASET>
+#   python recipes/qwen3/tools/finalize_shards.py --dataset-dir <lance>/<DATASET>
 #
 # Safety (same contract as convert_dataset.sbatch): unique staging, verify on
 # staging before an atomic promote, refuse to overwrite, trap-clean on failure,
@@ -62,7 +62,7 @@ EXTRA=()
 [ -n "$TEXT_COLUMN" ]    && EXTRA+=(--text-column "$TEXT_COLUMN")
 
 echo "[$(date -u)] converting shard $SHARD_INDEX of $NUM_SHARDS ..."
-python recipes/qwen3_pt/tools/convert_parquet_to_lance.py \
+python recipes/qwen3/tools/convert_parquet_to_lance.py \
     --input  "$INPUT" \
     --output "$STAGING/text.lance" \
     --num-shards "$NUM_SHARDS" --shard-index "$SHARD_INDEX" \

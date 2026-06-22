@@ -1,4 +1,4 @@
-"""Pydantic schema for the Qwen3 text-only pretraining recipe."""
+"""Pydantic schema for the Qwen3 text-only recipe."""
 
 from typing import Literal
 
@@ -7,16 +7,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from mvp_engine.config.schema import BaseEngineConfig, BaseLoopConfig, BaseOptimConfig
 
 
-class Qwen3PTDataConfig(BaseModel):
-    """Dataset and batching options for the Qwen3 pretraining recipe."""
+class Qwen3DataConfig(BaseModel):
+    """Dataset and batching options for the Qwen3 pretrain stage."""
 
     model_config = ConfigDict(frozen=False, extra="forbid")
 
     train_path: str = ""
     text_field: str = "data"
-    packing_selection_strategy: Literal["random", "best_fit"] = "best_fit"
-    packing_open_pack_limit: int = Field(8, ge=1)
-    packing_buffer_size: int = Field(64, ge=0)
+    packing_tail_policy: Literal["drop", "pad"] = "drop"
+    packing_isolate_attention: bool = False
+    packing_isolate_position_ids: bool = False
     max_seq_len: int = Field(8192, ge=1)
     batch_size: int = 1
     num_workers: int = Field(0, ge=0)
@@ -43,7 +43,7 @@ class Qwen3PTDataConfig(BaseModel):
         return value
 
 
-class Qwen3PTGradientCheckpointingConfig(BaseModel):
+class Qwen3GradientCheckpointingConfig(BaseModel):
     """Gradient checkpointing options passed to the Qwen3 model."""
 
     model_config = ConfigDict(frozen=False, extra="forbid")
@@ -52,8 +52,8 @@ class Qwen3PTGradientCheckpointingConfig(BaseModel):
     use_reentrant: bool = False
 
 
-class Qwen3PTCompileConfig(BaseModel):
-    """torch.compile options for the Qwen3 pretraining recipe."""
+class Qwen3CompileConfig(BaseModel):
+    """torch.compile options for the Qwen3 recipe."""
 
     model_config = ConfigDict(frozen=False, extra="forbid")
 
@@ -62,20 +62,17 @@ class Qwen3PTCompileConfig(BaseModel):
     mode: str = "default"
 
 
-class Qwen3PTModelConfig(BaseModel):
+class Qwen3ModelConfig(BaseModel):
     """Model loading and initialization options."""
 
     model_config = ConfigDict(frozen=False, extra="forbid")
 
     pretrained_model_name_or_path: str = "Qwen/Qwen3-8B-Base"
-    attn_implementation: Literal["eager", "sdpa"] = "sdpa"
-    train_from_scratch: bool = True
-    init_seed: int = 42
-    gradient_checkpointing: Qwen3PTGradientCheckpointingConfig = Field(
-        default_factory=Qwen3PTGradientCheckpointingConfig
-    )
+    attn_implementation: Literal["eager", "sdpa", "flash_attention_2"] = "flash_attention_2"
+    load_pretrained_model: bool = False
+    gradient_checkpointing: Qwen3GradientCheckpointingConfig = Field(default_factory=Qwen3GradientCheckpointingConfig)
     freeze_llm: bool = False
-    compile: Qwen3PTCompileConfig = Field(default_factory=Qwen3PTCompileConfig)
+    compile: Qwen3CompileConfig = Field(default_factory=Qwen3CompileConfig)
 
     @field_validator("pretrained_model_name_or_path", mode="before")
     @classmethod
@@ -89,18 +86,14 @@ class Qwen3PTModelConfig(BaseModel):
         return normalized
 
 
-class Qwen3PTOptimConfig(BaseOptimConfig):
-    """Optimizer options extended with Qwen3 pretraining settings."""
+class Qwen3OptimConfig(BaseOptimConfig):
+    """Optimizer options extended with Qwen3 batch and loss-guard settings."""
 
     model_config = ConfigDict(frozen=False)
 
-    optimizer: Literal["AdamW"] = "AdamW"
+    optimizer: str = "AdamW"
     gradient_accumulation_steps: int = 1
     global_batch_size: int | None = Field(None, ge=1)
-    beta1: float = Field(0.9, ge=0.0, lt=1.0)
-    beta2: float = Field(0.95, ge=0.0, lt=1.0)
-    min_lr_rate: float = Field(0.1, ge=0.0, le=1.0)
-    warmup_steps: int = Field(2000, ge=0)
     loss_spike_skip_multiplier: float | None = Field(None, gt=0.0)
     loss_spike_skip_window_size: int = Field(8, ge=1)
     loss_spike_skip_min_history: int = Field(3, ge=1)
@@ -114,8 +107,8 @@ class Qwen3PTOptimConfig(BaseOptimConfig):
         return value
 
 
-class Qwen3PTLoopConfig(BaseLoopConfig):
-    """Iteration-loop options for Qwen3 pretraining."""
+class Qwen3LoopConfig(BaseLoopConfig):
+    """Iteration-loop options for Qwen3 pretrain."""
 
     model_config = ConfigDict(frozen=False)
 
@@ -130,15 +123,15 @@ class Qwen3PTLoopConfig(BaseLoopConfig):
         return value
 
 
-class Qwen3PTConfig(BaseEngineConfig):
-    """Top-level Qwen3 pretraining recipe config."""
+class Qwen3Config(BaseEngineConfig):
+    """Top-level Qwen3 recipe config."""
 
     model_config = ConfigDict(frozen=False, extra="allow")
 
-    data: Qwen3PTDataConfig = Field(default_factory=Qwen3PTDataConfig)
-    model: Qwen3PTModelConfig = Field(default_factory=Qwen3PTModelConfig)
-    optim: Qwen3PTOptimConfig = Field(default_factory=Qwen3PTOptimConfig)
-    loop: Qwen3PTLoopConfig = Field(default_factory=Qwen3PTLoopConfig)
+    data: Qwen3DataConfig = Field(default_factory=Qwen3DataConfig)
+    model: Qwen3ModelConfig = Field(default_factory=Qwen3ModelConfig)
+    optim: Qwen3OptimConfig = Field(default_factory=Qwen3OptimConfig)
+    loop: Qwen3LoopConfig = Field(default_factory=Qwen3LoopConfig)
 
     def resolve_batching_config(self, *, data_parallel_world_size: int) -> None:
         """Resolve global batch size into micro batch size or accumulation steps."""

@@ -1,11 +1,11 @@
 dev_mode: false
-engine: Qwen3PTEngine
+engine: Qwen3Engine
 
 seed: 42
 deterministic: false
 
 project:
-  name: "qwen3_pt-8b-pretrain"
+  name: "qwen3-8b"
   dir: "./outputs"
 
 log:
@@ -21,20 +21,19 @@ parallel:
     tensor: 1
 
 data:
-  train_path: "./data/qwen3-pretrain/meta.json"
+  train_path: "./data/mvp-engine-llm-pretrain-dev-data/meta.json"
   text_field: "data"
-  packing_selection_strategy: "best_fit"
-  packing_open_pack_limit: 8
-  packing_buffer_size: 64
+  packing_tail_policy: "drop"
+  packing_isolate_attention: false
+  packing_isolate_position_ids: false
   max_seq_len: 8192
   batch_size: 1
   num_workers: 8
 
 model:
   pretrained_model_name_or_path: "Qwen/Qwen3-8B-Base"
-  attn_implementation: "sdpa"
-  train_from_scratch: true
-  init_seed: 42
+  attn_implementation: "flash_attention_2"
+  load_pretrained_model: false
   gradient_checkpointing:
     enabled: true
     use_reentrant: false
@@ -45,15 +44,17 @@ model:
     mode: "default"
 
 optim:
+  optimizer: "AdamW"
   lr: 3.0e-4
   weight_decay: 0.1
-  gradient_accumulation_steps: 1
+  global_batch_size: 256
+  gradient_accumulation_steps: -1
   mixed_precision: "bf16"
-  beta1: 0.9
-  beta2: 0.95
-  min_lr_rate: 0.1
-  warmup_steps: 2000
+  warmup_ratio: 0.03
   clip_grad_norm: 1.0
+  loss_spike_skip_multiplier: null
+  loss_spike_skip_window_size: 8
+  loss_spike_skip_min_history: 3
 
 loop:
   policy: "iter"
@@ -62,4 +63,4 @@ loop:
 checkpoint:
   interval: 5000
   keep_n: 2
-  hf_enable: false
+  hf_enable: true
