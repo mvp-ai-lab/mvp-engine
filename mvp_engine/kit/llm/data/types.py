@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
-from typing import NotRequired, TypedDict
+from dataclasses import dataclass
+from typing import Any, NotRequired, TypedDict
 
 import torch
+
+
+@dataclass(frozen=True, slots=True)
+class LLMSegment:
+    """One ordered text segment and whether it contributes supervised loss."""
+
+    type: str
+    loss: bool
+    value: Any
 
 
 class ModelInputs(TypedDict):

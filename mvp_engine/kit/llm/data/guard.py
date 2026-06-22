@@ -1,4 +1,4 @@
-"""Data guards for filtering malformed text-LM samples."""
+"""Validation guards for text-only LM data boundaries."""
 
 from __future__ import annotations
 
@@ -8,8 +8,12 @@ from typing import Any
 
 import torch
 from mvp_dataset.core import Assembler
+from mvp_dataset.core.resume import stable_fingerprint
 
 from mvp_engine.utils.log import simple_info
+
+from .sample import LLMSample
+from .schema import LLMPretrainTextSchemaHandler, LLMSchemaHandler
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,81 +24,144 @@ class CheckResult:
     reason: str | None = None
 
 
-class DataGuard(Assembler[Any, Any]):
-    """Filter malformed text samples before expensive downstream processing."""
+class LLMGuard(Assembler[Any, Any]):
+    """Base mvp-dataset assembler that drops invalid items at one pipeline boundary."""
+
+    def __init__(self, assemble_context: Any | None = None, *, verbose: bool = True) -> None:
+        """Configure compact skip logging."""
+        del assemble_context
+        self.verbose = bool(verbose)
+
+    def check(self, sample: Any) -> CheckResult:
+        """Validate one item."""
+        raise NotImplementedError
+
+    def push(self, sample: Any) -> Iterable[Any]:
+        """Emit the item only when it passes validation."""
+        result = self.check(sample)
+        if result.is_valid:
+            return [sample]
+        if self.verbose and result.reason:
+            simple_info(f"Data guard skip: reason={result.reason} sample={self._sample_info(sample)}", level="warning")
+        return []
+
+    def finish(self, *, drop_last: bool = False) -> Iterable[Any]:
+        """Flush guard state."""
+        del drop_last
+        return []
+
+    def state_dict(self) -> dict[str, object]:
+        """Return resumable state."""
+        return {}
+
+    def load_state_dict(self, state: dict[str, object]) -> None:
+        """Restore resumable state."""
+        if state:
+            raise ValueError(f"{self.__class__.__name__} does not have resumable state.")
+
+    def fingerprint(self) -> str:
+        """Return a stable guard fingerprint."""
+        return stable_fingerprint({"kind": self.__class__.__name__})
+
+    @staticmethod
+    def _sample_info(sample: Any) -> dict[str, Any] | str:
+        """Return compact row metadata for skip logs."""
+        if isinstance(sample, LLMSample):
+            sample = sample._raw
+        if isinstance(sample, dict):
+            return {
+                key: sample[key]
+                for key in ("id", "source", "__source__", "__key__", "__global_index__")
+                if key in sample
+            }
+        text = repr(sample)
+        return text if len(text) <= 200 else text[:200] + "..."
+
+
+class LLMRawRowGuard(LLMGuard):
+    """Drop raw rows that cannot become text-LM samples."""
 
     def __init__(
         self,
-        check_basic_formats: bool = True,
-        check_input_ids: bool = False,
-        text_field: str = "data",
+        assemble_context: Any | None = None,
+        *,
+        schema_handler: LLMSchemaHandler | None = None,
         verbose: bool = True,
-    ):
-        """Configure which sample checks are active."""
-        super().__init__()
-        self.check_basic_formats = check_basic_formats
-        self.check_input_ids = check_input_ids
-        self.text_field = text_field
-        self.verbose = verbose
-
-    def _print_skip(self, result: CheckResult, sample: Any) -> None:
-        """Log a compact description for one skipped sample."""
-        if not self.verbose or result.reason is None:
-            return
-
-        if isinstance(sample, dict):
-            sample_info: dict[str, Any] = {}
-            for key in ("id", "source", "__source__", "__key__", "__global_index__"):
-                if key in sample:
-                    sample_info[key] = sample[key]
-            input_ids = sample.get("input_ids")
-            if isinstance(input_ids, torch.Tensor):
-                sample_info["input_ids_shape"] = tuple(input_ids.shape)
-        elif isinstance(sample, list):
-            sample_info = {"list_sample_size": len(sample)}
-        else:
-            sample_info = repr(sample)[:200]
-
-        simple_info(f"Data guard skip: reason={result.reason} sample={sample_info}", level="warning")
+    ) -> None:
+        """Store the schema handler used for cheap row validation."""
+        super().__init__(assemble_context, verbose=verbose)
+        self.schema_handler = schema_handler or LLMPretrainTextSchemaHandler()
 
     def check(self, sample: Any) -> CheckResult:
-        """Validate one sample against the enabled checks."""
+        """Validate the raw-row boundary before sample construction."""
         if not isinstance(sample, dict):
-            return CheckResult(is_valid=False, reason="guard.not_dict")
+            return CheckResult(False, "raw.not_dict")
+        reason = self.schema_handler.check_row(sample)
+        if reason is not None:
+            return CheckResult(False, reason)
+        return CheckResult(True)
 
-        if self.check_basic_formats:
-            text = sample.get(self.text_field)
-            if not isinstance(text, str) or not text.strip():
-                return CheckResult(is_valid=False, reason="guard.invalid_text")
+    def fingerprint(self) -> str:
+        """Return a stable guard fingerprint."""
+        return stable_fingerprint(
+            {
+                "kind": self.__class__.__name__,
+                "schema_handler": repr(self.schema_handler),
+            }
+        )
 
-        if self.check_input_ids and sample["input_ids"].size(0) <= 0:
-            return CheckResult(is_valid=False, reason="guard.empty_input_ids")
 
-        return CheckResult(is_valid=True)
+class LLMSampleGuard(LLMGuard):
+    """Drop tokenized samples that cannot enter packing."""
 
-    def push(self, sample: Any) -> Iterable[Any]:
-        """Validate a single sample and emit zero or one samples."""
-        if isinstance(sample, list):
-            filtered_sample: list[dict[str, Any]] = []
-            for item in sample:
-                result = self.check(item)
-                if not result.is_valid:
-                    self._print_skip(result, item)
-                    continue
-                filtered_sample.append(item)
+    def check(self, sample: Any) -> CheckResult:
+        """Validate the tokenized sample boundary."""
+        if not isinstance(sample, LLMSample):
+            return CheckResult(False, "sample.invalid_type")
+        sample.tokenize()
+        if sample.token_length <= 0:
+            return CheckResult(False, "sample.empty_tokens")
+        if not any(label != sample.tokenization_handler.ignore_index for label in sample.labels):
+            return CheckResult(False, "sample.no_supervised_tokens")
+        return CheckResult(True)
 
-            if not filtered_sample:
-                self._print_skip(CheckResult(is_valid=False, reason="guard.empty_pack"), sample)
-                return []
-            return [filtered_sample]
 
-        result = self.check(sample)
-        if not result.is_valid:
-            self._print_skip(result, sample)
-            return []
-        return [sample]
+class LLMModelInputGuard(LLMGuard):
+    """Drop finalized packed model inputs that are empty or malformed."""
 
-    def finish(self, *, drop_last: bool = False) -> Iterable[Any]:
-        """Flush buffered samples at the end of assembly."""
-        del drop_last
-        return []
+    def __init__(
+        self,
+        assemble_context: Any | None = None,
+        *,
+        ignore_index: int = -100,
+        verbose: bool = True,
+    ) -> None:
+        """Store model-input validation options."""
+        super().__init__(assemble_context, verbose=verbose)
+        self.ignore_index = int(ignore_index)
+
+    def check(self, sample: Any) -> CheckResult:
+        """Validate finalized tensor fields."""
+        if not isinstance(sample, dict):
+            return CheckResult(False, "model_input.not_dict")
+
+        for key in ("input_ids", "attention_mask", "labels", "pack_segment_ids"):
+            value = sample.get(key)
+            if not isinstance(value, torch.Tensor) or value.ndim != 1 or value.numel() <= 0:
+                return CheckResult(False, f"model_input.invalid_{key}")
+
+        if sample["input_ids"].shape != sample["attention_mask"].shape:
+            return CheckResult(False, "model_input.attention_shape_mismatch")
+        if sample["input_ids"].shape != sample["labels"].shape:
+            return CheckResult(False, "model_input.label_shape_mismatch")
+        if sample["input_ids"].shape != sample["pack_segment_ids"].shape:
+            return CheckResult(False, "model_input.pack_segment_shape_mismatch")
+        if int(sample.get("source_sample_num", 0)) <= 0:
+            return CheckResult(False, "model_input.invalid_source_sample_num")
+        if not sample["labels"].ne(self.ignore_index).any().item():
+            return CheckResult(False, "model_input.no_supervised_tokens")
+        return CheckResult(True)
+
+    def fingerprint(self) -> str:
+        """Return a stable guard fingerprint including label policy."""
+        return stable_fingerprint({"kind": self.__class__.__name__, "ignore_index": self.ignore_index})

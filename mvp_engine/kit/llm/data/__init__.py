@@ -3,37 +3,73 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .data import LLMCollator, LLMDataKit, TokenizeAssembler
-    from .guard import DataGuard
-    from .packing import (
-        PackingAssembler,
-        PackingOptions,
-        build_packed_block_causal_mask,
+    from .collator import LLMBatchCollator
+    from .data import LLMDataKit
+    from .guard import LLMModelInputGuard, LLMRawRowGuard, LLMSampleGuard
+    from .packing import LLMPackingAssembler, build_packed_block_causal_mask
+    from .qwen import QwenChatSchemaHandler, QwenChatTokenizationHandler
+    from .sample import LLMPack, LLMSample
+    from .schema import LLMPretrainTextSchemaHandler, LLMSchemaHandler
+    from .spec import (
+        LLMDataSpec,
+        LLMDistributionSpec,
+        LLMLoaderSpec,
+        LLMPackingSpec,
+        LLMSampleSpec,
+        LLMSourceSpec,
     )
-    from .types import ModelInputs
+    from .tokenization import LLMPretrainTextTokenizationHandler, LLMTokenizationHandler
+    from .types import LLMSegment, ModelInputs
 
-# NOTE: `finalize_packed_samples` from `.packing` is intentionally NOT exported here.
-# Use `LLMDataKit.finalize_packed_samples`, which also masks the loss at document
-# boundaries; the raw `.packing` version would skip that masking.
 __all__ = [
-    "LLMCollator",
+    "LLMBatchCollator",
+    "LLMDataSpec",
+    "LLMDistributionSpec",
     "LLMDataKit",
-    "TokenizeAssembler",
-    "DataGuard",
+    "LLMLoaderSpec",
+    "LLMModelInputGuard",
+    "LLMPack",
+    "LLMPackingAssembler",
+    "LLMPackingSpec",
+    "LLMPretrainTextSchemaHandler",
+    "LLMPretrainTextTokenizationHandler",
+    "QwenChatSchemaHandler",
+    "QwenChatTokenizationHandler",
+    "LLMRawRowGuard",
+    "LLMSample",
+    "LLMSampleGuard",
+    "LLMSampleSpec",
+    "LLMSchemaHandler",
+    "LLMSegment",
+    "LLMSourceSpec",
+    "LLMTokenizationHandler",
     "ModelInputs",
-    "PackingAssembler",
-    "PackingOptions",
     "build_packed_block_causal_mask",
 ]
 
 _EXPORT_MODULES = {
-    "LLMCollator": ".data",
+    "LLMBatchCollator": ".collator",
+    "LLMDataSpec": ".spec",
+    "LLMDistributionSpec": ".spec",
     "LLMDataKit": ".data",
-    "TokenizeAssembler": ".data",
-    "DataGuard": ".guard",
+    "LLMLoaderSpec": ".spec",
+    "LLMModelInputGuard": ".guard",
+    "LLMPack": ".sample",
+    "LLMPackingAssembler": ".packing",
+    "LLMPackingSpec": ".spec",
+    "LLMPretrainTextSchemaHandler": ".schema",
+    "LLMPretrainTextTokenizationHandler": ".tokenization",
+    "QwenChatSchemaHandler": ".qwen",
+    "QwenChatTokenizationHandler": ".qwen",
+    "LLMRawRowGuard": ".guard",
+    "LLMSample": ".sample",
+    "LLMSampleGuard": ".guard",
+    "LLMSampleSpec": ".spec",
+    "LLMSchemaHandler": ".schema",
+    "LLMSegment": ".types",
+    "LLMSourceSpec": ".spec",
+    "LLMTokenizationHandler": ".tokenization",
     "ModelInputs": ".types",
-    "PackingAssembler": ".packing",
-    "PackingOptions": ".packing",
     "build_packed_block_causal_mask": ".packing",
 }
 

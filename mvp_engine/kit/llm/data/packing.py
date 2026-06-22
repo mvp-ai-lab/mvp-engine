@@ -1,301 +1,165 @@
-"""Sequence packing utilities for multimodal language model data."""
+"""Sequential token-stream packing utilities for text-only language model data."""
 
-import random
-from bisect import bisect_left
+from __future__ import annotations
+
 from collections.abc import Iterable
-from dataclasses import dataclass, field
 from typing import Any
 
 import torch
 from mvp_dataset.core import Assembler
+from mvp_dataset.core.resume import stable_fingerprint
+
+from .sample import LLMPack, LLMSample
+from .spec import LLMPackingSpec
 
 
-@dataclass(frozen=True, slots=True)
-class PackingOptions:
-    """Options for sequence packing in an MLLM dataset pipeline."""
-
-    selection_strategy: str = "best_fit"
-    open_pack_limit: int = 8
-    buffer_size: int = 64
-    defer_finalize: bool = True
-
-    def __post_init__(self) -> None:
-        """Validate packing options."""
-        if self.selection_strategy not in {"random", "best_fit"}:
-            raise ValueError("packing selection_strategy must be one of random/best_fit.")
-        if self.open_pack_limit <= 0:
-            raise ValueError("packing open_pack_limit must be positive.")
-        if self.buffer_size < 0:
-            raise ValueError("packing buffer_size must be non-negative.")
-
-
-@dataclass(slots=True)
-class _OpenPack:
-    """Mutable packing state for one in-flight packed sample."""
-
-    samples: list[dict[str, Any]] = field(default_factory=list)
-    total_length: int = 0
-    insertion_order: int = 0
-
-
-@dataclass(slots=True)
-class _PendingSample:
-    """One buffered sample and its cached token length."""
-
-    sample: dict[str, Any]
-    length: int
-
-
-class PackingAssembler(Assembler[dict[str, Any], dict[str, Any] | list[dict[str, Any]]]):
-    """Assemble processed samples into longer packed sequences."""
+class LLMPackingAssembler(Assembler[LLMSample, LLMPack]):
+    """Concatenate samples in order and split the token stream into fixed-size packs."""
 
     def __init__(
         self,
-        *,
-        max_length: int,
-        selection_strategy: str = "best_fit",
-        open_pack_limit: int = 8,
-        pack_buffer_size: int = 64,
-        seed: int = 0,
-        defer_finalize: bool = False,
+        spec: LLMPackingSpec,
+        assemble_context: Any | None = None,
     ) -> None:
-        """Configure the streaming packer and its sample-selection strategy."""
-        if max_length <= 0:
-            raise ValueError(f"max_length must be positive, got {max_length}.")
-        if open_pack_limit <= 0:
-            raise ValueError(f"open_pack_limit must be positive, got {open_pack_limit}.")
-        if pack_buffer_size < 0:
-            raise ValueError(f"pack_buffer_size must be non-negative, got {pack_buffer_size}.")
-        if selection_strategy not in {"random", "best_fit"}:
-            raise ValueError(f"selection_strategy must be one of random/best_fit, got {selection_strategy!r}.")
+        """Configure the sequential token-stream packer."""
+        del assemble_context
+        self.spec = spec
+        self.pending_input_ids: list[int] = []
+        self.pending_labels: list[int] = []
+        self.pending_sample_ids: list[int] = []
+        self.next_sample_id = 1
+        self.pad_token_id: int | None = None
+        self.ignore_index: int = -100
 
-        self.max_length = max_length
-        self.selection_strategy = selection_strategy
-        self.open_pack_limit = open_pack_limit
-        self.pack_buffer_size = pack_buffer_size
-        self.keep_pending_sorted = self.selection_strategy != "random"
-        self.rng = random.Random(seed)
-        self.open_packs: list[_OpenPack] = []
-        self.open_pack_remaining: list[int] = []
-        self.pending_samples: list[_PendingSample] = []
-        self.next_open_pack_order = 0
-        self.defer_finalize = defer_finalize
-
-    def push(self, sample: dict[str, Any]) -> Iterable[dict[str, Any] | list[dict[str, Any]]]:
-        """Buffer one processed sample and emit any packs made ready by it."""
-        sample_length = int(sample["input_ids"].size(0))
-        if sample_length <= 0:
-            return []
-        if sample_length >= self.max_length:
-            return [self._pack_samples([sample])]
-
-        pending = _PendingSample(sample=sample, length=sample_length)
-        if not self.keep_pending_sorted:
-            self.pending_samples.append(pending)
-        else:
-            insert_index = len(self.pending_samples)
-            while insert_index > 0 and self.pending_samples[insert_index - 1].length < sample_length:
-                insert_index -= 1
-            self.pending_samples.insert(insert_index, pending)
-
-        if len(self.pending_samples) > self.pack_buffer_size:
-            return self._drain_pool_to_buffer_limit()
-        return []
-
-    def finish(self, *, drop_last: bool = False) -> Iterable[dict[str, Any] | list[dict[str, Any]]]:
-        """Flush buffered samples and optionally drop unfinished open packs."""
-        emitted: list[dict[str, Any] | list[dict[str, Any]]] = []
-        emitted.extend(self._drain_pool_to_buffer_limit(buffer_limit=0))
-
-        while self.pending_samples:
-            if not self.open_packs:
-                self._open_pack_from_pending()
-            emitted.append(self._close_most_filled_pack())
-            emitted.extend(self._assign_pending_to_packs())
-            emitted.extend(self._flush_ready_packs())
-
-        emitted.extend(self._flush_ready_packs())
-
-        if not drop_last:
-            if self.selection_strategy == "best_fit":
-                for pack in sorted(self.open_packs, key=lambda pack: pack.insertion_order):
-                    emitted.append(self._pack_samples(pack.samples))
-            else:
-                while self.open_packs:
-                    emitted.append(self._pack_samples(self._pop_open_pack(0).samples))
-
-        self.pending_samples.clear()
-        self.open_packs.clear()
-        self.open_pack_remaining.clear()
-        return emitted
-
-    def _assign_pending_to_packs(self) -> list[dict[str, Any] | list[dict[str, Any]]]:
-        """Assign pending samples into existing or newly opened packs."""
-        if not self.pending_samples:
+    def push(self, sample: LLMSample) -> Iterable[LLMPack]:
+        """Append one tokenized sample to the stream and emit full packs."""
+        if sample.token_length <= 0:
             return []
 
-        emitted: list[dict[str, Any] | list[dict[str, Any]]] = []
-        made_progress = True
-        while self.pending_samples and made_progress:
-            made_progress = False
-            pending = self.pending_samples
-            indices = range(len(pending))
-            if self.selection_strategy == "random":
-                indices = list(indices)
-                self.rng.shuffle(indices)
+        tokenizer = sample.tokenization_handler.tokenizer
+        pad_token_id = getattr(tokenizer, "pad_token_id", None)
+        if pad_token_id is not None:
+            self.pad_token_id = int(pad_token_id)
+        self.ignore_index = int(sample.tokenization_handler.ignore_index)
 
-            assigned_indices: list[int] = []
-            for idx in indices:
-                sample_length = pending[idx].length
-                chosen_pack: _OpenPack | None = None
-                chosen_index = -1
-                if self.selection_strategy == "random":
-                    candidate_count = 0
-                    for pack in self.open_packs:
-                        if self.max_length - pack.total_length >= sample_length:
-                            candidate_count += 1
-                            if self.rng.randrange(candidate_count) == 0:
-                                chosen_pack = pack
-                else:
-                    chosen_index = bisect_left(self.open_pack_remaining, sample_length)
-                    if chosen_index < len(self.open_packs):
-                        chosen_pack = self.open_packs[chosen_index]
+        sample_id = self.next_sample_id
+        self.next_sample_id += 1
+        self.pending_input_ids.extend(sample.input_ids)
+        self.pending_labels.extend(sample.labels)
+        self.pending_sample_ids.extend([sample_id] * sample.token_length)
+        return self._drain_full_packs()
 
-                if chosen_pack is not None:
-                    chosen_pack.samples.append(pending[idx].sample)
-                    chosen_pack.total_length += sample_length
-                    if self.selection_strategy != "random":
-                        self.open_pack_remaining[chosen_index] = self.max_length - chosen_pack.total_length
-                        self._restore_best_fit_order(chosen_index)
-                    assigned_indices.append(idx)
-                    made_progress = True
-                elif len(self.open_packs) < self.open_pack_limit:
-                    self._add_open_pack(_OpenPack(samples=[pending[idx].sample], total_length=sample_length))
-                    assigned_indices.append(idx)
-                    made_progress = True
+    def finish(self, *, drop_last: bool = False) -> Iterable[LLMPack]:
+        """Flush the final stream tail according to the configured tail policy."""
+        emitted = self._drain_full_packs()
+        if self.pending_input_ids and self.spec.tail_policy == "pad" and not drop_last:
+            emitted.append(self._build_pack(len(self.pending_input_ids), pad_to_length=self.spec.max_seq_len))
 
-            for idx in sorted(assigned_indices, reverse=True):
-                del pending[idx]
-            emitted.extend(self._flush_ready_packs())
-
+        self.pending_input_ids.clear()
+        self.pending_labels.clear()
+        self.pending_sample_ids.clear()
         return emitted
 
-    def _flush_ready_packs(self) -> list[dict[str, Any] | list[dict[str, Any]]]:
-        """Emit packs that have exactly reached ``max_length``."""
-        emitted: list[dict[str, Any] | list[dict[str, Any]]] = []
-        if self.selection_strategy == "best_fit":
-            while self.open_pack_remaining and self.open_pack_remaining[0] == 0:
-                emitted.append(self._pack_samples(self._pop_open_pack(0).samples))
-            return emitted
+    def state_dict(self) -> dict[str, object]:
+        """Return resumable packing state."""
+        return {
+            "pending_input_ids": list(self.pending_input_ids),
+            "pending_labels": list(self.pending_labels),
+            "pending_sample_ids": list(self.pending_sample_ids),
+            "next_sample_id": self.next_sample_id,
+            "pad_token_id": self.pad_token_id,
+            "ignore_index": self.ignore_index,
+        }
 
-        remaining: list[_OpenPack] = []
-        for pack in self.open_packs:
-            if pack.total_length == self.max_length:
-                emitted.append(self._pack_samples(pack.samples))
-            else:
-                remaining.append(pack)
-        self.open_packs = remaining
-        return emitted
+    def load_state_dict(self, state: dict[str, object]) -> None:
+        """Restore resumable packing state."""
+        self.pending_input_ids = list(state.get("pending_input_ids", []))
+        self.pending_labels = list(state.get("pending_labels", []))
+        self.pending_sample_ids = list(state.get("pending_sample_ids", []))
+        self.next_sample_id = int(state.get("next_sample_id", 1))
+        pad_token_id = state.get("pad_token_id")
+        self.pad_token_id = int(pad_token_id) if pad_token_id is not None else None
+        self.ignore_index = int(state.get("ignore_index", -100))
 
-    def _close_most_filled_pack(self) -> dict[str, Any] | list[dict[str, Any]]:
-        """Finalize and remove the most-filled currently open pack."""
-        if not self.open_packs:
-            raise RuntimeError("Cannot close a pack when no open packs exist.")
-        if self.selection_strategy == "best_fit":
-            return self._pack_samples(self._pop_open_pack(0).samples)
-
-        chosen_index = min(
-            range(len(self.open_packs)),
-            key=lambda idx: self.max_length - self.open_packs[idx].total_length,
+    def fingerprint(self) -> str:
+        """Return a stable resume fingerprint for this assembler configuration."""
+        return stable_fingerprint(
+            {
+                "max_seq_len": self.spec.max_seq_len,
+                "tail_policy": self.spec.tail_policy,
+                "isolate_attention": self.spec.isolate_attention,
+                "isolate_position_ids": self.spec.isolate_position_ids,
+            }
         )
-        return self._pack_samples(self._pop_open_pack(chosen_index).samples)
 
-    def _open_pack_from_pending(self) -> None:
-        """Start a new open pack from one pending sample."""
-        if not self.pending_samples:
-            raise RuntimeError("Cannot open a pack from an empty sample pool.")
-        sample_index = self.rng.randrange(len(self.pending_samples)) if self.selection_strategy == "random" else 0
-        pending = self.pending_samples.pop(sample_index)
-        self._add_open_pack(_OpenPack(samples=[pending.sample], total_length=pending.length))
-
-    def _drain_pool_to_buffer_limit(
-        self,
-        *,
-        buffer_limit: int | None = None,
-    ) -> list[dict[str, Any] | list[dict[str, Any]]]:
-        """Emit packs until the pending-sample pool is within the buffer limit."""
-        if buffer_limit is None:
-            buffer_limit = self.pack_buffer_size
-
-        emitted: list[dict[str, Any] | list[dict[str, Any]]] = []
-        emitted.extend(self._assign_pending_to_packs())
-        emitted.extend(self._flush_ready_packs())
-
-        while self.pending_samples and len(self.pending_samples) > buffer_limit:
-            if not self.open_packs:
-                self._open_pack_from_pending()
-            emitted.append(self._close_most_filled_pack())
-            emitted.extend(self._assign_pending_to_packs())
-            emitted.extend(self._flush_ready_packs())
-
+    def _drain_full_packs(self) -> list[LLMPack]:
+        """Emit all currently available full-length stream packs."""
+        emitted = []
+        while len(self.pending_input_ids) >= self.spec.max_seq_len:
+            emitted.append(self._build_pack(self.spec.max_seq_len))
         return emitted
 
-    def _add_open_pack(self, pack: _OpenPack) -> None:
-        """Insert an open pack and maintain best-fit ordering when needed."""
-        pack.insertion_order = self.next_open_pack_order
-        self.next_open_pack_order += 1
-        self.open_packs.append(pack)
-        if self.selection_strategy == "best_fit":
-            self.open_pack_remaining.append(self.max_length - pack.total_length)
-            self._restore_best_fit_order(len(self.open_packs) - 1)
+    def _build_pack(self, length: int, *, pad_to_length: int | None = None) -> LLMPack:
+        """Build one pack from the stream head and remove consumed tokens."""
+        input_ids = self.pending_input_ids[:length]
+        labels = self.pending_labels[:length]
+        sample_ids = self.pending_sample_ids[:length]
+        del self.pending_input_ids[:length]
+        del self.pending_labels[:length]
+        del self.pending_sample_ids[:length]
 
-    def _pop_open_pack(self, index: int) -> _OpenPack:
-        """Remove and return an open pack by index."""
-        pack = self.open_packs.pop(index)
-        if self.selection_strategy == "best_fit":
-            del self.open_pack_remaining[index]
-        return pack
+        pad_length = 0 if pad_to_length is None else pad_to_length - length
+        if pad_length < 0:
+            raise ValueError("Cannot pad a pack to a length shorter than its token count.")
+        if pad_length:
+            if self.pad_token_id is None:
+                raise ValueError("Tokenizer must expose pad_token_id when LLMPackingSpec.tail_policy='pad'.")
+            input_ids = input_ids + [self.pad_token_id] * pad_length
+            labels = labels + [self.ignore_index] * pad_length
 
-    def _restore_best_fit_order(self, index: int) -> None:
-        """Move one best-fit pack until remaining-capacity order is restored."""
-        if self.selection_strategy != "best_fit":
-            return
+        attention_mask = self._build_attention_mask(sample_ids, pad_length)
+        pack_segment_ids = self._build_pack_segment_ids(sample_ids, pad_length)
+        position_ids = self._build_position_ids(sample_ids, pad_length) if self.spec.isolate_position_ids else None
+        return LLMPack(
+            input_ids=input_ids,
+            labels=labels,
+            attention_mask=attention_mask,
+            pack_segment_ids=pack_segment_ids,
+            position_ids=position_ids,
+            source_sample_num=len(set(sample_ids)),
+        )
 
-        pack = self.open_packs[index]
-        remaining = self.open_pack_remaining[index]
-        while index > 0 and self.open_pack_remaining[index - 1] > remaining:
-            self.open_packs[index] = self.open_packs[index - 1]
-            self.open_pack_remaining[index] = self.open_pack_remaining[index - 1]
-            index -= 1
+    def _build_attention_mask(self, sample_ids: list[int], pad_length: int) -> list[int]:
+        """Build the 1D token-validity mask used for token counting."""
+        return [1] * len(sample_ids) + [0] * pad_length
 
-        self.open_packs[index] = pack
-        self.open_pack_remaining[index] = remaining
+    def _build_pack_segment_ids(self, sample_ids: list[int], pad_length: int) -> list[int]:
+        """Build segment ids consumed by packed attention-mask preparation."""
+        if not self.spec.isolate_attention:
+            return [1] * len(sample_ids) + [0] * pad_length
 
-    def _pack_samples(self, samples: list[dict[str, Any]]) -> dict[str, Any] | list[dict[str, Any]]:
-        """Return deferred sample groups or a finalized packed sample."""
-        if self.defer_finalize:
-            return [dict(sample) for sample in samples]
-        return finalize_packed_samples(samples)
+        segment_ids = []
+        current_sample_id = None
+        current_segment_id = 0
+        for sample_id in sample_ids:
+            if sample_id != current_sample_id:
+                current_sample_id = sample_id
+                current_segment_id += 1
+            segment_ids.append(current_segment_id)
+        return segment_ids + [0] * pad_length
 
-
-def finalize_packed_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
-    """Convert a packed sample group into token and packing metadata fields."""
-    if not samples:
-        raise ValueError("Cannot finalize an empty packed sample group.")
-
-    return {
-        "input_ids": torch.cat([sample["input_ids"] for sample in samples], dim=0),
-        "attention_mask": torch.cat([sample["attention_mask"] for sample in samples], dim=0),
-        "labels": torch.cat([sample["labels"] for sample in samples], dim=0),
-        "pack_segment_ids": torch.cat(
-            [
-                torch.full_like(sample["input_ids"], fill_value=index + 1, dtype=torch.long)
-                for index, sample in enumerate(samples)
-            ],
-            dim=0,
-        ),
-        "source_sample_num": len(samples),
-    }
+    def _build_position_ids(self, sample_ids: list[int], pad_length: int) -> list[int]:
+        """Build optional isolated position ids for visible sample boundaries."""
+        position_ids = []
+        current_sample_id = None
+        current_position = 0
+        for sample_id in sample_ids:
+            if sample_id != current_sample_id:
+                current_sample_id = sample_id
+                current_position = 0
+            position_ids.append(current_position)
+            current_position += 1
+        return position_ids + [0] * pad_length
 
 
 def build_packed_block_causal_mask(
@@ -303,7 +167,7 @@ def build_packed_block_causal_mask(
     *,
     dtype: torch.dtype,
 ) -> torch.Tensor:
-    """Build a 4D additive mask that isolates packed samples for eager/SDPA backends."""
+    """Build a 4D additive mask from stream segment ids for eager/SDPA backends."""
     if pack_segment_ids.ndim != 2:
         raise ValueError(f"Expected 2D pack_segment_ids, got shape {tuple(pack_segment_ids.shape)}.")
 
