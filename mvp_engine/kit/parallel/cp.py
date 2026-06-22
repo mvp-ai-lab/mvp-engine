@@ -17,6 +17,8 @@ from mvp_engine.distributed.utils import (
     get_context_parallel_size,
 )
 
+_CP_ATTENTION_MASK_KEY = "cp_attention_mask"
+
 
 @dataclass(frozen=True, slots=True)
 class CPBatchLayout:
@@ -384,6 +386,7 @@ def prepare_cp_packed_causal_batch(
         cu_seq_lens_k_key,
         max_length_q_key,
         max_length_k_key,
+        _CP_ATTENTION_MASK_KEY,
     }
     causal_batch = prepare_cp_causal_batch(
         {key: value for key, value in batch.items() if key not in stale_metadata_keys},
@@ -408,11 +411,22 @@ def prepare_cp_packed_causal_batch(
 
     global_segment_ids = causal_batch.global_batch[segment_ids_key]
     rank_order_indices = causal_batch.layout.rank_order_position_indices
+    needs_compact_attention = False
     if rank_order_indices is not None:
         global_segment_ids = _index_local_sequence(global_segment_ids, rank_order_indices)
+        needs_compact_attention = bool(torch.any(global_segment_ids == 0).item())
+        if needs_compact_attention:
+            global_segment_ids = _compact_packed_segment_ids(global_segment_ids, segment_ids_key=segment_ids_key)
     cu_seq_lens, max_length = _build_packed_cu_seqlens(global_segment_ids, segment_ids_key=segment_ids_key)
 
     local_batch = dict(causal_batch.local_batch)
+    local_attention_mask = local_batch.pop(attention_mask_key, None)
+    if needs_compact_attention:
+        if not isinstance(local_attention_mask, torch.Tensor):
+            raise ValueError("Compacted multimodal packed CP attention requires a local attention mask.")
+        local_batch[_CP_ATTENTION_MASK_KEY] = local_attention_mask
+    else:
+        local_batch.pop(_CP_ATTENTION_MASK_KEY, None)
     local_batch[attention_mask_key] = None
     local_batch[cu_seq_lens_q_key] = cu_seq_lens
     local_batch[cu_seq_lens_k_key] = cu_seq_lens
@@ -421,6 +435,7 @@ def prepare_cp_packed_causal_batch(
 
     global_batch = dict(causal_batch.global_batch)
     global_batch[attention_mask_key] = None
+    global_batch.pop(_CP_ATTENTION_MASK_KEY, None)
     global_batch[cu_seq_lens_q_key] = cu_seq_lens
     global_batch[cu_seq_lens_k_key] = cu_seq_lens
     global_batch[max_length_q_key] = max_length
@@ -1274,6 +1289,24 @@ def _build_packed_cu_seqlens(
         raise ValueError("Packed CP cu_seq_lens must cover the full padded batch.")
 
     return cu_seq_lens, int(seqlens.max().item())
+
+
+def _compact_packed_segment_ids(pack_segment_ids: torch.Tensor, *, segment_ids_key: str) -> torch.Tensor:
+    if not isinstance(pack_segment_ids, torch.Tensor) or pack_segment_ids.ndim != 2:
+        raise ValueError(
+            f"Expected 2D tensor {segment_ids_key}, got "
+            f"{type(pack_segment_ids)} {getattr(pack_segment_ids, 'shape', None)}."
+        )
+    if int(pack_segment_ids.shape[0]) != 1:
+        raise ValueError("Compacted multimodal packed CP metadata currently requires batch size 1.")
+
+    compact = pack_segment_ids[0].index_select(
+        0,
+        torch.nonzero(pack_segment_ids[0] != 0, as_tuple=False).flatten(),
+    )
+    if compact.numel() == 0:
+        raise ValueError(f"{segment_ids_key} must contain at least one packed token.")
+    return compact.unsqueeze(0).contiguous()
 
 
 def _index_local_sequence(value: torch.Tensor, local_position_indices: torch.Tensor) -> torch.Tensor:

@@ -274,6 +274,27 @@ def run_attention(
     if normalized == _FLASH_ATTENTION_IMPL and query.device.type == "npu":
         normalized = _NPU_ATTENTION_IMPL
 
+    if attention_mask is not None and _has_cu_seqlens(cu_seq_lens_q, cu_seq_lens_k, max_length_q, max_length_k):
+        return _compact_masked_varlen_attention(
+            query,
+            key,
+            value,
+            attn_implementation=normalized,
+            attention_mask=attention_mask,
+            cu_seq_lens_q=cu_seq_lens_q,
+            cu_seq_lens_k=cu_seq_lens_k,
+            max_length_q=max_length_q,
+            max_length_k=max_length_k,
+            dropout_p=dropout_p,
+            scaling=scaling,
+            is_causal=is_causal,
+            window_size=window_size,
+            softcap=softcap,
+            alibi_slopes=alibi_slopes,
+            deterministic=deterministic,
+            return_attn_probs=return_attn_probs,
+        )
+
     if normalized == _FLASH_ATTENTION_IMPL:
         return _flash_attention(
             query,
@@ -421,6 +442,73 @@ def _normalize_2d_attention_mask(attention_mask: torch.Tensor) -> torch.Tensor:
     if attention_mask.numel() > 0 and (torch.any(attention_mask < 0) or torch.any(attention_mask > 1)):
         raise ValueError("attention_mask must be a 0/1 mask.")
     return attention_mask.to(dtype=torch.bool)
+
+
+def _compact_masked_varlen_attention(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    *,
+    attn_implementation: str,
+    attention_mask: torch.Tensor,
+    cu_seq_lens_q: torch.Tensor,
+    cu_seq_lens_k: torch.Tensor,
+    max_length_q: int,
+    max_length_k: int,
+    dropout_p: float,
+    scaling: float | None,
+    is_causal: bool,
+    window_size: tuple[int, int],
+    softcap: float,
+    alibi_slopes: torch.Tensor | None,
+    deterministic: bool,
+    return_attn_probs: bool,
+) -> torch.Tensor:
+    if return_attn_probs:
+        raise ValueError("Compacted packed CP attention does not support return_attn_probs.")
+    if query.shape[:2] != key.shape[:2] or query.shape[:2] != value.shape[:2]:
+        raise ValueError("Compacted packed CP attention requires self-attention with matching q/k/v sequence shapes.")
+
+    attention_mask = _normalize_2d_attention_mask(attention_mask)
+    if tuple(attention_mask.shape) != tuple(query.shape[:2]):
+        raise ValueError(
+            "Compacted packed CP attention_mask must match gathered query shape "
+            f"{tuple(query.shape[:2])}, got {tuple(attention_mask.shape)}."
+        )
+
+    flat_mask = attention_mask.reshape(-1)
+    indices = torch.nonzero(flat_mask, as_tuple=False).flatten()
+    if indices.numel() == 0:
+        raise ValueError("Compacted packed CP attention requires at least one valid token.")
+
+    flat_shape = (query.shape[0] * query.shape[1], query.shape[2], query.shape[3])
+    compact_query = query.reshape(flat_shape).index_select(0, indices).unsqueeze(0)
+    compact_key = key.reshape(flat_shape).index_select(0, indices).unsqueeze(0)
+    compact_value = value.reshape(flat_shape).index_select(0, indices).unsqueeze(0)
+
+    compact_output = run_attention(
+        compact_query,
+        compact_key,
+        compact_value,
+        attn_implementation=attn_implementation,
+        attention_mask=None,
+        cu_seq_lens_q=cu_seq_lens_q,
+        cu_seq_lens_k=cu_seq_lens_k,
+        max_length_q=max_length_q,
+        max_length_k=max_length_k,
+        dropout_p=dropout_p,
+        scaling=scaling,
+        is_causal=is_causal,
+        window_size=window_size,
+        softcap=softcap,
+        alibi_slopes=alibi_slopes,
+        deterministic=deterministic,
+        return_attn_probs=False,
+    )
+
+    flat_output = torch.zeros_like(query.reshape(flat_shape))
+    flat_output.index_copy_(0, indices, compact_output.reshape(indices.numel(), query.shape[2], query.shape[3]))
+    return flat_output.reshape_as(query)
 
 
 def _flash_attention(
@@ -969,6 +1057,10 @@ def parallelize_model_with_context_parallel(model: nn.Module, cp_mesh, backend_k
             query = query.transpose(1, 2).contiguous()
             key = key.transpose(1, 2).contiguous()
             value = value.transpose(1, 2).contiguous()
+
+        cp_attention_mask = kwargs.get("cp_attention_mask")
+        if cp_attention_mask is not None:
+            attention_mask = cp_attention_mask
 
         return (
             attention(
