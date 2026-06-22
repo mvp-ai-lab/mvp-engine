@@ -11,6 +11,8 @@ import torch
 from mvp_dataset import Dataset, TorchLoader
 from mvp_dataset.core import RuntimeContext
 
+from mvp_engine.distributed.utils import get_data_parallel_dim_names
+
 from .collator import MLLMBatchCollator
 from .guard import MLLMModelInputGuard, MLLMRawRowGuard, MLLMSampleGuard
 from .packing import MLLMPackingAssembler
@@ -49,10 +51,7 @@ class MLLMDataKit:
         """
         resolved_dp_dims = dp_dims
         if resolved_dp_dims is None and device_mesh is not None:
-            mesh_dim_names = tuple(getattr(device_mesh, "mesh_dim_names", ()) or ())
-            resolved_dp_dims = (
-                tuple(dim_name for dim_name in mesh_dim_names if dim_name not in {"tensor", "context"}) or None
-            )
+            resolved_dp_dims = get_data_parallel_dim_names(device_mesh) or None
         if device_mesh is None and resolved_dp_dims is not None:
             raise ValueError("`device_mesh` is required when `dp_dims` is provided.")
         return MLLMDistributionSpec(device_mesh=device_mesh, dp_dims=resolved_dp_dims)

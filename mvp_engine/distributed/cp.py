@@ -12,12 +12,30 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .utils import get_world_size
+from .utils import get_context_parallel_rank, get_context_parallel_size, get_world_size
 
 try:
     from torch.distributed.tensor import DTensor
 except Exception:  # pragma: no cover - runtime-dependent
     DTensor = ()
+
+
+def get_local_sequence_position_indices(
+    global_sequence_length: int,
+    device_mesh,
+    *,
+    device: torch.device | None = None,
+) -> torch.Tensor:
+    """Return global token positions held by this context rank."""
+    context_size = get_context_parallel_size(device_mesh)
+    positions = torch.arange(global_sequence_length, device=device)
+    if context_size <= 1:
+        return positions
+    if global_sequence_length % context_size != 0:
+        raise ValueError("Global sequence length must be divisible by context size.")
+
+    context_rank = get_context_parallel_rank(device_mesh)
+    return positions.chunk(context_size, dim=0)[context_rank]
 
 
 class SeqAllToAll4D(torch.autograd.Function):

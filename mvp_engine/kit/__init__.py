@@ -43,11 +43,13 @@ if TYPE_CHECKING:
     )
     from .model import LigerKernelKit, LigerKernelReport, LigerPatch
     from .optim import OptimKit
+    from .parallel import CPKit
     from .perf.mfu import MFUKit
     from .util import StepCountingKit, StepCountResult
 
 _EXPORT_MODULES = {
     "Confidence": ".mllm",
+    "CPKit": ".parallel",
     "LossGuard": ".loss.loss",
     "LossKit": ".loss.loss",
     "MFUKit": ".perf.mfu",

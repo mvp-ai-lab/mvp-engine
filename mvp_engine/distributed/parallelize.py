@@ -5,6 +5,16 @@ from omegaconf import OmegaConf
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.fsdp import CPUOffloadPolicy
 
+from mvp_engine.distributed.utils import (
+    MESH_DIM_CONTEXT,
+    MESH_DIM_SHARD,
+    MESH_DIM_TENSOR,
+    get_context_parallel_mesh,
+    get_mesh_dim_size,
+    get_replicate_mesh,
+    get_sharded_data_parallel_mesh,
+    get_tensor_parallel_mesh,
+)
 from mvp_engine.utils.log import logger
 
 
@@ -85,9 +95,9 @@ def parallelize_model(
         backend_kwargs = OmegaConf.to_container(backend_kwargs, resolve=True)
 
     backend_kwargs = dict(backend_kwargs)
-    tensor_size = device_mesh["tensor"].size()
-    shard_size = device_mesh["shard"].size()
-    context_size = device_mesh["context"].size()
+    tensor_size = get_mesh_dim_size(device_mesh, MESH_DIM_TENSOR)
+    shard_size = get_mesh_dim_size(device_mesh, MESH_DIM_SHARD)
+    context_size = get_mesh_dim_size(device_mesh, MESH_DIM_CONTEXT)
 
     tp_backend_kwargs = dict(backend_kwargs.pop("tp", {}))
     tp_backend_kwargs.setdefault("builtin_sequence_parallel", False)
@@ -103,7 +113,7 @@ def parallelize_model(
 
         logger.info(f"Wrapping {model.__class__.__name__} with DistributedDataParallel...")
         backend_kwargs = backend_kwargs.get("ddp", {})
-        backend_kwargs = _set_default_kwargs(backend_kwargs, "device_mesh", device_mesh["replicate"])
+        backend_kwargs = _set_default_kwargs(backend_kwargs, "device_mesh", get_replicate_mesh(device_mesh))
         parallelized_model = DistributedDataParallel(model, **backend_kwargs)
     else:
         # For FSDP2: [N, M, ...]
@@ -115,7 +125,7 @@ def parallelize_model(
 
         from mvp_engine.distributed.fsdp2 import parallelize_model_with_fsdp2
 
-        fsdp2_mesh = device_mesh["replicate", "shard"]
+        fsdp2_mesh = get_sharded_data_parallel_mesh(device_mesh)
 
         cp_backend_kwargs = dict(backend_kwargs.pop("cp", {}))
         cp_backend_kwargs.setdefault("implementation", "ulysses")
@@ -136,9 +146,9 @@ def parallelize_model(
                 parallelize_model_with_context_parallel,
             )
 
-            parallelize_model_with_context_parallel(model, device_mesh["context"], cp_backend_kwargs)
+            parallelize_model_with_context_parallel(model, get_context_parallel_mesh(device_mesh), cp_backend_kwargs)
 
-        tp_mesh = device_mesh["tensor"] if tensor_size > 1 else None
+        tp_mesh = get_tensor_parallel_mesh(device_mesh) if tensor_size > 1 else None
 
         if tp_mesh is not None and tp_mesh.size() > 1:
             from mvp_engine.distributed.tp import parallelize_model_with_tensor_parallel
@@ -179,7 +189,7 @@ def parallelize_model(
 
             attach_cp_grad_sync(
                 parallelized_model,
-                device_mesh["context"],
+                get_context_parallel_mesh(device_mesh),
                 bucket_mb=cp_backend_kwargs.get("grad_bucket_mb", 128),
                 exclude=cp_backend_kwargs.get("grad_sync_exclude", []),
             )

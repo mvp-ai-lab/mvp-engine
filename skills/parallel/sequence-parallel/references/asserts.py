@@ -9,6 +9,12 @@ import inspect
 import textwrap
 from pathlib import Path
 
+from mvp_engine.distributed.utils import (
+    MESH_DIM_SHARD,
+    MESH_DIM_TENSOR,
+    get_mesh_dim_size,
+)
+
 ALLOWED_TP_MODES = {"col", "row"}
 ALLOWED_SP_MODES = {"sequence"}
 
@@ -79,8 +85,8 @@ def assert_before_train_end(engine) -> None:
         return
 
     if hasattr(engine, "device_mesh"):
-        tp_size = engine.device_mesh["tensor"].size()
-        shard_size = engine.device_mesh["shard"].size()
+        tp_size = get_mesh_dim_size(engine.device_mesh, MESH_DIM_TENSOR)
+        shard_size = get_mesh_dim_size(engine.device_mesh, MESH_DIM_SHARD)
     else:
         tp_size = engine.config.parallel.mesh.tensor
         shard_size = engine.config.parallel.mesh.shard

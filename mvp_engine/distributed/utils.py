@@ -3,11 +3,19 @@ import os
 import pickle
 import socket
 import struct
+from itertools import product
 from typing import Any, Optional
 
 import torch
 import torch.distributed as dist
-from torch.distributed.device_mesh import DeviceMesh
+from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
+
+MESH_DIM_REPLICATE = "replicate"
+MESH_DIM_SHARD = "shard"
+MESH_DIM_CONTEXT = "context"
+MESH_DIM_TENSOR = "tensor"
+MVP_ENGINE_MESH_ORDER = (MESH_DIM_REPLICATE, MESH_DIM_SHARD, MESH_DIM_CONTEXT, MESH_DIM_TENSOR)
+MODEL_PARALLEL_DIMS = {MESH_DIM_TENSOR, MESH_DIM_CONTEXT}
 
 
 def get_rank() -> int:
@@ -124,16 +132,153 @@ def get_world_size(group: dist.ProcessGroup | None = None) -> int:
     return dist.get_world_size(group)
 
 
-def _mesh_dim_names_except(device_mesh: DeviceMesh, excluded_dim_names: set[str]) -> tuple[str, ...]:
-    mesh_dim_names = tuple(getattr(device_mesh, "mesh_dim_names", ()) or ())
-    return tuple(dim_name for dim_name in mesh_dim_names if dim_name not in excluded_dim_names)
+def initialize_device_mesh(
+    device_type: str,
+    mesh_cfg: dict[str, int],
+) -> DeviceMesh:
+    """
+    Initialize device mesh for distributed training, compatible with both DDP and FSDP2.
+
+    Args:
+        device_type: Device type, "cuda" or "cpu"
+        mesh_cfg: Dictionary specifying mesh dimensions and their sizes, e.g. {"replicate": world_size} for DDP.
+
+    Returns:
+        DeviceMesh: Initialized device mesh
+    """
+    world_size = dist.get_world_size()
+
+    others = []
+    to_be_infered_name = ""
+    for dim_name, dim_size in mesh_cfg.items():
+        if dim_size != -1:
+            others.append(dim_size)
+        else:
+            to_be_infered_name = dim_name
+    if len(others) < len(mesh_cfg) - 1:
+        raise ValueError(
+            "Insufficient dimension sizes specified for device mesh initialization, only one dimension can be inferred."
+        )
+
+    if to_be_infered_name:
+        inferred_size = world_size // (1 if not others else torch.prod(torch.tensor(others)).item())
+        mesh_cfg[to_be_infered_name] = inferred_size
+
+    mesh_shape = list(mesh_cfg.values())
+    mesh_dim_names = list(mesh_cfg.keys())
+
+    from mvp_engine.utils.log import simple_info
+
+    simple_info(
+        f"Device Mesh initializing: {' / '.join(mesh_dim_names)} ({' / '.join([str(x) for x in mesh_shape])})..."
+    )
+
+    device_mesh = init_device_mesh(
+        device_type=device_type,
+        mesh_shape=mesh_shape,
+        mesh_dim_names=mesh_dim_names,
+    )
+
+    return device_mesh
 
 
-def _mesh_group(device_mesh: DeviceMesh, dim_names: tuple[str, ...]) -> Optional[dist.ProcessGroup]:
+def get_mesh_dim_names(device_mesh: DeviceMesh) -> tuple[str, ...]:
+    """Return named DeviceMesh dimensions, or an empty tuple for unnamed meshes."""
+    return tuple(getattr(device_mesh, "mesh_dim_names", ()) or ())
+
+
+def get_mesh_shape(device_mesh: DeviceMesh) -> tuple[int, ...]:
+    """Return the full DeviceMesh shape as plain ints."""
+    return tuple(int(dim_size) for dim_size in device_mesh.shape)
+
+
+def get_mesh_identity_key(device_mesh: DeviceMesh) -> tuple:
+    """Return a stable key that identifies mesh topology and dimension names."""
+    mesh = device_mesh.mesh.detach().cpu()
+    return (
+        device_mesh.device_type,
+        tuple(int(dim_size) for dim_size in mesh.shape),
+        tuple(int(rank) for rank in mesh.reshape(-1).tolist()),
+        get_mesh_dim_names(device_mesh),
+    )
+
+
+def get_mesh_dim_size(device_mesh: DeviceMesh, dim_name: str) -> int:
+    """Return the size of a named mesh dimension."""
+    return int(device_mesh[dim_name].size())
+
+
+def get_mesh_dim_group(device_mesh: DeviceMesh, mesh_dim: int | str) -> dist.ProcessGroup:
+    """Return the process group for a mesh dimension index or name."""
+    return device_mesh.get_group(mesh_dim)
+
+
+def get_mesh_reduce_device(device_mesh: DeviceMesh) -> torch.device:
+    """Return a device compatible with the mesh process group collectives."""
+    device_type = device_mesh.device_type
+    if device_type == "cuda":
+        return torch.device("cuda", torch.cuda.current_device())
+    return torch.device(device_type)
+
+
+def is_mesh_dim_active(device_mesh: DeviceMesh, dim_name: str) -> bool:
+    """Return whether a named mesh dimension exists and has size greater than one."""
+    return dim_name in get_mesh_dim_names(device_mesh) and get_mesh_dim_size(device_mesh, dim_name) > 1
+
+
+def get_replicate_mesh(device_mesh: DeviceMesh) -> DeviceMesh:
+    """Return the replicate-only submesh used by DDP."""
+    return device_mesh[MESH_DIM_REPLICATE]
+
+
+def get_sharded_data_parallel_mesh(device_mesh: DeviceMesh) -> DeviceMesh:
+    """Return the replicate/shard submesh used by FSDP2."""
+    return device_mesh[MESH_DIM_REPLICATE, MESH_DIM_SHARD]
+
+
+def get_tensor_parallel_mesh(device_mesh: DeviceMesh) -> DeviceMesh:
+    """Return the tensor-parallel submesh."""
+    return device_mesh[MESH_DIM_TENSOR]
+
+
+def get_context_parallel_mesh(device_mesh: DeviceMesh) -> DeviceMesh:
+    """Return the context-parallel submesh."""
+    return device_mesh[MESH_DIM_CONTEXT]
+
+
+def infer_mesh_parallel_backend(device_mesh: DeviceMesh) -> str:
+    """Infer whether a DeviceMesh should use the DDP or FSDP2 checkpoint path."""
+    mesh_dim_names = get_mesh_dim_names(device_mesh)
+    if mesh_dim_names:
+        if any(
+            is_mesh_dim_active(device_mesh, dim_name)
+            for dim_name in (MESH_DIM_SHARD, MESH_DIM_TENSOR, MESH_DIM_CONTEXT)
+        ):
+            return "fsdp2"
+        return "ddp"
+
+    mesh_shape = get_mesh_shape(device_mesh)
+    if len(mesh_shape) <= 1:
+        return "ddp"
+    if any(dim_size > 1 for dim_size in mesh_shape[1:]):
+        return "fsdp2"
+    return "ddp"
+
+
+def get_mesh_world_size(device_mesh: DeviceMesh, dim_names: tuple[str, ...]) -> int:
+    """Return the product of the requested mesh dimension sizes."""
+    if not dim_names:
+        return 1
+
     world_size = 1
     for dim_name in dim_names:
-        world_size *= int(device_mesh[dim_name].size())
-    if world_size <= 1:
+        world_size *= get_mesh_dim_size(device_mesh, dim_name)
+    return int(world_size)
+
+
+def get_mesh_group(device_mesh: DeviceMesh, dim_names: tuple[str, ...]) -> Optional[dist.ProcessGroup]:
+    """Return a flattened process group over named mesh dimensions."""
+    if get_mesh_world_size(device_mesh, dim_names) <= 1:
         return None
 
     if len(dim_names) == 1:
@@ -143,16 +288,22 @@ def _mesh_group(device_mesh: DeviceMesh, dim_names: tuple[str, ...]) -> Optional
     return device_mesh[dim_names]._flatten(flat_name).get_group()
 
 
+def get_data_parallel_dim_names(device_mesh: DeviceMesh) -> tuple[str, ...]:
+    """Return mesh dimensions that contribute independent training samples."""
+    return tuple(dim_name for dim_name in get_mesh_dim_names(device_mesh) if dim_name not in MODEL_PARALLEL_DIMS)
+
+
 def get_data_parallel_world_size(device_mesh: DeviceMesh) -> int:
     """Return the mesh world size that contributes samples to one optimizer step."""
-    dp_dim_names = _mesh_dim_names_except(device_mesh, {"tensor", "context"})
-    if not dp_dim_names:
-        return 1
+    return get_mesh_world_size(device_mesh, get_data_parallel_dim_names(device_mesh))
 
-    dp_world_size = 1
-    for dim_name in dp_dim_names:
-        dp_world_size *= int(device_mesh[dim_name].size())
-    return dp_world_size
+
+def get_data_parallel_rank(device_mesh: DeviceMesh) -> int:
+    """Return this process's rank over data-parallel mesh dimensions."""
+    group = get_data_parallel_group(device_mesh)
+    if group is None:
+        return 0
+    return int(dist.get_rank(group=group))
 
 
 def get_data_parallel_group(device_mesh: DeviceMesh) -> Optional[dist.ProcessGroup]:
@@ -160,19 +311,17 @@ def get_data_parallel_group(device_mesh: DeviceMesh) -> Optional[dist.ProcessGro
     if not dist.is_available() or not dist.is_initialized():
         return None
 
-    return _mesh_group(device_mesh, _mesh_dim_names_except(device_mesh, {"tensor", "context"}))
+    return get_mesh_group(device_mesh, get_data_parallel_dim_names(device_mesh))
+
+
+def get_token_stats_dim_names(device_mesh: DeviceMesh) -> tuple[str, ...]:
+    """Return mesh dimensions that contribute token/loss statistics."""
+    return tuple(dim_name for dim_name in get_mesh_dim_names(device_mesh) if dim_name != MESH_DIM_TENSOR)
 
 
 def get_token_stats_world_size(device_mesh: DeviceMesh) -> int:
     """Return the mesh world size that contributes token/loss statistics."""
-    stats_dim_names = _mesh_dim_names_except(device_mesh, {"tensor"})
-    if not stats_dim_names:
-        return 1
-
-    stats_world_size = 1
-    for dim_name in stats_dim_names:
-        stats_world_size *= int(device_mesh[dim_name].size())
-    return stats_world_size
+    return get_mesh_world_size(device_mesh, get_token_stats_dim_names(device_mesh))
 
 
 def get_token_stats_group(device_mesh: DeviceMesh) -> Optional[dist.ProcessGroup]:
@@ -180,7 +329,67 @@ def get_token_stats_group(device_mesh: DeviceMesh) -> Optional[dist.ProcessGroup
     if not dist.is_available() or not dist.is_initialized():
         return None
 
-    return _mesh_group(device_mesh, _mesh_dim_names_except(device_mesh, {"tensor"}))
+    return get_mesh_group(device_mesh, get_token_stats_dim_names(device_mesh))
+
+
+def get_context_parallel_size(device_mesh: DeviceMesh) -> int:
+    """Return the active context-parallel mesh size."""
+    if MESH_DIM_CONTEXT not in get_mesh_dim_names(device_mesh):
+        return 1
+    return get_mesh_dim_size(device_mesh, MESH_DIM_CONTEXT)
+
+
+def get_context_parallel_rank(device_mesh: DeviceMesh) -> int:
+    """Return this rank's coordinate inside the context mesh dimension."""
+    if get_context_parallel_size(device_mesh) <= 1:
+        return 0
+    return int(device_mesh.get_local_rank(MESH_DIM_CONTEXT))
+
+
+def get_context_parallel_group(device_mesh: DeviceMesh) -> Optional[dist.ProcessGroup]:
+    """Return the active context-parallel process group."""
+    if get_context_parallel_size(device_mesh) <= 1:
+        return None
+    return device_mesh[MESH_DIM_CONTEXT].get_group()
+
+
+def get_mesh_group_ranks(device_mesh: DeviceMesh, dim_names: tuple[str, ...]) -> list[list[int]]:
+    """Return rank groups spanning the requested mesh dimensions."""
+    mesh_dim_names = get_mesh_dim_names(device_mesh)
+    missing_dims = [dim_name for dim_name in dim_names if dim_name not in mesh_dim_names]
+    if missing_dims:
+        raise ValueError(f"DeviceMesh does not contain mesh dimensions: {missing_dims}.")
+
+    selected = {mesh_dim_names.index(dim_name) for dim_name in dim_names}
+    selected_indices = tuple(index for index in range(len(mesh_dim_names)) if index in selected)
+    fixed_indices = tuple(index for index in range(len(mesh_dim_names)) if index not in selected)
+
+    mesh = device_mesh.mesh.detach().cpu()
+    fixed_ranges = [range(int(mesh.shape[index])) for index in fixed_indices]
+    selected_ranges = [range(int(mesh.shape[index])) for index in selected_indices]
+
+    rank_groups: list[list[int]] = []
+    for fixed_coords in product(*fixed_ranges):
+        ranks: list[int] = []
+        for selected_coords in product(*selected_ranges):
+            mesh_index = [0] * len(mesh_dim_names)
+            for dim_index, coord in zip(fixed_indices, fixed_coords):
+                mesh_index[dim_index] = coord
+            for dim_index, coord in zip(selected_indices, selected_coords):
+                mesh_index[dim_index] = coord
+            ranks.append(int(mesh[tuple(mesh_index)].item()))
+        rank_groups.append(ranks)
+    return rank_groups
+
+
+def validate_mvp_engine_mesh_order(device_mesh: DeviceMesh) -> None:
+    """Validate that named mesh dimensions follow the mvp-engine runtime order."""
+    mesh_dim_names = get_mesh_dim_names(device_mesh)
+    if mesh_dim_names != MVP_ENGINE_MESH_ORDER:
+        raise ValueError(
+            "Context-parallel TP/CP compatibility requires mvp-engine mesh dimension order "
+            f"{MVP_ENGINE_MESH_ORDER}, got {mesh_dim_names}."
+        )
 
 
 def is_main_process() -> bool:
