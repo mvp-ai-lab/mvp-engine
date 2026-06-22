@@ -26,7 +26,7 @@ def test_config_structure(config: Any) -> None:
 
 
 def test_engine_structure(engine_class: type) -> None:
-    """Verify the engine uses PackingOptions and prepares packed model inputs."""
+    """Verify the engine declares packing through DataSpec and prepares packed model inputs."""
     source = "\n".join(
         textwrap.dedent(inspect.getsource(method))
         for name in ("prepare_dataloader", "train_pre_step", "forward_step")
@@ -36,14 +36,15 @@ def test_engine_structure(engine_class: type) -> None:
     calls = [ast.unparse(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)]
 
     uses_standard_data_kit = "MLLMDataKit" in source or "data_kit.build_dataset" in source
-    assert "PackingOptions" in source or not uses_standard_data_kit, (
-        "Standard MLLM engines should pass PackingOptions to MLLMDataKit."
+    declares_packing_spec = "MLLMPackingSpec" in source
+    assert declares_packing_spec or not uses_standard_data_kit, (
+        "Standard MLLM engines should declare packing through MLLMPackingSpec."
     )
     assert "pack_segment_ids" in source or any("prepare_packed" in name for name in calls), (
         "Engine must preserve or prepare packed metadata before model forward."
     )
     assert not uses_standard_data_kit or re.search(r"\bconfig\.data\.packing\b", source) is None, (
-        "Engine must not branch on a data.packing enable flag."
+        "Packing policy should be expressed through MLLMPackingSpec fields."
     )
 
 
