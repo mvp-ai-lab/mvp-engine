@@ -20,7 +20,10 @@ from recipes.video_mllm.dataset.codec import (
     pack_video_patches,
     process_video_with_codec,
 )
-from recipes.video_mllm.dataset.media import OneVisionVideoHandler, VideoMLLMMediaHandler
+from recipes.video_mllm.dataset.media import (
+    OneVisionVideoHandler,
+    VideoMLLMMediaHandler,
+)
 from recipes.video_mllm.dataset.schema import VideoChatSchemaHandler
 from recipes.video_mllm.dataset.video_encoding import (
     DenseVideoConfig,

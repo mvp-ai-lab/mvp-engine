@@ -22,9 +22,7 @@ except ImportError:
 
     def stable_fingerprint(value: object) -> str:
         """Return a stable JSON fingerprint when the installed mvp_dataset lacks one."""
-        encoded = json.dumps(_normalize_fingerprint_value(value), sort_keys=True, separators=(",", ":")).encode(
-            "utf-8"
-        )
+        encoded = json.dumps(_normalize_fingerprint_value(value), sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
 
 
