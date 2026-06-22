@@ -170,13 +170,34 @@ def _get_hf_model_state_dict(mesh: DeviceMesh, model: nn.Module) -> dict[str, to
     return _normalize_hf_state_dict(get_model_state_dict(model, options=options))
 
 
-def _save_hf_checkpoint(mesh: DeviceMesh, checkpoint_dir: Path, model: nn.Module, prefix: str) -> None:
+def _save_hf_checkpoint(
+    mesh: DeviceMesh,
+    checkpoint_dir: Path,
+    model: nn.Module,
+    prefix: str,
+    processor: Any | None = None,
+) -> None:
     state_dict = _get_hf_model_state_dict(mesh, model)
     if not is_main_process():
         return
 
     hf_checkpoint_dir = _get_hf_checkpoint_dir(checkpoint_dir, prefix)
     hf_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    base_model = _get_base_model(model)
+    if hasattr(base_model, "module"):
+        base_model = base_model.module
+    model_config = getattr(base_model, "config", None)
+    save_pretrained = getattr(model_config, "save_pretrained", None)
+    if not callable(save_pretrained):
+        raise TypeError(f"HF checkpoint export requires {base_model.__class__.__name__}.config.save_pretrained(...).")
+    save_pretrained(hf_checkpoint_dir)
+
+    if processor is not None:
+        processor_save_pretrained = getattr(processor, "save_pretrained", None)
+        if callable(processor_save_pretrained):
+            processor_save_pretrained(hf_checkpoint_dir)
+
     save_file(state_dict, str(hf_checkpoint_dir / "model.safetensors"))
 
 
@@ -233,6 +254,7 @@ def save_checkpoint(
     _accumulate_step: int = 0,
     prefix: str = "",
     hf_enable: bool = False,
+    processor: Any | None = None,
 ) -> None:
     """Save model, optimizer, and engine state for the current distributed mesh."""
     backend = _infer_checkpoint_backend(mesh)
@@ -297,7 +319,7 @@ def save_checkpoint(
             gc.collect()
 
     if hf_enable:
-        _save_hf_checkpoint(mesh, cur_checkpoint_dir, model, prefix)
+        _save_hf_checkpoint(mesh, cur_checkpoint_dir, model, prefix, processor=processor)
 
     if prefix != "":
         return

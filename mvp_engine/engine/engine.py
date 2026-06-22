@@ -338,6 +338,7 @@ class Engine(ABC):
             epoch=self.epoch,
             _accumulate_step=self._accumulate_step,
             hf_enable=self.config.checkpoint.hf_enable,
+            processor=getattr(self, "processor", None),
         )
 
         torch.distributed.barrier()
