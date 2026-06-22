@@ -4,30 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from mvp_engine.kit import MLLMDataKit
 from transformers import AutoConfig, AutoImageProcessor
 
 
-def build_qwen3_vl_processor(model_config: Any, *, data_kit: MLLMDataKit | None = None):
-    """Load the Qwen3-VL processor plus OneVision image processor.
-
-    The Qwen3-VL tokenizer/chat template is kept, while all video pixels are
-    normalized by the OneVision image processor attached as
-    ``processor.onevision_image_processor`` / ``onevision_patch_size`` /
-    ``onevision_image_size``.
-
-    Args:
-        model_config: Recipe model config with the pretrained model and OneVision encoder references.
-
-    Returns:
-        The initialized Hugging Face processor for Qwen3-VL.
-    """
-    kit = data_kit or MLLMDataKit()
-    processor = kit.build_processor(
-        model_config.pretrained_model_name_or_path,
-        trust_remote_code=True,
-    )
-
+def attach_onevision_processor(processor: Any, model_config: Any) -> Any:
+    """Attach the OneVision image processor required by video preprocessing."""
     vision_encoder_name = getattr(model_config, "vision_encoder_name_or_path", None)
     if not vision_encoder_name:
         raise ValueError("video MLLM preprocessing requires `model.vision_encoder_name_or_path`.")
@@ -38,5 +19,4 @@ def build_qwen3_vl_processor(model_config: Any, *, data_kit: MLLMDataKit | None 
     )
     processor.onevision_patch_size = int(getattr(vision_config, "patch_size", 14))
     processor.onevision_image_size = int(getattr(vision_config, "image_size", 448))
-
     return processor

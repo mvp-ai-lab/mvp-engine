@@ -25,6 +25,7 @@ EXPECTED_FILES = [
     "dataset/media.py",
     "dataset/processor.py",
     "dataset/video_encoding.py",
+    "dataset/image_encoding.py",
     "dataset/codec.py",
     "engine/__init__.py",
     "engine/video_mllm_engine.py",

@@ -31,8 +31,12 @@ from mvp_engine.utils.log import logger
 from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
 from ..configs.schema import VideoMLLMConfig
-from ..dataset.media import build_video_media_handler
-from ..dataset.processor import build_qwen3_vl_processor
+from ..dataset.media import (
+    build_image_media_handler,
+    build_mixed_media_handler,
+    build_video_media_handler,
+)
+from ..dataset.processor import attach_onevision_processor
 from ..dataset.schema import VideoChatSchemaHandler
 from ..model import patch_qwen3vl_model_flops
 from ..model.onevision import apply_onevision_swap, bind_video_layout
@@ -93,10 +97,20 @@ class VideoMLLMEngine(Engine):
             logger.warning(f"Video MLLM engine does not support workflow '{workflow}'.")
             return
 
-        self.processor = build_qwen3_vl_processor(self.config.model, data_kit=self.data_kit)
+        self.processor = self.data_kit.build_processor(
+            self.config.model.pretrained_model_name_or_path,
+            trust_remote_code=True,
+        )
+        attach_onevision_processor(self.processor, self.config.model)
+        if self.config.data.modality == "image":
+            media_handler = build_image_media_handler(self.config, processor=self.processor)
+        elif self.config.data.modality == "mixed":
+            media_handler = build_mixed_media_handler(self.config, processor=self.processor)
+        else:
+            media_handler = build_video_media_handler(self.config, processor=self.processor)
         sample_spec = MLLMSampleSpec(
             schema_handler=VideoChatSchemaHandler(processor=self.processor),
-            media_handler=build_video_media_handler(self.config, processor=self.processor),
+            media_handler=media_handler,
             tokenization_handler=MLLMTokenizationHandler(
                 processor=self.processor,
                 max_seq_len=int(self.config.data.max_seq_len),
@@ -159,6 +173,19 @@ class VideoMLLMEngine(Engine):
         ]
         model = self.model_kit.apply_model_patches(model, model_patches)
         model = self.token_loss_kit.apply_chunked_token_loss_patch(model)
+
+        # Resume post-swap weights (e.g. Stage-1 aligned projector) AFTER the OneVision swap,
+        # so the OneVision tower/merger keys exist. strict=False: LLM/encoder match the base,
+        # only the trained projector differs.
+        if self.config.model.init_weights_from:
+            from safetensors.torch import load_file
+
+            state = load_file(self.config.model.init_weights_from)
+            result = model.load_state_dict(state, strict=False)
+            logger.info(
+                f"init_weights_from {self.config.model.init_weights_from}: loaded {len(state)} tensors, "
+                f"missing={len(result.missing_keys)} unexpected={len(result.unexpected_keys)}"
+            )
 
         model = self.model_kit.apply_freeze_policy(
             model,

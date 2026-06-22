@@ -14,8 +14,18 @@ VIDEO_PLACEHOLDER = "<video>"
 DEFAULT_VIDEO_TOKEN = "<|video_pad|>"
 
 
+IMAGE_PLACEHOLDER = "<image>"
+
+
 class VideoChatSchemaHandler(MLLMSchemaHandler):
-    """Normalize single-video chat rows into loss-marked DataKit segments."""
+    """Normalize single-visual chat rows into loss-marked DataKit segments.
+
+    Handles a single video clip or a single still image. An image row (``image`` /
+    ``images`` field with an ``<image>`` placeholder, e.g. OpenBee alignment data) is
+    treated as one visual slot rendered with the video token, so it shares the same
+    OneVision visual path as video; the recipe image media handler encodes it as one
+    frame.
+    """
 
     def __init__(
         self,
@@ -23,11 +33,13 @@ class VideoChatSchemaHandler(MLLMSchemaHandler):
         *,
         role_map: dict[str, str] | None = None,
         video_placeholder: str = VIDEO_PLACEHOLDER,
+        image_placeholder: str = IMAGE_PLACEHOLDER,
     ) -> None:
         """Store the processor chat template and raw role/media conventions."""
         self.processor = processor
         self.role_map = dict(role_map or ROLE_MAP)
         self.video_placeholder = video_placeholder
+        self.image_placeholder = image_placeholder
 
     def normalize(self, row: Mapping[str, Any]) -> tuple[list[MLLMSegment], list[MLLMMediaSlot], dict[str, Any]]:
         """Return source-only prompt segments, one video segment, and assistant labels."""
@@ -143,18 +155,23 @@ class VideoChatSchemaHandler(MLLMSchemaHandler):
         return video_token
 
     def _normalize_video_slot(self, row: Mapping[str, Any]) -> MLLMMediaSlot:
-        """Bind the single video reference to the raw source field that stores it."""
+        """Bind the single visual reference to the raw source field that stores it.
+
+        Image fields (``image`` / ``images``) bind as a ``video`` slot too so a still
+        image shares the OneVision visual path; the image media handler encodes it as
+        one frame.
+        """
         if isinstance(row.get("video"), str):
             return MLLMMediaSlot(media_id="video:0", media_type="video", field="video")
 
-        for key in ("videos", "images_source"):
+        for key in ("videos", "images_source", "image", "images"):
             value = row.get(key)
-            if isinstance(value, str):
+            if isinstance(value, (str, dict)):
                 return MLLMMediaSlot(media_id="video:0", media_type="video", field=key)
             if isinstance(value, (list, tuple)) and value:
                 return MLLMMediaSlot(media_id="video:0", media_type="video", field=key, index=0)
 
-        raise ValueError("video MLLM sample requires `video`, `videos`, or `images_source`.")
+        raise ValueError("video MLLM sample requires `video`, `videos`, `images_source`, `image`, or `images`.")
 
     def _normalize_message(self, message: Mapping[str, Any]) -> dict[str, str]:
         """Normalize source role/content aliases to Qwen chat role/content strings."""
@@ -176,9 +193,14 @@ class VideoChatSchemaHandler(MLLMSchemaHandler):
         return {"role": normalized_role, "content": source_content}
 
     def _to_chat_blocks(self, content: str) -> tuple[list[dict[str, Any]], int]:
-        """Split raw text on the source video placeholder into HF chat blocks."""
+        """Split raw text on the source visual placeholder into HF chat blocks.
+
+        An ``<image>`` placeholder is treated as the single visual slot (rendered as a
+        video block) so image and video rows share one normalization path.
+        """
         blocks: list[dict[str, Any]] = []
         video_count = 0
+        content = content.replace(self.image_placeholder, self.video_placeholder)
         parts = content.split(self.video_placeholder)
         for index, part in enumerate(parts):
             if part:

@@ -21,6 +21,11 @@ class VideoMLLMDataConfig(BaseModel):
     train_path: str = "./data/video_mllm/smoke.jsonl"
     source: Literal["jsonl", "parquet", "lance"] = "jsonl"
     ref_columns: list[str] = Field(default_factory=list)
+    # ``video`` decodes a clip; ``image`` encodes one still image as a single OneVision
+    # frame (image-text alignment, e.g. OpenBee Stage 1); ``mixed`` dispatches per row
+    # (image rows → 1 frame, video rows → strategy) for Stage-2 mid-training. All route
+    # through the same OneVision visual tower.
+    modality: Literal["video", "image", "mixed"] = "video"
     video_root: str | None = None
     max_seq_len: int = Field(8192, ge=1)
     batch_size: int = 1
@@ -31,6 +36,9 @@ class VideoMLLMDataConfig(BaseModel):
     # Uniform frame-sampling budget; the swappable seam lives in dataset/sampling.py.
     num_frames: int = Field(16, ge=1)
     video_frame_size: int = Field(224, ge=1)
+    # Square side for image rows in ``mixed`` modality (OneVision-native res; video rows
+    # use ``video_frame_size``). Must be divisible by the OneVision patch size.
+    image_frame_size: int = Field(448, ge=1)
     video_encoding_strategy: VideoEncodingStrategy = "uniform"
 
     # Keyframe-lowres video strategy: every Nth sampled frame is high-res, all others are dense low-res frames.
@@ -63,6 +71,11 @@ class VideoMLLMDataConfig(BaseModel):
                 f"({expected}) for codec_patch, got {self.codec_k_keep}."
             )
         return self
+
+    @property
+    def uses_image(self) -> bool:
+        """Return whether the single-image alignment data path is active."""
+        return self.modality == "image"
 
     @property
     def uses_codec_patches(self) -> bool:
@@ -135,6 +148,12 @@ class VideoMLLMModelConfig(BaseModel):
     # OneVision visual tower used by every video encoding strategy.
     vision_encoder_name_or_path: str = "./pretrained/onevision-encoder-large-lang"
     freeze_vision_encoder: bool = True
+
+    # Optional post-swap weight init (e.g. Stage-1 aligned ckpt safetensors). ``pretrained_*``
+    # builds the BASE architecture + processor; these weights are loaded with strict=False
+    # AFTER the OneVision swap, so the trained OneVision projector/merger survives. Resuming a
+    # swapped checkpoint via ``from_pretrained`` cannot work (config describes the native ViT).
+    init_weights_from: str | None = None
 
     compile: VideoMLLMCompileConfig = Field(default_factory=VideoMLLMCompileConfig)
 

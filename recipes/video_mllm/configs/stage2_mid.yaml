@@ -1,12 +1,17 @@
 dev_mode: false
 engine: VideoMLLMEngine
 
-# Stage 2 — MID-TRAINING. Encoder frozen; train projector + LLM on a larger video-caption mix
-# (OV2 30s/60s/180s captions) to build temporal + broad multimodal knowledge. Starts from the
-# Stage-1 aligned checkpoint. Same raw-video / online-decode pipeline.
+# Stage 2 — MIXED MID-TRAINING. Encoder frozen; train projector + LLM on a per-row mix of
+# OV2 30s video-caption rows + OpenBee image-text rows (modality=mixed; ~6:4 video:image).
+# Starts from the Stage-1 aligned checkpoint. OV2 videos online-decode from video_root;
+# OpenBee images are inline. Build the lance with scripts/data/build_stage2_mixed_lance.py.
 
 seed: 42
 deterministic: false
+
+project:
+  name: "video-mllm-stage2-mid"
+  dir: "./outputs"
 
 parallel:
   mesh:
@@ -15,30 +20,36 @@ parallel:
     tensor: 1
 
 data:
-  train_path: "/mnt/data-alpha-sg-01/team-camera/home/d84417809/datasets/ov2_data/lance/mid_30s60s180s.lance"
+  # Built by scripts/data/build_stage2_mixed_lance.py (image rows inline + video rows as paths).
+  train_path: "./data/Stage2-Mixed-Lance/samples.lance"
   source: "lance"
-  video_root: null
+  ref_columns: []            # images inline; OV2 videos referenced by path (online decode)
+  modality: "mixed"          # per-row dispatch: images -> 1 frame, videos -> strategy frames
+  # Resolves OV2 images_source (relative 30s/...mp4) paths; OpenBee image rows ignore it.
+  video_root: "/mnt/data-alpha-sg-01/team-camera/shared/mvp-engine/data/OV2-mid-video/extracted"
   max_seq_len: 8192
   batch_size: 1
-  num_workers: 8
-  num_frames: 16
-  video_frame_size: 224
+  num_workers: 8             # workers OK now (DataLoadMesh dp-rank is cached, worker-safe)
+  num_frames: 16             # video rows: 16 frames @ video_frame_size
+  video_frame_size: 224      # video frame side (256 tok/frame -> 4096 tok/video)
+  image_frame_size: 448      # image row side (1024 tok/image, OneVision-native)
   video_encoding_strategy: "uniform"
 
 model:
-  # Set to the Stage-1 aligned hf checkpoint at launch, e.g.:
-  #   model.pretrained_model_name_or_path=outputs/<stage1_run>/checkpoints/iter_4000/hf_model
+  # BASE builds the native architecture + processor; the Stage-1 aligned projector is loaded
+  # post-swap via init_weights_from (override the run dir at launch if it differs).
   pretrained_model_name_or_path: "./pretrained/Qwen3-VL-8B-Base-woDS-stage0"
+  init_weights_from: "./outputs/vmllm_stage1_align_20260621121819_67ac/checkpoints/iter_4500/hf_model/model.safetensors"
   attn_implementation: "flash_attention_2"
   freeze_vit: true
-  freeze_projector: false
-  freeze_llm: false      # <-- mid-training trains projector + LLM
+  freeze_projector: false    # train projector + LLM
+  freeze_llm: false
   vision_encoder_name_or_path: "/mnt/data-alpha-sg-01/team-camera/home/c84391361/projects/OVEncoder-align/checkpoints/onevision-encoder-large-lang"
   freeze_vision_encoder: true
 
 optim:
   optimizer: "AdamW"
-  lr: 1.0e-5             # OV2 mid/instruct lr
+  lr: 1.0e-5                 # OV2 mid/instruct lr
   weight_decay: 0.05
   gradient_accumulation_steps: 2
   mixed_precision: "bf16"
@@ -47,12 +58,12 @@ optim:
 
 loop:
   policy: "iter"
-  total_steps: 8000
+  total_steps: 7000          # ~1M mixed samples at 2 nodes (launcher overrides per node count)
 
 checkpoint:
   interval: 2000
-  keep_n: 2
-  hf_enable: true        # Stage 3 (SFT) loads this ckpt
+  keep_n: 3
+  hf_enable: true            # Stage 3 (SFT) loads this ckpt
 
 log:
   interval: 10

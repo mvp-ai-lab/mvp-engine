@@ -4,11 +4,15 @@ engine: VideoMLLMEngine
 # Stage 1 — ALIGNMENT (projector warmup). Freeze the OneVision encoder AND the Qwen3-VL LLM;
 # train ONLY the connector/projector so the swapped OneVision features align to the LLM's input
 # space (this is the step our earlier SFT runs skipped — projector was frozen and never aligned).
-# Data: a subset of OV2 short-video captions (mid_training_video/30s → build_ov2_mid_jsonl → lance).
-# All raw-video / online-decode (same validated pipeline as the SFT recipe).
+# Data: OpenBee Stage-1 image-text alignment data. This aligns the randomly initialized
+# projector before OV2-style video mid-training.
 
 seed: 42
 deterministic: false
+
+project:
+  name: "video-mllm-stage1-align"
+  dir: "./outputs"
 
 parallel:
   mesh:
@@ -17,15 +21,19 @@ parallel:
     tensor: 1
 
 data:
-  train_path: "/mnt/data-alpha-sg-01/team-camera/home/d84417809/datasets/ov2_data/lance/align_30s.lance"
+  # Built by scripts/data/build_openbee_stage1_lance.py (inline images + computed img_size).
+  train_path: "./data/Open-Bee-Lance/stage1/samples.lance"
   source: "lance"
+  ref_columns: []            # images are inline in samples.lance; kit ref-resolution is skipped
+  modality: "image"          # encode each image as one OneVision frame (image-text alignment)
   video_root: null
   max_seq_len: 8192
   batch_size: 1
-  num_workers: 8
-  num_frames: 16
-  video_frame_size: 224
-  video_encoding_strategy: "uniform"
+  num_workers: 0             # REQUIRED: lance DP-shard reads the device_mesh PG, unavailable in DataLoader workers
+  # Square side fed to the (frozen) OneVision encoder; must be divisible by patch size.
+  # 448 = encoder-native res -> 1024 visual tokens for a single image (fits max_seq_len cheaply).
+  # Video stages keep 224 because 16 frames x 448 would overflow the sequence budget.
+  video_frame_size: 448
 
 model:
   pretrained_model_name_or_path: "./pretrained/Qwen3-VL-8B-Base-woDS-stage0"

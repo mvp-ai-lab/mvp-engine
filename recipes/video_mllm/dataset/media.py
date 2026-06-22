@@ -12,6 +12,7 @@ from mvp_engine.kit.mllm.data.media import RenderedMedia, empty_model_sample
 from mvp_engine.utils.log import simple_info
 
 from .codec import CodecPatchConfig, process_video_with_codec
+from .image_encoding import process_image_as_frame
 from .schema import DEFAULT_VIDEO_TOKEN
 from .video_encoding import (
     DenseVideoConfig,
@@ -34,6 +35,7 @@ class OneVisionVideoHandler(MLLMMediaTypeHandler):
     """Render, decode, pack, and collate OneVision-backed video tensors."""
 
     media_type = "video"
+    media_noun = "video"  # used in drop-warning messages; overridden by the image handler
     OUTPUT_TENSOR_KEYS = (
         "pixel_values_videos",
         "video_grid_thw",
@@ -107,7 +109,7 @@ class OneVisionVideoHandler(MLLMMediaTypeHandler):
             outputs = [self._encode_video(value, processor=processor) for value in values]
             return self._merge_video_inputs([output.to_model_inputs() for output in outputs])
         except Exception as exc:
-            simple_info(f"video_mllm: dropping sample with unreadable video media: {exc}", level="warning")
+            simple_info(f"video_mllm: dropping sample with unreadable {self.media_noun} media: {exc}", level="warning")
             return empty_model_sample()
 
     def merge_pack(self, samples: list[dict[str, Any]]) -> dict[str, Any]:
@@ -214,6 +216,107 @@ class OneVisionVideoHandler(MLLMMediaTypeHandler):
         raise ValueError(f"unsupported video encoding strategy: {self.strategy!r}")
 
 
+class OneVisionImageHandler(OneVisionVideoHandler):
+    """Encode a single still image as one OneVision frame for image-text alignment.
+
+    Reuses the validated video patch-sequence path: the image is rendered with the
+    video token and emitted as ``pixel_values_videos`` so the model routes it through
+    ``get_video_features`` with no model changes. One image == one ``uniform`` frame.
+    """
+
+    media_noun = "image"
+
+    def __init__(self, *, image_config: DenseVideoConfig, image_root: str | None = None) -> None:
+        """Store the single-frame image geometry."""
+        super().__init__(strategy="uniform", dense_config=image_config, video_root=image_root)
+
+    def placeholder_aliases(self, processor: Any) -> tuple[str, ...]:
+        """Accept the image placeholder in addition to the video token."""
+        return ("<image>", "<video>", self.default_token(processor))
+
+    def _encode_video(self, video: Any, *, processor: Any) -> VideoEncodingResult:
+        """Encode one raw image value as a single OneVision frame."""
+        assert self.dense_config is not None
+        return process_image_as_frame(
+            video,
+            processor=processor,
+            config=self.dense_config,
+            image_root=self.video_root,
+        )
+
+
+class OneVisionVisualHandler(OneVisionVideoHandler):
+    """Mixed image+video handler: dispatch each row by its source field.
+
+    OpenBee image rows (``image``/``images`` field) are encoded as one OneVision
+    frame; OV2 video rows (``video``/``videos``/``images_source``) go through the
+    configured video strategy. Both render the video token and emit
+    ``pixel_values_videos`` so the model uses one path (``get_video_features``).
+    Used for Stage-2 mixed mid-training (image+video in one dataset).
+    """
+
+    media_noun = "visual"
+    IMAGE_FIELDS = ("image", "images")
+
+    def __init__(
+        self,
+        *,
+        strategy: str,
+        image_config: DenseVideoConfig,
+        dense_config: DenseVideoConfig | None = None,
+        codec_config: CodecPatchConfig | None = None,
+        keyframe_config: KeyframeLowresVideoConfig | None = None,
+        video_root: str | None = None,
+    ) -> None:
+        """Store the video strategy config plus the single-frame image config."""
+        super().__init__(
+            strategy=strategy,
+            dense_config=dense_config,
+            codec_config=codec_config,
+            keyframe_config=keyframe_config,
+            video_root=video_root,
+        )
+        image_config.validate()
+        self.image_config = image_config
+
+    @staticmethod
+    def _is_image_slot(slot: MLLMMediaSlot) -> bool:
+        """Return whether a slot is an OpenBee image (vs an OV2 video) by source field."""
+        return slot.field in OneVisionVisualHandler.IMAGE_FIELDS
+
+    @property
+    def _image_token_count(self) -> int:
+        return int(self.image_config.grid_size * self.image_config.grid_size)
+
+    def render(self, slot: MLLMMediaSlot, *, processor: Any, tokenizer: Any) -> RenderedMedia:
+        """Render one slot's video-token span sized for image (1 frame) or video (strategy)."""
+        del tokenizer
+        count = self._image_token_count if self._is_image_slot(slot) else self.video_token_count
+        return RenderedMedia(
+            media_id=slot.media_id, media_type=self.media_type, text=self.default_token(processor) * count
+        )
+
+    def load(self, slots: list[MLLMMediaSlot], values: list[Any], *, processor: Any) -> dict[str, Any]:
+        """Encode each slot by its kind (image → 1 frame, video → strategy) and merge."""
+        if not values:
+            return {}
+        try:
+            outputs: list[VideoEncodingResult] = []
+            for slot, value in zip(slots, values, strict=True):
+                if self._is_image_slot(slot):
+                    outputs.append(
+                        process_image_as_frame(
+                            value, processor=processor, config=self.image_config, image_root=self.video_root
+                        )
+                    )
+                else:
+                    outputs.append(self._encode_video(value, processor=processor))
+            return self._merge_video_inputs([output.to_model_inputs() for output in outputs])
+        except Exception as exc:
+            simple_info(f"video_mllm: dropping sample with unreadable {self.media_noun} media: {exc}", level="warning")
+            return empty_model_sample()
+
+
 def build_video_media_handler(config: Any, *, processor: Any) -> VideoMLLMMediaHandler:
     """Build the recipe video media handler from config."""
     patch_size = int(getattr(processor, "onevision_patch_size", 14))
@@ -248,6 +351,64 @@ def build_video_media_handler(config: Any, *, processor: Any) -> VideoMLLMMediaH
         processor=processor,
         video_handler=OneVisionVideoHandler(
             strategy=strategy,
+            dense_config=dense_config,
+            codec_config=codec_config,
+            keyframe_config=keyframe_config,
+            video_root=data.video_root,
+        ),
+    )
+
+
+def build_image_media_handler(config: Any, *, processor: Any) -> VideoMLLMMediaHandler:
+    """Build the recipe image media handler (single-frame OneVision encoding)."""
+    patch_size = int(getattr(processor, "onevision_patch_size", 14))
+    data = config.data
+    image_config = DenseVideoConfig(num_frames=1, frame_size=int(data.video_frame_size), patch_size=patch_size)
+    return VideoMLLMMediaHandler(
+        processor=processor,
+        video_handler=OneVisionImageHandler(image_config=image_config, image_root=data.video_root),
+    )
+
+
+def build_mixed_media_handler(config: Any, *, processor: Any) -> VideoMLLMMediaHandler:
+    """Build the Stage-2 mixed handler (per-row image+video dispatch).
+
+    Video rows use ``video_encoding_strategy`` at ``video_frame_size``; image rows
+    use ``image_frame_size`` as a single frame. Both stream through one OneVision
+    video path.
+    """
+    patch_size = int(getattr(processor, "onevision_patch_size", 14))
+    data = config.data
+    strategy = str(data.video_encoding_strategy)
+    dense_config = codec_config = keyframe_config = None
+    if strategy == "uniform":
+        dense_config = DenseVideoConfig(
+            num_frames=int(data.num_frames), frame_size=int(data.video_frame_size), patch_size=patch_size
+        )
+    elif strategy == "codec_patch":
+        codec_config = CodecPatchConfig(
+            num_frames=int(data.codec_num_frames),
+            packed_frames=int(data.codec_packed_frames),
+            frame_size=int(data.codec_frame_size),
+            patch_size=int(data.codec_patch_size),
+            k_keep=int(data.codec_k_keep),
+            cv_reader_required=bool(data.cv_reader_required),
+        )
+    elif strategy == "keyframe_lowres":
+        keyframe_config = KeyframeLowresVideoConfig(
+            num_frames=int(data.num_frames),
+            full_frame_size=int(data.video_frame_size),
+            lowres_frame_size=int(data.keyframe_lowres_frame_size),
+            patch_size=patch_size,
+            keyframe_interval=int(data.keyframe_interval),
+        )
+    image_config = DenseVideoConfig(num_frames=1, frame_size=int(data.image_frame_size), patch_size=patch_size)
+
+    return VideoMLLMMediaHandler(
+        processor=processor,
+        video_handler=OneVisionVisualHandler(
+            strategy=strategy,
+            image_config=image_config,
             dense_config=dense_config,
             codec_config=codec_config,
             keyframe_config=keyframe_config,
