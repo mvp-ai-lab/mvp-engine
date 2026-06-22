@@ -1,12 +1,10 @@
 """Codec patchification tests for the video MLLM recipe."""
 
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import torch
 import torch.nn as nn
-from omegaconf import OmegaConf
 
 from mvp_engine.kit import MLLMTokenizationHandler
 from recipes.video_mllm.configs.schema import VideoMLLMConfig
@@ -31,8 +29,6 @@ from recipes.video_mllm.dataset.video_encoding import (
     process_video_with_keyframe_lowres,
 )
 from recipes.video_mllm.model.onevision import OneVisionVisualTower
-
-CODEC_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "codec.yaml"
 
 
 class _FakeTokenizer:
@@ -86,9 +82,29 @@ def _build_datakit_video_sample(
     }
 
 
+def _codec_config_container() -> dict:
+    return {
+        "engine": "VideoMLLMEngine",
+        "data": {
+            "train_path": "./tmp/spatialvid_v1/train.jsonl",
+            "source": "jsonl",
+            "video_encoding_strategy": "codec_patch",
+            "codec_num_frames": 64,
+            "codec_packed_frames": 8,
+            "codec_frame_size": 224,
+            "codec_patch_size": 14,
+            "codec_k_keep": 2048,
+            "cv_reader_required": False,
+        },
+        "model": {
+            "vision_encoder_name_or_path": "./pretrained/onevision-encoder-large-lang",
+            "freeze_vision_encoder": True,
+        },
+    }
+
+
 def _load_codec_config() -> VideoMLLMConfig:
-    container = OmegaConf.to_container(OmegaConf.load(CODEC_CONFIG), resolve=True)
-    return VideoMLLMConfig.model_validate(container)
+    return VideoMLLMConfig.model_validate(_codec_config_container())
 
 
 def test_codec_config_validates_against_schema():
@@ -103,7 +119,7 @@ def test_codec_config_validates_against_schema():
 
 
 def test_codec_schema_rejects_mismatched_k_keep():
-    container = OmegaConf.to_container(OmegaConf.load(CODEC_CONFIG), resolve=True)
+    container = _codec_config_container()
     container["data"]["codec_k_keep"] = container["data"]["codec_k_keep"] - 1
 
     with pytest.raises(ValueError):
@@ -111,7 +127,7 @@ def test_codec_schema_rejects_mismatched_k_keep():
 
 
 def test_schema_accepts_keyframe_lowres_strategy():
-    container = OmegaConf.to_container(OmegaConf.load(CODEC_CONFIG), resolve=True)
+    container = _codec_config_container()
     container["data"]["video_encoding_strategy"] = "keyframe_lowres"
     container["data"]["keyframe_interval"] = 2
     container["data"]["keyframe_lowres_frame_size"] = 112
@@ -124,7 +140,7 @@ def test_schema_accepts_keyframe_lowres_strategy():
 
 
 def test_schema_rejects_keyframe_lowres_larger_than_full_resolution():
-    container = OmegaConf.to_container(OmegaConf.load(CODEC_CONFIG), resolve=True)
+    container = _codec_config_container()
     container["data"]["video_encoding_strategy"] = "keyframe_lowres"
     container["data"]["video_frame_size"] = 112
     container["data"]["keyframe_lowres_frame_size"] = 224

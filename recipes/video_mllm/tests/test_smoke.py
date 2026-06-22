@@ -19,12 +19,17 @@ from mvp_engine.testing.utils import (
     load_smoke_test_config,
 )
 
-CONFIG_NAME = "uniform"
+CONFIG_NAME = "stage2_mid"
 WORLD_SIZE = 1
 CONFIG_OVERRIDES: tuple[str, ...] = (
     "data.train_path=./tmp/spatialvid_smoke/smoke.jsonl",
+    "data.source=jsonl",
+    "data.modality=video",
+    "data.ref_columns=[]",
+    "data.video_root=null",
     "data.max_seq_len=2048",
     "data.num_frames=4",
+    "model.init_weights_from=null",
     "optim.lr=1.0e-5",
     "optim.gradient_accumulation_steps=1",
     "loop.total_steps=2",

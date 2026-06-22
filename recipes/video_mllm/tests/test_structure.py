@@ -15,9 +15,8 @@ EXPECTED_FILES = [
     "__init__.py",
     "configs/__init__.py",
     "configs/schema.py",
-    "configs/uniform.yaml",
-    "configs/codec.yaml",
-    "configs/keyframe_lowres.yaml",
+    "configs/stage1_align.yaml",
+    "configs/stage2_mid.yaml",
     "dataset/__init__.py",
     "dataset/decoder.py",
     "dataset/sampling.py",
@@ -35,9 +34,6 @@ EXPECTED_FILES = [
     "model/qwen3_vl.py",
     "model/onevision.py",
     "model/packing.py",
-    "scripts/run_smoke_8gpu.sbatch",
-    "scripts/run_train_8gpu.sbatch",
-    "scripts/run_codec_smoke_8gpu.sbatch",
 ]
 
 
