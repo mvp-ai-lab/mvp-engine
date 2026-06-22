@@ -83,7 +83,9 @@ Rules:
 - Ulysses degree is inferred from `parallel.mesh.context`;
 - `shard > 1` is required because this repo rejects pure model parallelism
   without FSDP2;
-- `tp.builtin_sequence_parallel` and `context > 1` must not both be true;
+- `tp.builtin_sequence_parallel` may be combined with `context > 1`; SP still
+  uses the tensor mesh, so verify tensor/context data identity, per-module
+  sequence dimensions, and grad ownership together;
 - all ranks that differ only by `context` must read the same samples;
 - exclude `tensor` and `context` from data-loader sharding and global batch
   accounting;
@@ -122,6 +124,30 @@ The helper pads to a context-size multiple, globally shifts next-token labels,
 extracts token-aligned local tensors, and returns global-position local
 `position_ids`.
 
+For packed multimodal batches, select the media-boundary strategy explicitly:
+
+```python
+prepared = self.cp_kit.prepare_packed_causal_batch(
+    batch,
+    device_mesh=self.device_mesh,
+    pad_token_id=pad_token_id,
+    split_strategy="multimodal",
+    global_packed_seq_params_key="global_packed_seq_params",
+    temporal_patch_size=temporal_patch_size,
+)
+ctx.data = prepared.local_batch
+```
+
+Rules:
+
+- `split_strategy="text"` is the default token-even split for text-only data;
+- `split_strategy="multimodal"` reads media lengths from
+  `global_packed_seq_params.cu_seqlens_q`;
+- image split points must stay on image boundaries;
+- video split points must stay on video boundaries, or tubelet boundaries when
+  `temporal_patch_size > 1`;
+- `num_frames` metadata is required for videos when `temporal_patch_size > 1`.
+
 ### 5. Sync CP Gradients
 
 At synchronized optimizer steps:
@@ -144,7 +170,8 @@ Keep the call after token/global loss rescale and before clipping or
 Review the modified recipe without running tests:
 
 - `parallel.mesh.context` and `backend_kwargs.cp` are present;
-- context mesh and tensor-mesh built-in sequence parallel are not both enabled;
+- if tensor-mesh built-in sequence parallel is enabled, tensor mesh is active
+  and the recipe validates CP+SP layout and grad handling together;
 - dataloading excludes `context` from sample sharding;
 - token/loss statistics include `context`;
 - the real top-level class binds `CP_MODULE_CONFIG`;

@@ -104,9 +104,6 @@ def parallelize_model(
     if tp_backend_kwargs["builtin_sequence_parallel"] and tensor_size <= 1:
         raise ValueError("TP builtin sequence parallel requires an active tensor mesh with parallel.mesh.tensor > 1.")
 
-    if tp_backend_kwargs["builtin_sequence_parallel"] and context_size > 1:
-        raise ValueError("TP builtin sequence parallel is not compatible with context parallel.")
-
     if shard_size * tensor_size * context_size == 1:
         # For Pure DDP: [N, 1, 1]
         from torch.nn.parallel import DistributedDataParallel
@@ -183,6 +180,11 @@ def parallelize_model(
                 backend_kwargs["offload_policy"] = CPUOffloadPolicy()
 
             parallelized_model = parallelize_model_with_fsdp2(model, backend_kwargs)
+
+        if tp_backend_kwargs.get("builtin_sequence_parallel", False):
+            from mvp_engine.distributed.tp import attach_sequence_parallel_grad_scale
+
+            attach_sequence_parallel_grad_scale(parallelized_model)
 
         if context_size > 1 and cp_backend_kwargs["grad_sync"]:
             from mvp_engine.distributed.cp import attach_cp_grad_sync

@@ -49,10 +49,11 @@ def test_config_structure(config) -> None:
     assert isinstance(cp_config.grad_sync, bool), "cp.grad_sync must be a bool."
 
     if mesh.context > 1 or mesh.context == -1:
-        assert not backend_kwargs.tp.builtin_sequence_parallel, (
-            "context mesh and TP built-in sequence parallel must not both be enabled."
-        )
         assert mesh.shard != 1, "This repo requires FSDP2 shard > 1 when context mesh is active."
+        if backend_kwargs.tp.builtin_sequence_parallel:
+            assert mesh.tensor > 1 or mesh.tensor == -1, (
+                "CP+TP built-in sequence parallel requires parallel.mesh.tensor > 1 or -1."
+            )
 
 
 def test_engine_structure(engine_class: type) -> None:

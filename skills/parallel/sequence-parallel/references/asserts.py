@@ -37,8 +37,8 @@ def test_file_structure(recipe_root: Path) -> None:
     assert "SEQUENCE_PARALLEL" in model_source, (
         "Bind SEQUENCE_PARALLEL_MODULE_CONFIG or SEQUENCE_PARALLEL_SEQUENCE_DIM on the top-level model class."
     )
-    assert "sequence_parallel" in config_source, (
-        "Config must expose parallel.backend_kwargs.sequence_parallel for SP activation."
+    assert "builtin_sequence_parallel" in config_source, (
+        "Config must expose parallel.backend_kwargs.tp.builtin_sequence_parallel for SP activation."
     )
     assert "mesh.sequence" not in config_source, (
         "Do not add a parallel.mesh.sequence dimension; SP must reuse parallel.mesh.tensor."
@@ -51,18 +51,21 @@ def test_file_structure(recipe_root: Path) -> None:
 def test_config_structure(config) -> None:
     """Verify mesh and backend config can activate SP safely."""
     backend_kwargs = config.parallel.backend_kwargs
-    assert hasattr(backend_kwargs, "sequence_parallel"), (
-        "parallel.backend_kwargs.sequence_parallel must be available in the config schema."
+    assert hasattr(backend_kwargs, "tp"), "parallel.backend_kwargs.tp must be available in the config schema."
+    assert hasattr(backend_kwargs.tp, "builtin_sequence_parallel"), (
+        "parallel.backend_kwargs.tp.builtin_sequence_parallel must be available in the config schema."
     )
-    assert isinstance(backend_kwargs.sequence_parallel, bool), "sequence_parallel must be a bool."
+    assert isinstance(backend_kwargs.tp.builtin_sequence_parallel, bool), "tp.builtin_sequence_parallel must be a bool."
     assert isinstance(config.parallel.mesh.tensor, int), "parallel.mesh.tensor must be an int."
     assert isinstance(config.parallel.mesh.shard, int), "parallel.mesh.shard must be an int."
 
-    if backend_kwargs.sequence_parallel:
+    if backend_kwargs.tp.builtin_sequence_parallel:
         assert config.parallel.mesh.tensor > 1 or config.parallel.mesh.tensor == -1, (
-            "sequence_parallel=true requires parallel.mesh.tensor > 1 or -1."
+            "tp.builtin_sequence_parallel=true requires parallel.mesh.tensor > 1 or -1."
         )
-        assert config.parallel.mesh.shard != 1, "This repo requires FSDP2 shard > 1 when sequence_parallel=true."
+        assert config.parallel.mesh.shard != 1, (
+            "This repo requires FSDP2 shard > 1 when tp.builtin_sequence_parallel=true."
+        )
 
 
 def test_engine_structure(engine_class: type) -> None:
@@ -81,7 +84,7 @@ def test_engine_structure(engine_class: type) -> None:
 
 def assert_before_train_end(engine) -> None:
     """After setup, verify an SP-active smoke run produced TP/SP-compatible state."""
-    if not engine.config.parallel.backend_kwargs.sequence_parallel:
+    if not engine.config.parallel.backend_kwargs.tp.builtin_sequence_parallel:
         return
 
     if hasattr(engine, "device_mesh"):
@@ -98,10 +101,12 @@ def assert_before_train_end(engine) -> None:
     tp_config = getattr(model.__class__, "TP_MODULE_CONFIG", None)
     sp_config = getattr(model.__class__, "SEQUENCE_PARALLEL_MODULE_CONFIG", {})
     sequence_dim = getattr(model.__class__, "SEQUENCE_PARALLEL_SEQUENCE_DIM", 1)
+    module_sequence_dims = getattr(model.__class__, "SEQUENCE_PARALLEL_MODULE_SEQUENCE_DIMS", {})
 
     assert isinstance(tp_config, dict) and tp_config, "SP-active smoke run must use a non-empty TP_MODULE_CONFIG."
     assert isinstance(sp_config, dict), "SEQUENCE_PARALLEL_MODULE_CONFIG must be a dict when present."
     assert isinstance(sequence_dim, int), "SEQUENCE_PARALLEL_SEQUENCE_DIM must be an int."
+    assert isinstance(module_sequence_dims, dict), "SEQUENCE_PARALLEL_MODULE_SEQUENCE_DIMS must be a dict when present."
 
     for module_name, plan in tp_config.items():
         assert isinstance(module_name, str) and module_name, "TP_MODULE_CONFIG keys must be runtime class names."
@@ -116,6 +121,10 @@ def assert_before_train_end(engine) -> None:
         assert set(plan.values()) <= ALLOWED_SP_MODES, (
             f"SP plan for {module_name} must use only {sorted(ALLOWED_SP_MODES)} unless this assertion is adapted."
         )
+
+    for module_name, module_sequence_dim in module_sequence_dims.items():
+        assert isinstance(module_name, str) and module_name, "SP sequence-dim keys must be runtime class names."
+        assert isinstance(module_sequence_dim, int), "SP module sequence dims must be ints."
 
     has_dtensor_param = any(hasattr(param, "to_local") for param in model.parameters())
     assert has_dtensor_param, "SP-active smoke run did not produce any DTensor parameters."

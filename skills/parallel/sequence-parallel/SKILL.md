@@ -11,7 +11,7 @@ description: Add, review, update, and validate recipe-local sequence-parallel
 Add Megatron-style sequence parallelism for models that already use tensor
 parallelism:
 
-- enable `parallel.backend_kwargs.sequence_parallel`;
+- enable `parallel.backend_kwargs.tp.builtin_sequence_parallel`;
 - keep `parallel.mesh.tensor` as the SP size;
 - do not add a separate sequence mesh dimension;
 - keep model-specific sequence-parallel plans in recipe/model code;
@@ -52,7 +52,7 @@ target module ownership cannot be derived from the task.
 Search the recipe first:
 
 ```bash
-rg -n "TP_MODULE_CONFIG|SEQUENCE_PARALLEL|parallelize_model|parallel.mesh|sequence_parallel" recipes/<recipe>
+rg -n "TP_MODULE_CONFIG|SEQUENCE_PARALLEL|parallelize_model|parallel.mesh|builtin_sequence_parallel" recipes/<recipe>
 rg -n "RuntimeContext|DataLoadMesh|device_mesh|dp_dims|DistributedSampler|rank|world_size" recipes/<recipe>
 rg -n "LayerNorm|RMSNorm|Dropout|dropout|norm" recipes/<recipe>
 ```
@@ -77,7 +77,8 @@ parallel:
     shard: <fsdp2 shard size>
     tensor: <tp_sp_size>
   backend_kwargs:
-    sequence_parallel: true
+    tp:
+      builtin_sequence_parallel: true
 ```
 
 Rules:
@@ -96,6 +97,8 @@ Rules:
   from dataloader sharding;
 - when using `mvp_dataset`, pass a `device_mesh` plus `dp_dims` that excludes
   `tensor`, or provide an equivalent sampler/loader guarantee;
+- `context > 1` may be combined with SP; context remains a separate CP mesh
+  dimension, and both `tensor` and `context` stay out of data-parallel sharding;
 - prefer `seq_len % parallel.mesh.tensor == 0`; otherwise pad/mask explicitly
   and verify every SP gather/scatter/reduce path handles uneven sequence shards;
 - check routed, packed, or cached sequence lengths too, not only the raw input
@@ -124,10 +127,13 @@ class <TopModelClass>(...):
     TP_MODULE_CONFIG = MODEL_TP_MODULE_CONFIG
     SEQUENCE_PARALLEL_MODULE_CONFIG = MODEL_SEQUENCE_PARALLEL_MODULE_CONFIG
     SEQUENCE_PARALLEL_SEQUENCE_DIM = 1
+    SEQUENCE_PARALLEL_MODULE_SEQUENCE_DIMS = {"<RuntimeClassWithDifferentLayout>": 0}
 ```
 
 Use `SEQUENCE_PARALLEL_SEQUENCE_DIM = 1` for `[batch, seq, hidden]`. Use `0` for
-`[seq, batch, hidden]`.
+`[seq, batch, hidden]` or 2D `[seq, hidden]` tensors. Use
+`SEQUENCE_PARALLEL_MODULE_SEQUENCE_DIMS` only when specific runtime classes use
+a different sequence dimension from the default.
 
 ### 4. Review Boundaries
 
@@ -162,7 +168,7 @@ mutate model config or cached global sequence length.
 
 Review the modified recipe without running tests:
 
-- `sequence_parallel` is configured under `parallel.backend_kwargs`;
+- `builtin_sequence_parallel` is configured under `parallel.backend_kwargs.tp`;
 - `parallel.mesh.tensor > 1` and `parallel.mesh.shard > 1` for SP-active smoke;
 - no `parallel.mesh.sequence` field was introduced;
 - dataloading uses identical samples for ranks that differ only on the `tensor`
@@ -172,6 +178,8 @@ Review the modified recipe without running tests:
 - `TP_MODULE_CONFIG` remains bound on the real top-level model class;
 - `SEQUENCE_PARALLEL_MODULE_CONFIG`, if present, is bound on the same class;
 - `SEQUENCE_PARALLEL_SEQUENCE_DIM` matches the model hidden-state layout;
+- `SEQUENCE_PARALLEL_MODULE_SEQUENCE_DIMS`, if present, covers module classes
+  whose hidden-state layout differs from the default;
 - sequence plan values use `"sequence"` and TP plan values use `"col"` or
   `"row"`;
 - entry and output boundaries have been reviewed for full-sequence assumptions;
@@ -200,7 +208,7 @@ pytest recipes/<recipe>/tests/test_structure.py -q
 pytest recipes/<recipe>/tests/test_smoke.py -q \
   --config-override parallel.mesh.tensor=2 \
   --config-override parallel.mesh.shard=2 \
-  --config-override parallel.backend_kwargs.sequence_parallel=true
+  --config-override parallel.backend_kwargs.tp.builtin_sequence_parallel=true
 ```
 
 Also pass `--world-size 4` or another compatible value when the recipe smoke test
@@ -214,8 +222,9 @@ such as:
 recipes/<recipe>/tests/skills/sequence-parallel/test_sequence_layout_impact.py
 ```
 
-The impact test should run with `parallel.backend_kwargs.sequence_parallel=true`
-and inspect a stable hook point before/after SP-planned modules. Assert local
+The impact test should run with
+`parallel.backend_kwargs.tp.builtin_sequence_parallel=true` and inspect a stable
+hook point before/after SP-planned modules. Assert local
 hidden-state sequence length is divided across the tensor mesh, while batch and
 hidden dimensions remain compatible with the recipe's model layout. If the
 recipe uses `[seq, batch, hidden]`, assert that `SEQUENCE_PARALLEL_SEQUENCE_DIM`
@@ -264,6 +273,7 @@ recipes/<recipe>/tests/skills/sequence-parallel/test_dataloader_identity_impact.
   groups.
 - Summarize `SEQUENCE_PARALLEL_MODULE_CONFIG` by runtime module class.
 - State whether `SEQUENCE_PARALLEL_SEQUENCE_DIM` was added and why.
+- State whether `SEQUENCE_PARALLEL_MODULE_SEQUENCE_DIMS` was added and why.
 - Report soft validation and hard validation status.
 - Call out any remaining gap, such as no SP-active smoke run or no parity check.
 

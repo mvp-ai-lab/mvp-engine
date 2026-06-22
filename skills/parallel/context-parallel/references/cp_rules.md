@@ -26,6 +26,9 @@ to use it. The runtime also attaches a `_cp_grad_sync` object when
   training.
 - Keep mesh order as `replicate / shard / context / tensor`. PyTorch TP needs
   `tensor` to be innermost.
+- CP may run with `tp.builtin_sequence_parallel=true`. CP uses the context mesh;
+  SP still reuses the tensor mesh, so validate per-module sequence dimensions
+  and shared gradient ownership together.
 
 ## Ulysses Tensor Shapes
 
@@ -55,6 +58,17 @@ Supported QKV layouts are `BSHD` and `BHSD`.
 - Prefer `mvp_engine.kit.CPKit.prepare_causal_batch(...)` in recipe engines. It
   pads, globally shifts labels, extracts token-aligned tensors, and returns
   local global-position ids with one layout contract.
+- Keep `split_strategy="text"` for text-only data. For multimodal packed
+  batches, use `split_strategy="multimodal"` and provide
+  `global_packed_seq_params.cu_seqlens_q` plus per-media `grid_thw` metadata.
+- The text split rejects multimodal media metadata under CP to avoid silently
+  splitting image/video spans across context ranks.
+- Multimodal image split points must stay on image boundaries, so each context
+  rank owns an integer number of images. If there are fewer images than context
+  ranks, empty ranks use dummy padded entries.
+- Multimodal video split points must stay on video boundaries, or on tubelet
+  boundaries when `temporal_patch_size > 1`. Do not split inside a tubelet;
+  `num_frames` is required for tubelet-aware video splitting.
 - Normalize token loss with token/loss statistics reduced across context ranks.
 - Attention masks must match the extracted layout. If the recipe cannot express
   a local mask, restrict smoke/training to supported causal batches.
@@ -111,7 +125,7 @@ When TP also syncs a parameter, coordinate ownership:
 - RoPE positions restart from zero on every context rank.
 - recipes compute labels with a local-only shift.
 - multimodal placeholder spans are split across context ranks.
-- `tp.builtin_sequence_parallel=true` and `parallel.mesh.context > 1` are both
-  enabled.
+- CP+SP is enabled without an active tensor mesh or without validated
+  sequence-dimension and gradient handling.
 - `_cp_grad_sync` is attached but `sync_cp_grads(model)` is never called.
 - CP and TP sync paths both update the same parameter independently.
