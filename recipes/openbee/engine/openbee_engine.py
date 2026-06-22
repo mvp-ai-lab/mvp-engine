@@ -28,8 +28,8 @@ from mvp_engine.kit import (
     MLLMTextOnlyBatchGuard,
     ModelInputs,
     OptimKit,
-    QwenChatSchemaHandler,
     QwenImageHandler,
+    QwenVLChatSchemaHandler,
     QwenVLMediaHandler,
     QwenVLTokenizationHandler,
     TokenNormedLossKit,
@@ -106,7 +106,7 @@ class OpenBeeEngine(Engine):
 
         # Step 2: declare the Qwen sample handlers.
         sample_spec = MLLMSampleSpec(
-            schema_handler=QwenChatSchemaHandler(
+            schema_handler=QwenVLChatSchemaHandler(
                 processor=self.processor,
                 thinking_mode=self.config.data.thinking_mode,
             ),
