@@ -187,8 +187,8 @@ and other model-forward details.
 
 #### Handlers
 
-- `MLLMSchemaHandler.normalize(row)` returns `MLLMSegment` objects,
-  `MLLMMediaSlot` objects, and metadata. It owns source format support, media
+- `MLLMSchemaHandler.normalize(row)` returns `data_kit.Segment` objects,
+  `data_kit.MediaSlot` objects, and metadata. It owns source format support, media
   slot binding, segment order, and label policy.
 - `MLLMMediaTypeHandler` owns one modality's placeholder rendering, media IO,
   pack merge, and batch collation.
@@ -225,7 +225,7 @@ and other model-forward details.
 
 - recipe constructs explicit source, sample, packing, loader, and distribution specs;
 - train and estimation specs set `resample` and `resolve_refs` explicitly;
-- schema handlers emit ordered `MLLMSegment(type, loss, value)` and `MLLMMediaSlot`;
+- schema handlers emit ordered `data_kit.Segment(type, loss, value)` and `data_kit.MediaSlot`;
 - media handlers own placeholder rendering, media IO, pack merge, and batch collation;
 - packed model inputs contain `input_ids`, `attention_mask`, `labels`,
   `pack_segment_ids`, `source_sample_num`, and expected media tensors;

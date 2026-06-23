@@ -37,7 +37,7 @@ from .spec import (
     MLLMSourceSpec,
 )
 from .tokenization import MLLMTokenizationHandler
-from .types import ModelInputs
+from .types import MLLMMediaSlot, MLLMSegment, ModelInputs
 
 
 class MLLMDataKit:
@@ -54,6 +54,7 @@ class MLLMDataKit:
     LoaderSpec = MLLMLoaderSpec
     MediaHandler = MLLMMediaHandler
     MediaTypeHandler = MLLMMediaTypeHandler
+    MediaSlot = MLLMMediaSlot
     ModelInputs = ModelInputs
     PackingAssembler = MLLMPackingAssembler
     PackingSpec = MLLMPackingSpec
@@ -63,6 +64,7 @@ class MLLMDataKit:
     QwenVLTokenizationHandler = QwenVLTokenizationHandler
     SampleSpec = MLLMSampleSpec
     SchemaHandler = MLLMSchemaHandler
+    Segment = MLLMSegment
     SourceSpec = MLLMSourceSpec
     TextOnlyBatchGuard = MLLMTextOnlyBatchGuard
     TokenizationHandler = MLLMTokenizationHandler

@@ -56,10 +56,10 @@ Raw schema should make placeholder/media alignment unambiguous:
 
 ## Segment And Label Rules
 
-Schema handlers emit `MLLMSegment(type, loss, value)`.
+Schema handlers emit `data_kit.Segment(type, loss, value)`.
 
 - `type="text"` stores literal text.
-- media segment values are media ids that match `MLLMMediaSlot.media_id`.
+- media segment values are media ids that match `data_kit.MediaSlot.media_id`.
 - `loss=True` marks exactly the spans that should produce supervised labels.
 - media segments should normally be `loss=False`.
 - prompt, user, system, tool, pad, dummy media, and dropped/truncated positions

@@ -26,7 +26,7 @@ from .spec import (
     LLMSourceSpec,
 )
 from .tokenization import LLMPretrainTextTokenizationHandler, LLMTokenizationHandler
-from .types import ModelInputs
+from .types import LLMSegment, ModelInputs
 
 IGNORE_INDEX = -100
 
@@ -47,6 +47,7 @@ class LLMDataKit:
     QwenChatTokenizationHandler = QwenChatTokenizationHandler
     SampleSpec = LLMSampleSpec
     SchemaHandler = LLMSchemaHandler
+    Segment = LLMSegment
     SourceSpec = LLMSourceSpec
     TokenizationHandler = LLMTokenizationHandler
     build_packed_block_causal_mask = staticmethod(build_packed_block_causal_mask)
