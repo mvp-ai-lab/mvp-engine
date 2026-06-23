@@ -20,56 +20,6 @@ except Exception as exc:  # pragma: no cover - runtime-dependent
 TPModulePostprocessor = Callable[[nn.Module, Any], None]
 
 
-def _scale_grad(scale: float) -> Callable[[Any], Any]:
-    def hook(grad):
-        if grad is None:
-            return None
-        return grad * scale
-
-    return hook
-
-
-def _scale_accumulated_grad_delta(scale: float) -> Callable[[nn.Parameter], None]:
-    state: dict[str, Any] = {}
-
-    def hook(parameter: nn.Parameter) -> None:
-        grad = parameter.grad
-        if grad is None:
-            state.clear()
-            return
-
-        grad_id = id(grad)
-        previous = state.get("previous")
-        previous_grad_id = state.get("grad_id")
-        if previous is None or previous_grad_id != grad_id:
-            grad.mul_(scale)
-        else:
-            delta = grad - previous
-            grad.copy_(previous + delta * scale)
-
-        state["previous"] = grad.detach().clone()
-        state["grad_id"] = grad_id
-
-    return hook
-
-
-def attach_sequence_parallel_grad_scale(model: nn.Module) -> nn.Module:
-    """Attach TP builtin sequence-parallel gradient scaling to the final model."""
-    scale = getattr(model, "_tp_sequence_parallel_grad_scale", 1.0)
-    names = getattr(model, "_tp_sequence_parallel_grad_scale_names", ())
-    if scale == 1.0 or not names:
-        return model
-
-    names = set(names)
-    for name, parameter in model.named_parameters():
-        if parameter.requires_grad and name in names:
-            if hasattr(parameter, "register_post_accumulate_grad_hook"):
-                parameter.register_post_accumulate_grad_hook(_scale_accumulated_grad_delta(float(scale)))
-            else:
-                parameter.register_hook(_scale_grad(float(scale)))
-    return model
-
-
 def _build_tp_plan(
     plan_cfg: object,
     sequence_parallel: bool = False,
@@ -139,24 +89,6 @@ def _resolve_sequence_parallel_sequence_dim(
     return sequence_dim
 
 
-def _resolve_sequence_parallel_module_sequence_dims(
-    model: nn.Module,
-    attr_name: str = "SEQUENCE_PARALLEL_MODULE_SEQUENCE_DIMS",
-) -> dict[str, int]:
-    cls = model.__class__
-    module_sequence_dims = getattr(cls, attr_name, {})
-    if module_sequence_dims is None:
-        return {}
-    if not isinstance(module_sequence_dims, dict):
-        raise TypeError(f"{cls.__name__}.{attr_name} must be dict, got {type(module_sequence_dims)}.")
-    for module_name, sequence_dim in module_sequence_dims.items():
-        if not isinstance(module_name, str):
-            raise TypeError(f"{cls.__name__}.{attr_name} keys must be str, got {type(module_name)}.")
-        if not isinstance(sequence_dim, int):
-            raise TypeError(f"{cls.__name__}.{attr_name}[{module_name!r}] must be int, got {type(sequence_dim)}.")
-    return module_sequence_dims
-
-
 def _merge_tp_module_configs(
     tp_config: dict[str, object],
     sequence_parallel_config: dict[str, object],
@@ -221,11 +153,9 @@ def parallelize_model_with_tensor_parallel(
     module_config = _resolve_tp_module_config(model)
     module_postprocessors = _resolve_tp_module_postprocessors(model)
     sequence_dim = 1
-    module_sequence_dims: dict[str, int] = {}
 
     if sequence_parallel:
         sequence_dim = _resolve_sequence_parallel_sequence_dim(model)
-        module_sequence_dims = _resolve_sequence_parallel_module_sequence_dims(model)
         sequence_parallel_config = _resolve_tp_module_config(
             model,
             attr_name="SEQUENCE_PARALLEL_MODULE_CONFIG",
@@ -236,8 +166,6 @@ def parallelize_model_with_tensor_parallel(
     applied: list[tuple[str, str, list[str]]] = []
     applied_counts: dict[str, int] = {}
     seen_ids: set[int] = set()
-    sequence_parallel_grad_scale_names: set[str] = set()
-    sequence_parallel_grad_scale = 1.0 / int(tp_mesh.size()) if sequence_parallel and int(tp_mesh.size()) > 1 else 1.0
 
     modules = list(model.named_modules())
     modules.sort(key=lambda x: x[0].count("."), reverse=True)
@@ -252,17 +180,12 @@ def parallelize_model_with_tensor_parallel(
         plan = _build_tp_plan(
             module_config[cls_name],
             sequence_parallel=sequence_parallel,
-            sequence_dim=module_sequence_dims.get(cls_name, sequence_dim),
+            sequence_dim=sequence_dim,
         )
         if not plan:
             continue
 
         parallelize_module(module, tp_mesh, plan)
-        if sequence_parallel_grad_scale != 1.0:
-            prefix = f"{path}." if path else ""
-            for parameter_name, parameter in module.named_parameters():
-                if parameter.requires_grad:
-                    sequence_parallel_grad_scale_names.add(f"{prefix}{parameter_name}")
         postprocess = module_postprocessors.get(cls_name)
         if postprocess is not None:
             postprocess(module, tp_mesh)
@@ -276,7 +199,3 @@ def parallelize_model_with_tensor_parallel(
         plan_summary = ", ".join(f"{child}:{mode}" for child, mode in plan_cfg.items())
         logger.info(f"  - ✓ {cls_name} x{applied_counts[cls_name]} ({plan_summary})")
     logger.info(f"  - ✓ {model.__class__.__name__} ({len(applied)} modules)")
-
-    if sequence_parallel_grad_scale_names:
-        model._tp_sequence_parallel_grad_scale = sequence_parallel_grad_scale
-        model._tp_sequence_parallel_grad_scale_names = tuple(sorted(sequence_parallel_grad_scale_names))
