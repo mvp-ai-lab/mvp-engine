@@ -1,31 +1,20 @@
 """MLLM utility kits."""
 
+# ruff: noqa: F401
+
 from typing import TYPE_CHECKING
 
+from mvp_engine.kit._lazy import resolve_lazy_export
+
 if TYPE_CHECKING:
-    from .step_estimation import Confidence, MLLMStepEstimationKit, StepEstimateResult
+    from .step_estimation import MLLMStepEstimationKit
 
-__all__ = [
-    "Confidence",
-    "MLLMStepEstimationKit",
-    "StepEstimateResult",
-]
-
-_EXPORT_MODULES = {
-    "Confidence": ".step_estimation",
+_KIT_MODULES = {
     "MLLMStepEstimationKit": ".step_estimation",
-    "StepEstimateResult": ".step_estimation",
 }
+
+__all__ = list(_KIT_MODULES)
 
 
 def __getattr__(name: str):
-    """Lazily resolve MLLM utility kit exports from their implementation modules."""
-    if name not in _EXPORT_MODULES:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-    from importlib import import_module
-
-    module = import_module(_EXPORT_MODULES[name], __name__)
-    value = getattr(module, name)
-    globals()[name] = value
-    return value
+    return resolve_lazy_export(globals(), _KIT_MODULES, name)

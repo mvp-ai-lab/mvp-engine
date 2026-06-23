@@ -15,20 +15,12 @@ from mvp_engine.distributed.utils import (
 from mvp_engine.engine import ENGINE_REGISTRY, Engine, TrainStepContext
 from mvp_engine.kit import (
     LLMDataKit,
-    LLMDataSpec,
-    LLMLoaderSpec,
     LLMModelKit,
-    LLMPackingSpec,
-    LLMPretrainTextSchemaHandler,
-    LLMPretrainTextTokenizationHandler,
-    LLMSampleSpec,
-    LLMSourceSpec,
     LLMStepEstimationKit,
     MFUKit,
     OptimKit,
     TokenNormedLossKit,
 )
-from mvp_engine.kit.llm import ModelInputs
 from mvp_engine.utils.log import logger
 from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
@@ -94,9 +86,9 @@ class Qwen3Engine(Engine):
         self.tokenizer = self.data_kit.build_tokenizer(self.config.model.pretrained_model_name_or_path)
 
         # Step 2: declare the Qwen pretrain sample handlers.
-        sample_spec = LLMSampleSpec(
-            schema_handler=LLMPretrainTextSchemaHandler(text_field=self.config.data.text_field),
-            tokenization_handler=LLMPretrainTextTokenizationHandler(
+        sample_spec = self.data_kit.SampleSpec(
+            schema_handler=self.data_kit.PretrainTextSchemaHandler(text_field=self.config.data.text_field),
+            tokenization_handler=self.data_kit.PretrainTextTokenizationHandler(
                 tokenizer=self.tokenizer,
                 max_seq_len=int(self.config.data.max_seq_len),
             ),
@@ -104,18 +96,18 @@ class Qwen3Engine(Engine):
 
         # Step 3: declare distributed placement and the training data spec.
         distribution = self.data_kit.build_distribution_spec()
-        packing_spec = LLMPackingSpec(
+        packing_spec = self.data_kit.PackingSpec(
             max_seq_len=int(self.config.data.max_seq_len),
             tail_policy=self.config.data.packing_tail_policy,
             isolate_attention=self.config.data.packing_isolate_attention,
             isolate_position_ids=self.config.data.packing_isolate_position_ids,
         )
-        loader_spec = LLMLoaderSpec(
+        loader_spec = self.data_kit.LoaderSpec(
             batch_size=int(self.config.data.batch_size),
             num_workers=int(self.config.data.num_workers),
         )
-        data_spec = LLMDataSpec(
-            source=LLMSourceSpec(
+        data_spec = self.data_kit.DataSpec(
+            source=self.data_kit.SourceSpec(
                 dataset_path=self.config.data.train_path,
                 seed=int(self.config.seed),
                 resample=True,
@@ -129,8 +121,8 @@ class Qwen3Engine(Engine):
 
         # Step 4: when total_steps=-1, consume one finite packed data pass to estimate one-epoch steps.
         if int(self.config.loop.total_steps) == -1:
-            estimation_spec = LLMDataSpec(
-                source=LLMSourceSpec(
+            estimation_spec = self.data_kit.DataSpec(
+                source=self.data_kit.SourceSpec(
                     dataset_path=self.config.data.train_path,
                     seed=int(self.config.seed),
                     resample=False,
@@ -138,7 +130,7 @@ class Qwen3Engine(Engine):
                 ),
                 sample=sample_spec,
                 packing=packing_spec,
-                loader=LLMLoaderSpec(
+                loader=self.data_kit.LoaderSpec(
                     batch_size=int(self.config.data.batch_size),
                     num_workers=int(self.config.data.num_workers),
                     drop_last=False,
@@ -226,7 +218,7 @@ class Qwen3Engine(Engine):
 
     def train_pre_step(self, ctx: TrainStepContext) -> TrainStepContext:
         """Move one micro-batch to device and build packed text model inputs."""
-        batch: ModelInputs = self.data_kit.to_device(ctx.data, self.device)
+        batch: dict[str, Any] = self.data_kit.to_device(ctx.data, self.device)
         ctx.data = prepare_packed_model_inputs(
             batch,
             attn_implementation=getattr(self.unwrapped_model.config, "_attn_implementation", None),
@@ -236,7 +228,7 @@ class Qwen3Engine(Engine):
 
     def forward_step(self, ctx: TrainStepContext) -> None:
         """Run one forward pass and accumulate micro-batch FLOPs."""
-        data: ModelInputs = ctx.data
+        data: dict[str, Any] = ctx.data
         with torch.autocast(
             device_type=self.device_type,
             dtype=self.dtype,

@@ -4,9 +4,11 @@ from typing import Any
 
 import torch
 
-from mvp_engine.kit.mllm.data import build_packed_block_causal_mask
+from mvp_engine.kit import MLLMDataKit
 
 from .qwen3_vl import build_qwen3_vl_packed_position_ids
+
+_DATA_KIT = MLLMDataKit()
 
 
 def prepare_packed_model_inputs(
@@ -37,7 +39,7 @@ def prepare_packed_model_inputs(
         batch["attention_mask"] = None
         batch.update(build_packed_fa2_varlen_kwargs(pack_segment_ids))
     else:
-        batch["attention_mask"] = build_packed_block_causal_mask(pack_segment_ids, dtype=mask_dtype)
+        batch["attention_mask"] = _DATA_KIT.build_packed_block_causal_mask(pack_segment_ids, dtype=mask_dtype)
 
     return batch
 

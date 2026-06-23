@@ -12,10 +12,31 @@ from mvp_dataset import Dataset, TorchLoader
 from mvp_dataset.core import RuntimeContext
 
 from .collator import MLLMBatchCollator
-from .guard import MLLMModelInputGuard, MLLMRawRowGuard, MLLMSampleGuard
-from .packing import MLLMPackingAssembler
+from .guard import (
+    MLLMModelInputGuard,
+    MLLMRawRowGuard,
+    MLLMSampleGuard,
+    MLLMTextOnlyBatchGuard,
+)
+from .media import MLLMMediaHandler, MLLMMediaTypeHandler
+from .packing import MLLMPackingAssembler, build_packed_block_causal_mask
+from .qwen import (
+    QwenImageHandler,
+    QwenVLChatSchemaHandler,
+    QwenVLMediaHandler,
+    QwenVLTokenizationHandler,
+)
 from .sample import MLLMSample
-from .spec import MLLMDataSpec, MLLMDistributionSpec
+from .schema import MLLMSchemaHandler
+from .spec import (
+    MLLMDataSpec,
+    MLLMDistributionSpec,
+    MLLMLoaderSpec,
+    MLLMPackingSpec,
+    MLLMSampleSpec,
+    MLLMSourceSpec,
+)
+from .tokenization import MLLMTokenizationHandler
 from .types import ModelInputs
 
 
@@ -26,6 +47,26 @@ class MLLMDataKit:
     sample, packing, loader, and distribution specs, then let the kit build the
     mvp-dataset pipeline and TorchLoader wrapper.
     """
+
+    BatchCollator = MLLMBatchCollator
+    DataSpec = MLLMDataSpec
+    DistributionSpec = MLLMDistributionSpec
+    LoaderSpec = MLLMLoaderSpec
+    MediaHandler = MLLMMediaHandler
+    MediaTypeHandler = MLLMMediaTypeHandler
+    ModelInputs = ModelInputs
+    PackingAssembler = MLLMPackingAssembler
+    PackingSpec = MLLMPackingSpec
+    QwenImageHandler = QwenImageHandler
+    QwenVLChatSchemaHandler = QwenVLChatSchemaHandler
+    QwenVLMediaHandler = QwenVLMediaHandler
+    QwenVLTokenizationHandler = QwenVLTokenizationHandler
+    SampleSpec = MLLMSampleSpec
+    SchemaHandler = MLLMSchemaHandler
+    SourceSpec = MLLMSourceSpec
+    TextOnlyBatchGuard = MLLMTextOnlyBatchGuard
+    TokenizationHandler = MLLMTokenizationHandler
+    build_packed_block_causal_mask = staticmethod(build_packed_block_causal_mask)
 
     def build_distribution_spec(
         self,

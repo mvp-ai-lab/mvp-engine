@@ -57,6 +57,10 @@ class StepCountResult:
 class StepCountingKit:
     """Count optimizer steps by fully consuming a finite dataset."""
 
+    Result = StepCountResult
+    resolve_reduce_device = staticmethod(resolve_reduce_device)
+    samples_per_step = staticmethod(samples_per_step)
+
     def __init__(self, *, sample_counter: SampleCounter = lambda _item: 1) -> None:
         """Configure how many training samples one consumed item represents."""
         self.sample_counter = sample_counter

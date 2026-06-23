@@ -7,8 +7,9 @@ from dataclasses import dataclass
 import torch
 import torch.distributed as dist
 
-from mvp_engine.kit.util.step_counting import StepCountingKit, samples_per_step
 from mvp_engine.utils.log import simple_info
+
+from ...util.step_counting import StepCountingKit, samples_per_step
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +24,8 @@ class LLMStepEstimateResult:
 
 class LLMStepEstimationKit:
     """Estimate optimizer steps for packed text-LM datasets."""
+
+    Result = LLMStepEstimateResult
 
     def estimate_total_steps(
         self,

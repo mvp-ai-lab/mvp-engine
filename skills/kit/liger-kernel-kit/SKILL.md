@@ -37,7 +37,7 @@ defaults to the loss kernels.
 ### 1. Initialize The Kit
 
 ```python
-from mvp_engine.kit.model.liger import LigerKernelKit
+from mvp_engine.kit import LigerKernelKit
 
 self.liger_kit = LigerKernelKit()
 ```
@@ -75,11 +75,13 @@ reports the patched paths:
 ```python
 from liger_kernel.transformers import LigerRMSNorm
 
-from mvp_engine.kit.model.liger import LigerPatch
+from mvp_engine.kit import LigerKernelKit
 
-report = self.liger_kit.apply(
+liger_kit = LigerKernelKit()
+
+report = liger_kit.apply(
     model_family="mymodel",
-    custom_patches={"rms_norm": LigerPatch("my_pkg.modeling_mymodel", "MyRMSNorm", LigerRMSNorm)},
+    custom_patches={"rms_norm": liger_kit.Patch("my_pkg.modeling_mymodel", "MyRMSNorm", LigerRMSNorm)},
 )
 model = build_model(...)
 ```

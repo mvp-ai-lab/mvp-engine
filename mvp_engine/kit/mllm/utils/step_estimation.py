@@ -23,8 +23,9 @@ from typing import Any
 import torch
 import torch.distributed as dist
 
-from mvp_engine.kit.util.step_counting import resolve_reduce_device, samples_per_step
 from mvp_engine.utils.log import simple_info
+
+from ...util.step_counting import resolve_reduce_device, samples_per_step
 
 
 class Confidence(IntEnum):
@@ -72,6 +73,9 @@ class _LocalEstimate:
 
 class MLLMStepEstimationKit:
     """Estimate optimizer steps from packed MLLM compression statistics."""
+
+    Confidence = Confidence
+    Result = StepEstimateResult
 
     def estimate_total_steps(
         self,

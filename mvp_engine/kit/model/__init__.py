@@ -1,29 +1,20 @@
-"""Model transformation helpers for reusable training kits."""
+"""Model transformation kits."""
+
+# ruff: noqa: F401
 
 from typing import TYPE_CHECKING
 
+from mvp_engine.kit._lazy import resolve_lazy_export
+
 if TYPE_CHECKING:
-    from .liger import LigerKernelKit, LigerKernelReport, LigerPatch
+    from .liger import LigerKernelKit
 
-__all__ = [
-    "LigerKernelKit",
-    "LigerKernelReport",
-    "LigerPatch",
-]
-
-_EXPORT_MODULES = {
+_KIT_MODULES = {
     "LigerKernelKit": ".liger",
-    "LigerKernelReport": ".liger",
-    "LigerPatch": ".liger",
 }
+
+__all__ = list(_KIT_MODULES)
 
 
 def __getattr__(name: str):
-    """Lazily resolve model-kit exports from their implementation modules."""
-    if name not in _EXPORT_MODULES:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-    from importlib import import_module
-
-    module = import_module(_EXPORT_MODULES[name], __name__)
-    return getattr(module, name)
+    return resolve_lazy_export(globals(), _KIT_MODULES, name)

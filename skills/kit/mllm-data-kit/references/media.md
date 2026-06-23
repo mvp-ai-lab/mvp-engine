@@ -106,13 +106,17 @@ MLLMMediaSlot(media_id="video:0", media_type="video", field="videos", index=0)
 ## Text-Only Batch Guard
 
 Some VLM backends require at least one media tensor in every local batch. Attach
-`MLLMTextOnlyBatchGuard` after collation when needed:
+`data_kit.TextOnlyBatchGuard` after collation when needed:
 
 ```python
-dummy_inputs = QwenImageHandler().build_dummy_inputs(processor)
-guard = MLLMTextOnlyBatchGuard(
+from mvp_engine.kit import MLLMDataKit
+
+data_kit = MLLMDataKit()
+image_handler = data_kit.QwenImageHandler()
+dummy_inputs = image_handler.build_dummy_inputs(processor)
+guard = data_kit.TextOnlyBatchGuard(
     dummy_inputs=dummy_inputs,
-    media_keys=("pixel_values", "image_grid_thw"),
+    media_keys=image_handler.OUTPUT_TENSOR_KEYS,
     pad_token_id=processor.tokenizer.pad_token_id,
 )
 ```

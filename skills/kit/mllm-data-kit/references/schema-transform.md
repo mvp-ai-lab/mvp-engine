@@ -124,7 +124,7 @@ token handling, media truncation rules, or label conversion.
 
 ## Qwen Reference
 
-`QwenChatSchemaHandler` supports conversation-style rows with:
+`data_kit.QwenVLChatSchemaHandler` supports conversation-style rows with:
 
 - `messages` or `conversations`;
 - role/content pairs using either `role`/`content` or `from`/`value`;

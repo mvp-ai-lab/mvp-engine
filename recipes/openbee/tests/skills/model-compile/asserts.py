@@ -6,7 +6,7 @@ import textwrap
 
 from omegaconf import OmegaConf
 
-from mvp_engine.kit.mllm import MLLMModelKit
+from mvp_engine.kit import MLLMModelKit
 
 
 def test_config_structure(config: OmegaConf):

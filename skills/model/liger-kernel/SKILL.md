@@ -65,7 +65,7 @@ This is the per-model knowledge that cannot be generic. To produce it:
    `grep -nE "class .*RMSNorm|class .*MLP|def apply_.*rotary" <modeling_file>`.
 3. **Choose the matching Liger replacement** using the table below — picking the
    wrong one silently corrupts the model.
-4. Pass them as `LigerPatch(module, attr, replacement)` entries.
+4. Pass them as `liger_kit.Patch(module, attr, replacement)` entries.
 
 | Module | Source looks like | Correct Liger replacement |
 |---|---|---|
@@ -86,7 +86,9 @@ self.liger_kit.apply(model_family="qwen3", modules="auto")
 # custom vision encoder -> only norms it actually uses
 self.liger_kit.apply(
     model_family="myvlm",
-    custom_patches={"rms_norm": LigerPatch("my_pkg.modeling_encoder", "EncoderRMSNorm", LigerRMSNorm)},
+    custom_patches={
+        "rms_norm": self.liger_kit.Patch("my_pkg.modeling_encoder", "EncoderRMSNorm", LigerRMSNorm)
+    },
 )
 model = self.model_kit.build_model(...)
 ```

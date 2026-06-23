@@ -57,6 +57,9 @@ class LigerKernelReport:
 class LigerKernelKit:
     """Apply Liger Kernel before model construction via module-level monkey-patching."""
 
+    Patch = LigerPatch
+    Report = LigerKernelReport
+
     def apply(
         self,
         model_name_or_path: str | None = None,

@@ -52,30 +52,23 @@ backend lifecycle cannot be derived locally.
 Build specs directly in the recipe engine:
 
 ```python
-from mvp_engine.kit import (
-    MLLMDataKit,
-    MLLMDataSpec,
-    MLLMLoaderSpec,
-    MLLMPackingSpec,
-    MLLMSampleSpec,
-    MLLMSourceSpec,
-    QwenChatSchemaHandler,
-    QwenVLMediaHandler,
-    QwenVLTokenizationHandler,
-)
+from mvp_engine.kit import MLLMDataKit
 
 self.data_kit = MLLMDataKit()
 processor = self.data_kit.build_processor(...)
 
-sample_spec = MLLMSampleSpec(
-    schema_handler=QwenChatSchemaHandler(processor=processor, thinking_mode=config.data.thinking_mode),
-    media_handler=QwenVLMediaHandler(processor=processor),
-    tokenization_handler=QwenVLTokenizationHandler(
+sample_spec = self.data_kit.SampleSpec(
+    schema_handler=self.data_kit.QwenVLChatSchemaHandler(
+        processor=processor,
+        thinking_mode=config.data.thinking_mode,
+    ),
+    media_handler=self.data_kit.QwenVLMediaHandler(processor=processor),
+    tokenization_handler=self.data_kit.QwenVLTokenizationHandler(
         processor=processor,
         max_seq_len=int(config.data.max_seq_len),
     ),
 )
-packing_spec = MLLMPackingSpec(
+packing_spec = self.data_kit.PackingSpec(
     max_seq_len=int(config.data.max_seq_len),
     algorithm="multi_pack",
     selection_strategy=config.data.packing_selection_strategy,
@@ -83,7 +76,7 @@ packing_spec = MLLMPackingSpec(
     buffer_size=int(config.data.packing_buffer_size),
     block_causal=True,
 )
-loader_spec = MLLMLoaderSpec(
+loader_spec = self.data_kit.LoaderSpec(
     batch_size=int(config.data.batch_size),
     num_workers=int(config.data.num_workers),
 )
@@ -95,8 +88,8 @@ distribution = self.data_kit.build_distribution_spec(device_mesh=self.device_mes
 Train data usually resolves refs and resamples:
 
 ```python
-train_spec = MLLMDataSpec(
-    source=MLLMSourceSpec(
+train_spec = self.data_kit.DataSpec(
+    source=self.data_kit.SourceSpec(
         dataset_path=config.data.train_path,
         dataset_source="lance",
         ref_columns=tuple(config.data.ref_columns),
@@ -114,8 +107,8 @@ train_spec = MLLMDataSpec(
 Step estimation usually consumes a finite packed stream without resolving media:
 
 ```python
-estimate_spec = MLLMDataSpec(
-    source=MLLMSourceSpec(
+estimate_spec = self.data_kit.DataSpec(
+    source=self.data_kit.SourceSpec(
         dataset_path=config.data.train_path,
         dataset_source="lance",
         ref_columns=tuple(config.data.ref_columns),
@@ -166,8 +159,8 @@ token counters, and delegates media fields to `MLLMMediaHandler.collate(...)`.
   register it in `MLLMMediaHandler`.
 - New tokenization or truncation behavior: implement `MLLMTokenizationHandler`.
 - New packing algorithm: pass a custom assembler with
-  `MLLMPackingSpec(assembler_cls=...)`.
-- New text-only batch requirement: attach `MLLMTextOnlyBatchGuard` or a
+  `data_kit.PackingSpec(assembler_cls=...)`.
+- New text-only batch requirement: attach `data_kit.TextOnlyBatchGuard` or a
   recipe-local loader map after collation.
 - New dataset backend or stage order: extend `MLLMDataKit`.
 
@@ -213,12 +206,12 @@ and other model-forward details.
 - `MLLMBatchCollator` pads packed samples and computes token/source counters.
 - `MLLMRawRowGuard`, `MLLMSampleGuard`, and `MLLMModelInputGuard` filter invalid
   data at pipeline boundaries.
-- `MLLMTextOnlyBatchGuard` adds dummy media fields for model backends that need
+- `data_kit.TextOnlyBatchGuard` adds dummy media fields for model backends that need
   a non-empty media path.
 
 #### Qwen Components
 
-- `QwenChatSchemaHandler`: conversation rows, Qwen chat template rendering,
+- `QwenVLChatSchemaHandler`: conversation rows, Qwen chat template rendering,
   thinking-mode handling, and ordered image slots.
 - `QwenVLMediaHandler`: Qwen media registry with image support.
 - `QwenImageHandler`: Qwen image placeholder expansion, smart resize, image
