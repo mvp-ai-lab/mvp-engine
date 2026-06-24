@@ -87,7 +87,7 @@ loader_spec = MLLMLoaderSpec(
     batch_size=int(config.data.batch_size),
     num_workers=int(config.data.num_workers),
 )
-distribution = self.data_kit.build_distribution_spec(device_mesh=self.device_mesh)
+distribution = self.data_kit.build_distribution_spec(parallel_mesh=self.parallel_mesh)
 ```
 
 ### 2. Build Train And Estimation Specs if Needed
