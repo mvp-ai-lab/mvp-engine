@@ -9,12 +9,6 @@ import inspect
 import textwrap
 from pathlib import Path
 
-from mvp_engine.distributed.utils import (
-    MESH_DIM_SHARD,
-    MESH_DIM_TENSOR,
-    get_mesh_dim_size,
-)
-
 ALLOWED_TP_MODES = {"col", "row"}
 ALLOWED_SP_MODES = {"sequence"}
 
@@ -50,21 +44,22 @@ def test_file_structure(recipe_root: Path) -> None:
 
 def test_config_structure(config) -> None:
     """Verify mesh and backend config can activate SP safely."""
-    backend_kwargs = config.parallel.backend_kwargs
-    assert hasattr(backend_kwargs, "tp"), "parallel.backend_kwargs.tp must be available in the config schema."
-    assert hasattr(backend_kwargs.tp, "builtin_sequence_parallel"), (
+    tp_backend_kwargs = config.parallel.backend_kwargs.tp
+    assert hasattr(tp_backend_kwargs, "builtin_sequence_parallel"), (
         "parallel.backend_kwargs.tp.builtin_sequence_parallel must be available in the config schema."
     )
-    assert isinstance(backend_kwargs.tp.builtin_sequence_parallel, bool), "tp.builtin_sequence_parallel must be a bool."
+    assert isinstance(tp_backend_kwargs.builtin_sequence_parallel, bool), (
+        "parallel.backend_kwargs.tp.builtin_sequence_parallel must be a bool."
+    )
     assert isinstance(config.parallel.mesh.tensor, int), "parallel.mesh.tensor must be an int."
     assert isinstance(config.parallel.mesh.shard, int), "parallel.mesh.shard must be an int."
 
-    if backend_kwargs.tp.builtin_sequence_parallel:
+    if tp_backend_kwargs.builtin_sequence_parallel:
         assert config.parallel.mesh.tensor > 1 or config.parallel.mesh.tensor == -1, (
-            "tp.builtin_sequence_parallel=true requires parallel.mesh.tensor > 1 or -1."
+            "parallel.backend_kwargs.tp.builtin_sequence_parallel=true requires parallel.mesh.tensor > 1 or -1."
         )
         assert config.parallel.mesh.shard != 1, (
-            "This repo requires FSDP2 shard > 1 when tp.builtin_sequence_parallel=true."
+            "This repo requires FSDP2 shard > 1 when parallel.backend_kwargs.tp.builtin_sequence_parallel=true."
         )
 
 
@@ -87,9 +82,9 @@ def assert_before_train_end(engine) -> None:
     if not engine.config.parallel.backend_kwargs.tp.builtin_sequence_parallel:
         return
 
-    if hasattr(engine, "device_mesh"):
-        tp_size = get_mesh_dim_size(engine.device_mesh, MESH_DIM_TENSOR)
-        shard_size = get_mesh_dim_size(engine.device_mesh, MESH_DIM_SHARD)
+    if hasattr(engine, "parallel_mesh"):
+        tp_size = engine.parallel_mesh.tp.world_size
+        shard_size = engine.parallel_mesh.dim_size("shard")
     else:
         tp_size = engine.config.parallel.mesh.tensor
         shard_size = engine.config.parallel.mesh.shard

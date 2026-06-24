@@ -9,8 +9,6 @@ import inspect
 import textwrap
 from pathlib import Path
 
-from mvp_engine.distributed.utils import MESH_DIM_TENSOR, get_mesh_dim_size
-
 ALLOWED_TP_MODES = {"col", "row"}
 
 
@@ -66,8 +64,8 @@ def test_engine_structure(engine_class: type) -> None:
 
 def assert_before_train_end(engine) -> None:
     """After setup, verify a TP-active smoke run produced DTensor parameters."""
-    if hasattr(engine, "device_mesh"):
-        tp_size = get_mesh_dim_size(engine.device_mesh, MESH_DIM_TENSOR)
+    if hasattr(engine, "parallel_mesh"):
+        tp_size = engine.parallel_mesh.tp.world_size
     else:
         tp_size = engine.config.parallel.mesh.tensor
     if tp_size == 1:

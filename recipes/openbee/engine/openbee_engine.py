@@ -11,12 +11,6 @@ import torch
 
 from mvp_engine.distributed.cp import sync_cp_grads
 from mvp_engine.distributed.parallelize import parallelize_model
-from mvp_engine.distributed.utils import (
-    get_data_parallel_group,
-    get_data_parallel_world_size,
-    get_token_stats_group,
-    get_token_stats_world_size,
-)
 from mvp_engine.engine import ENGINE_REGISTRY, Engine, TrainStepContext
 from mvp_engine.kit import (
     MFUKit,
@@ -31,8 +25,8 @@ from mvp_engine.kit import (
     MLLMTextOnlyBatchGuard,
     ModelInputs,
     OptimKit,
-    QwenChatSchemaHandler,
     QwenImageHandler,
+    QwenVLChatSchemaHandler,
     QwenVLMediaHandler,
     QwenVLTokenizationHandler,
     TokenNormedLossKit,
@@ -67,11 +61,7 @@ class OpenBeeEngine(Engine):
     def __init__(self, config):
         """Initialize OpenBee-local distributed state and metric reducers."""
         super().__init__(config)
-        self.data_parallel_world_size = get_data_parallel_world_size(self.device_mesh)
-        self.data_parallel_group = get_data_parallel_group(self.device_mesh)
-        self.token_stats_world_size = get_token_stats_world_size(self.device_mesh)
-        self.token_stats_group = get_token_stats_group(self.device_mesh)
-        self.config.resolve_batching_config(data_parallel_world_size=self.data_parallel_world_size)
+        self.config.resolve_batching_config(data_parallel_world_size=self.parallel_mesh.dp.world_size)
         self.data_kit = MLLMDataKit()
         self.model_kit = MLLMModelKit()
         self.step_estimation_kit = MLLMStepEstimationKit()
@@ -79,9 +69,8 @@ class OpenBeeEngine(Engine):
         self.optim_kit = OptimKit()
         self.token_loss_kit = TokenNormedLossKit(
             device=self.device,
-            data_parallel_world_size=self.data_parallel_world_size,
-            token_stats_world_size=self.token_stats_world_size,
-            token_stats_group=self.token_stats_group,
+            dp_world_size=self.parallel_mesh.dp.world_size,
+            dp_group=self.parallel_mesh.dp.group,
         )
         self.token_loss_kit.build_loss_guard(
             spike_multiplier=self.config.optim.loss_spike_skip_multiplier,
@@ -112,7 +101,7 @@ class OpenBeeEngine(Engine):
 
         # Step 2: declare the Qwen sample handlers.
         sample_spec = MLLMSampleSpec(
-            schema_handler=QwenChatSchemaHandler(
+            schema_handler=QwenVLChatSchemaHandler(
                 processor=self.processor,
                 thinking_mode=self.config.data.thinking_mode,
             ),
@@ -124,7 +113,7 @@ class OpenBeeEngine(Engine):
         )
 
         # Step 3: declare distributed placement and the training data spec.
-        distribution = self.data_kit.build_distribution_spec(device_mesh=self.device_mesh)
+        distribution = self.data_kit.build_distribution_spec(parallel_mesh=self.parallel_mesh)
         packing_spec = MLLMPackingSpec(
             max_seq_len=int(self.config.data.max_seq_len),
             algorithm="multi_pack",
@@ -175,8 +164,8 @@ class OpenBeeEngine(Engine):
                 total_source_samples=int(dataset_meta["row_count"]),
                 batch_size=int(self.config.data.batch_size),
                 gradient_accumulation_steps=int(self.config.optim.gradient_accumulation_steps),
-                data_parallel_world_size=self.data_parallel_world_size,
-                data_parallel_group=self.data_parallel_group,
+                data_parallel_world_size=self.parallel_mesh.dp.world_size,
+                data_parallel_group=self.parallel_mesh.dp.group,
                 device=self.device,
             )
             self.config.loop.total_steps = estimate.total_steps
@@ -242,7 +231,7 @@ class OpenBeeEngine(Engine):
 
         parallelized_model = parallelize_model(
             model,
-            device_mesh=self.device_mesh,
+            parallel_mesh=self.parallel_mesh,
             backend_kwargs=self.config.parallel.backend_kwargs.model_dump(),
         )
 

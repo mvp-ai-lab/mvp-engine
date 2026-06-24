@@ -19,11 +19,7 @@ from torch.distributed.checkpoint.state_dict import (
     set_optimizer_state_dict,
 )
 
-from mvp_engine.distributed.utils import (
-    get_rank,
-    infer_mesh_parallel_backend,
-    is_main_process,
-)
+from mvp_engine.distributed.utils import get_rank, is_main_process
 from mvp_engine.utils.log import simple_info
 from mvp_engine.utils.training import GradientScaler
 
@@ -40,6 +36,23 @@ def _get_checkpoint_process_group():
     if dist.is_available() and dist.is_initialized():
         return dist.group.WORLD
     return None
+
+
+def _infer_checkpoint_backend(mesh: DeviceMesh) -> str:
+    """Infer whether checkpoint IO should use the DDP or FSDP2 path from the mesh."""
+    mesh_dim_names = mesh.mesh_dim_names or ()
+
+    if "shard" in mesh_dim_names and mesh["shard"].size() > 1:
+        return "fsdp2"
+    if "tensor" in mesh_dim_names and mesh["tensor"].size() > 1:
+        return "fsdp2"
+
+    mesh_shape = tuple(mesh.shape)
+    if len(mesh_shape) <= 1:
+        return "ddp"
+    if any(dim_size > 1 for dim_size in mesh_shape[1:]):
+        return "fsdp2"
+    return "ddp"
 
 
 def _get_accelerator_rng_state() -> tuple[str | None, torch.Tensor | None]:
@@ -139,7 +152,7 @@ def _normalize_hf_state_dict(state_dict: dict[str, Any]) -> dict[str, torch.Tens
 
 
 def _get_hf_model_state_dict(mesh: DeviceMesh, model: nn.Module) -> dict[str, torch.Tensor]:
-    backend = infer_mesh_parallel_backend(mesh)
+    backend = _infer_checkpoint_backend(mesh)
     if backend == "ddp":
         base_model = _get_base_model(model)
         if hasattr(base_model, "module"):
@@ -168,7 +181,7 @@ def _save_hf_checkpoint(mesh: DeviceMesh, checkpoint_dir: Path, model: nn.Module
 def _load_hf_checkpoint(mesh: DeviceMesh, checkpoint_dir: Path, model: nn.Module, prefix: str) -> None:
     checkpoint_path = _get_hf_checkpoint_path(checkpoint_dir, prefix)
     state_dict = load_file(str(checkpoint_path), device="cpu")
-    backend = infer_mesh_parallel_backend(mesh)
+    backend = _infer_checkpoint_backend(mesh)
 
     if backend == "ddp":
         base_model = _get_base_model(model)
@@ -220,7 +233,7 @@ def save_checkpoint(
     hf_enable: bool = False,
 ) -> None:
     """Save model, optimizer, and engine state for the current distributed mesh."""
-    backend = infer_mesh_parallel_backend(mesh)
+    backend = _infer_checkpoint_backend(mesh)
 
     if prefix == "":
         accelerator_type, accelerator_rng_state = _get_accelerator_rng_state()
@@ -329,7 +342,7 @@ def load_checkpoint(
     Returns:
         dict: Engine state containing 'step', 'epoch', '_accumulate_step'.
     """
-    backend = infer_mesh_parallel_backend(mesh)
+    backend = _infer_checkpoint_backend(mesh)
     checkpoint_dir = Path(ckpt_path)
     use_traditional_model_checkpoint = _has_traditional_model_checkpoint(backend, checkpoint_dir, prefix)
     hf_checkpoint_path = _get_hf_checkpoint_path(checkpoint_dir, prefix)

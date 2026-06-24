@@ -19,7 +19,7 @@ VISION_END_TOKEN = "<|vision_end|>"
 DEFAULT_IMAGE_TOKEN = "<|image_pad|>"
 
 
-class QwenChatSchemaHandler(MLLMSchemaHandler):
+class QwenVLChatSchemaHandler(MLLMSchemaHandler):
     """Normalize Qwen conversation rows into loss-marked text and image segments.
 
     Attributes:
