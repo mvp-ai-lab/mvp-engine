@@ -9,7 +9,6 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, DistributedSampler
 
 from mvp_engine.distributed.parallelize import parallelize_model
-from mvp_engine.distributed.utils import get_rank, get_world_size
 from mvp_engine.engine import ENGINE_REGISTRY, Engine, TrainStepContext
 from mvp_engine.kit import OptimKit
 from mvp_engine.utils.log import logger
@@ -46,16 +45,16 @@ class MagicTransformerEngine(Engine):
         if is_train:
             sampler = InfiniteDistributedSampler(
                 dataset,
-                num_replicas=get_world_size(),
-                rank=get_rank(),
+                num_replicas=self.parallel_mesh.dp.world_size,
+                rank=self.parallel_mesh.dp.rank,
                 shuffle=True,
                 seed=self.config.seed,
             )
         else:
             sampler = DistributedSampler(
                 dataset,
-                num_replicas=get_world_size(),
-                rank=get_rank(),
+                num_replicas=self.parallel_mesh.dp.world_size,
+                rank=self.parallel_mesh.dp.rank,
                 shuffle=False,
             )
 
@@ -76,7 +75,7 @@ class MagicTransformerEngine(Engine):
 
         parallelized_model = parallelize_model(
             model,
-            device_mesh=self.device_mesh,
+            parallel_mesh=self.parallel_mesh,
             backend_kwargs=self.config.parallel.backend_kwargs.model_dump(),
         )
 

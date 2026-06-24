@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from functools import partial
 from operator import methodcaller
 from typing import Any
@@ -10,6 +9,8 @@ from typing import Any
 import torch
 from mvp_dataset import Dataset, TorchLoader
 from mvp_dataset.core import RuntimeContext
+
+from mvp_engine.distributed import ParallelMesh
 
 from .collator import MLLMBatchCollator
 from .guard import (
@@ -73,30 +74,20 @@ class MLLMDataKit:
     def build_distribution_spec(
         self,
         *,
-        device_mesh: object | None = None,
-        dp_dims: str | Sequence[str] | None = None,
+        parallel_mesh: ParallelMesh,
     ) -> MLLMDistributionSpec:
         """Build distributed placement options for MLLM data pipelines.
 
         Args:
-            device_mesh: Optional device mesh used by mvp-dataset for sharding.
-            dp_dims: Data-parallel mesh dimension name or names. When omitted and
-                a mesh is provided, every mesh dimension except ``"tensor"`` is
-                treated as data-parallel.
+            parallel_mesh: Parallel mesh used to derive mvp-dataset sharding placement.
 
         Returns:
             A distribution spec ready to attach to ``MLLMDataSpec``.
-
-        Raises:
-            ValueError: If ``dp_dims`` is provided without ``device_mesh``.
         """
-        resolved_dp_dims = dp_dims
-        if resolved_dp_dims is None and device_mesh is not None:
-            mesh_dim_names = tuple(getattr(device_mesh, "mesh_dim_names", ()) or ())
-            resolved_dp_dims = tuple(dim_name for dim_name in mesh_dim_names if dim_name != "tensor") or None
-        if device_mesh is None and resolved_dp_dims is not None:
-            raise ValueError("`device_mesh` is required when `dp_dims` is provided.")
-        return MLLMDistributionSpec(device_mesh=device_mesh, dp_dims=resolved_dp_dims)
+        return MLLMDistributionSpec(
+            device_mesh=parallel_mesh.device_mesh,
+            dp_dims=parallel_mesh.dp.dim_names or None,
+        )
 
     def build_processor(
         self,

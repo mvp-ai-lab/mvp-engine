@@ -8,10 +8,6 @@ from typing import Any
 import torch
 
 from mvp_engine.distributed.parallelize import parallelize_model
-from mvp_engine.distributed.utils import (
-    get_data_parallel_group,
-    get_data_parallel_world_size,
-)
 from mvp_engine.engine import ENGINE_REGISTRY, Engine, TrainStepContext
 from mvp_engine.kit import (
     LLMDataKit,
@@ -48,9 +44,7 @@ class Qwen3Engine(Engine):
     def __init__(self, config):
         """Initialize recipe-local distributed state and reusable kits."""
         super().__init__(config)
-        self.dp_world_size = get_data_parallel_world_size(self.device_mesh)
-        self.dp_group = get_data_parallel_group(self.device_mesh)
-        self.config.resolve_batching_config(data_parallel_world_size=self.dp_world_size)
+        self.config.resolve_batching_config(data_parallel_world_size=self.parallel_mesh.dp.world_size)
         self.data_kit = LLMDataKit()
         self.model_kit = LLMModelKit()
         self.step_estimation_kit = LLMStepEstimationKit()
@@ -58,8 +52,8 @@ class Qwen3Engine(Engine):
         self.optim_kit = OptimKit()
         self.token_loss_kit = TokenNormedLossKit(
             device=self.device,
-            dp_world_size=self.dp_world_size,
-            dp_group=self.dp_group,
+            dp_world_size=self.parallel_mesh.dp.world_size,
+            dp_group=self.parallel_mesh.dp.group,
         )
         self.token_loss_kit.build_loss_guard(
             spike_multiplier=self.config.optim.loss_spike_skip_multiplier,
@@ -95,7 +89,7 @@ class Qwen3Engine(Engine):
         )
 
         # Step 3: declare distributed placement and the training data spec.
-        distribution = self.data_kit.build_distribution_spec()
+        distribution = self.data_kit.build_distribution_spec(parallel_mesh=self.parallel_mesh)
         packing_spec = self.data_kit.PackingSpec(
             max_seq_len=int(self.config.data.max_seq_len),
             tail_policy=self.config.data.packing_tail_policy,
@@ -142,8 +136,8 @@ class Qwen3Engine(Engine):
                 estimation_dataset,
                 batch_size=int(self.config.data.batch_size),
                 gradient_accumulation_steps=int(self.config.optim.gradient_accumulation_steps),
-                data_parallel_world_size=self.dp_world_size,
-                data_parallel_group=self.dp_group,
+                data_parallel_world_size=self.parallel_mesh.dp.world_size,
+                data_parallel_group=self.parallel_mesh.dp.group,
                 device=self.device,
             )
             self.config.loop.total_steps = estimate.total_steps
@@ -193,7 +187,7 @@ class Qwen3Engine(Engine):
 
         return parallelize_model(
             model,
-            device_mesh=self.device_mesh,
+            parallel_mesh=self.parallel_mesh,
             backend_kwargs=self.config.parallel.backend_kwargs.model_dump(),
         )
 

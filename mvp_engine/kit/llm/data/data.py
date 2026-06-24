@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from functools import partial
 from operator import methodcaller
 from typing import Any
@@ -10,6 +9,8 @@ from typing import Any
 import torch
 from mvp_dataset import Dataset, TorchLoader
 from mvp_dataset.core import RuntimeContext
+
+from mvp_engine.distributed import ParallelMesh
 
 from .collator import LLMBatchCollator
 from .guard import LLMModelInputGuard, LLMRawRowGuard, LLMSampleGuard
@@ -55,17 +56,13 @@ class LLMDataKit:
     def build_distribution_spec(
         self,
         *,
-        device_mesh: object | None = None,
-        dp_dims: str | Sequence[str] | None = None,
+        parallel_mesh: ParallelMesh,
     ) -> LLMDistributionSpec:
         """Build distributed placement options for LLM data pipelines."""
-        resolved_dp_dims = dp_dims
-        if resolved_dp_dims is None and device_mesh is not None:
-            mesh_dim_names = tuple(getattr(device_mesh, "mesh_dim_names", ()) or ())
-            resolved_dp_dims = tuple(dim_name for dim_name in mesh_dim_names if dim_name != "tensor") or None
-        if device_mesh is None and resolved_dp_dims is not None:
-            raise ValueError("`device_mesh` is required when `dp_dims` is provided.")
-        return LLMDistributionSpec(device_mesh=device_mesh, dp_dims=resolved_dp_dims)
+        return LLMDistributionSpec(
+            device_mesh=parallel_mesh.device_mesh,
+            dp_dims=parallel_mesh.dp.dim_names or None,
+        )
 
     def build_tokenizer(
         self,
