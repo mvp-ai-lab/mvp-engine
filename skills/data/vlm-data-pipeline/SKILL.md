@@ -40,7 +40,7 @@ Search:
 
 ```bash
 rg -n \
-  "MLLMDataKit|MLLMDataSpec|MLLMSampleSpec|MLLMSourceSpec|MLLMPackingSpec|QwenChatSchemaHandler|build_dataset" \
+  "MLLMDataKit|MLLMDataSpec|MLLMSampleSpec|MLLMSourceSpec|MLLMPackingSpec|QwenVLChatSchemaHandler|build_dataset" \
   recipes/<recipe>
 ```
 

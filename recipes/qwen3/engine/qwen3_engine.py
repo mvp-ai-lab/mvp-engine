@@ -1,69 +1,61 @@
-"""Training engine for the OpenBee recipe."""
+"""Training engine for the Qwen3 text-only recipe."""
 
 from __future__ import annotations
 
-import json
 import math
-from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any
 
 import torch
 
 from mvp_engine.distributed.parallelize import parallelize_model
 from mvp_engine.engine import ENGINE_REGISTRY, Engine, TrainStepContext
 from mvp_engine.kit import (
+    LLMDataKit,
+    LLMDataSpec,
+    LLMLoaderSpec,
+    LLMModelKit,
+    LLMPackingSpec,
+    LLMPretrainTextSchemaHandler,
+    LLMPretrainTextTokenizationHandler,
+    LLMSampleSpec,
+    LLMSourceSpec,
+    LLMStepEstimationKit,
     MFUKit,
-    MLLMDataKit,
-    MLLMDataSpec,
-    MLLMLoaderSpec,
-    MLLMModelKit,
-    MLLMPackingSpec,
-    MLLMSampleSpec,
-    MLLMSourceSpec,
-    MLLMStepEstimationKit,
-    MLLMTextOnlyBatchGuard,
-    ModelInputs,
     OptimKit,
-    QwenImageHandler,
-    QwenVLChatSchemaHandler,
-    QwenVLMediaHandler,
-    QwenVLTokenizationHandler,
     TokenNormedLossKit,
 )
+from mvp_engine.kit.llm import ModelInputs
 from mvp_engine.utils.log import logger
 from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
-from ..configs.schema import OpenBeeConfig
-from ..model import patch_qwen3vl_conv3d, patch_qwen3vl_model_flops
+from ..configs.schema import Qwen3Config
+from ..model import patch_qwen3_model_flops
 from ..model.packing import prepare_packed_model_inputs
-
-if TYPE_CHECKING:
-    from transformers import ProcessorMixin
 
 
 @ENGINE_REGISTRY.register()
-class OpenBeeEngine(Engine):
-    """Recipe-local engine for the OpenBee recipe."""
+class Qwen3Engine(Engine):
+    """Recipe-local engine for Qwen3 text-only stages."""
 
-    ConfigClass = OpenBeeConfig
-    config: OpenBeeConfig
+    ConfigClass = Qwen3Config
+    config: Qwen3Config
 
-    processor: ProcessorMixin
+    tokenizer: Any
 
-    data_kit: MLLMDataKit
-    model_kit: MLLMModelKit
-    step_estimation_kit: MLLMStepEstimationKit
+    data_kit: LLMDataKit
+    model_kit: LLMModelKit
+    step_estimation_kit: LLMStepEstimationKit
     mfu_kit: MFUKit
     optim_kit: OptimKit
     token_loss_kit: TokenNormedLossKit
 
     def __init__(self, config):
-        """Initialize OpenBee-local distributed state and metric reducers."""
+        """Initialize recipe-local distributed state and reusable kits."""
         super().__init__(config)
         self.config.resolve_batching_config(data_parallel_world_size=self.parallel_mesh.dp.world_size)
-        self.data_kit = MLLMDataKit()
-        self.model_kit = MLLMModelKit()
-        self.step_estimation_kit = MLLMStepEstimationKit()
+        self.data_kit = LLMDataKit()
+        self.model_kit = LLMModelKit()
+        self.step_estimation_kit = LLMStepEstimationKit()
         self.mfu_kit = MFUKit()
         self.optim_kit = OptimKit()
         self.token_loss_kit = TokenNormedLossKit(
@@ -78,61 +70,50 @@ class OpenBeeEngine(Engine):
         )
 
     def prepare_dataloader(self, workflow: str = "train"):
-        """Build the train dataloader over preprocessed multimodal samples.
+        """Build the train dataloader over packed text pretrain samples.
 
         Args:
             workflow: Workflow name passed by the shared engine. Only ``train``
                 is supported by this recipe.
 
         Returns:
-            A ``TorchLoader`` pipeline that yields padded multimodal batches,
-            or ``None`` for unsupported non-training workflows.
+            A ``TorchLoader`` pipeline that yields padded text-LM batches, or
+            ``None`` for unsupported non-training workflows.
         """
         if workflow != "train":
-            logger.warning(f"OpenBee engine does not support workflow '{workflow}'.")
+            logger.warning(f"Qwen3 pretrain engine does not support workflow '{workflow}'.")
             return
 
-        # Step 1: build the shared processor.
-        self.processor = self.data_kit.build_processor(
-            self.config.model.pretrained_model_name_or_path,
-            image_max_pixels=self.config.model.image_max_pixels,
-        )
+        # Step 1: build the shared tokenizer.
+        self.tokenizer = self.data_kit.build_tokenizer(self.config.model.pretrained_model_name_or_path)
 
-        # Step 2: declare the Qwen sample handlers.
-        sample_spec = MLLMSampleSpec(
-            schema_handler=QwenVLChatSchemaHandler(
-                processor=self.processor,
-                thinking_mode=self.config.data.thinking_mode,
-            ),
-            media_handler=QwenVLMediaHandler(processor=self.processor),
-            tokenization_handler=QwenVLTokenizationHandler(
-                processor=self.processor,
+        # Step 2: declare the Qwen pretrain sample handlers.
+        sample_spec = LLMSampleSpec(
+            schema_handler=LLMPretrainTextSchemaHandler(text_field=self.config.data.text_field),
+            tokenization_handler=LLMPretrainTextTokenizationHandler(
+                tokenizer=self.tokenizer,
                 max_seq_len=int(self.config.data.max_seq_len),
             ),
         )
 
         # Step 3: declare distributed placement and the training data spec.
         distribution = self.data_kit.build_distribution_spec(parallel_mesh=self.parallel_mesh)
-        packing_spec = MLLMPackingSpec(
+        packing_spec = LLMPackingSpec(
             max_seq_len=int(self.config.data.max_seq_len),
-            algorithm="multi_pack",
-            selection_strategy=self.config.data.packing_selection_strategy,
-            open_pack_limit=int(self.config.data.packing_open_pack_limit),
-            buffer_size=int(self.config.data.packing_buffer_size),
-            block_causal=True,
+            tail_policy=self.config.data.packing_tail_policy,
+            isolate_attention=self.config.data.packing_isolate_attention,
+            isolate_position_ids=self.config.data.packing_isolate_position_ids,
         )
-        loader_spec = MLLMLoaderSpec(
+        loader_spec = LLMLoaderSpec(
             batch_size=int(self.config.data.batch_size),
             num_workers=int(self.config.data.num_workers),
         )
-        data_spec = MLLMDataSpec(
-            source=MLLMSourceSpec(
+        data_spec = LLMDataSpec(
+            source=LLMSourceSpec(
                 dataset_path=self.config.data.train_path,
-                dataset_source="lance",
-                ref_columns=tuple(self.config.data.ref_columns),
                 seed=int(self.config.seed),
                 resample=True,
-                resolve_refs=True,
+                shuffle_mode="chunk",
             ),
             sample=sample_spec,
             packing=packing_spec,
@@ -142,25 +123,25 @@ class OpenBeeEngine(Engine):
 
         # Step 4: when total_steps=-1, consume one finite packed data pass to estimate one-epoch steps.
         if int(self.config.loop.total_steps) == -1:
-            estimation_spec = MLLMDataSpec(
-                source=MLLMSourceSpec(
+            estimation_spec = LLMDataSpec(
+                source=LLMSourceSpec(
                     dataset_path=self.config.data.train_path,
-                    dataset_source="lance",
-                    ref_columns=tuple(self.config.data.ref_columns),
                     seed=int(self.config.seed),
                     resample=False,
-                    resolve_refs=False,
+                    shuffle_mode="none",
                 ),
                 sample=sample_spec,
                 packing=packing_spec,
-                loader=loader_spec,
+                loader=LLMLoaderSpec(
+                    batch_size=int(self.config.data.batch_size),
+                    num_workers=int(self.config.data.num_workers),
+                    drop_last=False,
+                ),
                 distribution=distribution,
             )
             estimation_dataset = self.data_kit.build_dataset(estimation_spec)
-            dataset_meta = json.loads(Path(estimation_spec.source.dataset_path).read_text())
             estimate = self.step_estimation_kit.estimate_total_steps(
                 estimation_dataset,
-                total_source_samples=int(dataset_meta["row_count"]),
                 batch_size=int(self.config.data.batch_size),
                 gradient_accumulation_steps=int(self.config.optim.gradient_accumulation_steps),
                 data_parallel_world_size=self.parallel_mesh.dp.world_size,
@@ -169,47 +150,30 @@ class OpenBeeEngine(Engine):
             )
             self.config.loop.total_steps = estimate.total_steps
 
-        # Step 5: build the real training dataset with the full preprocess.
+        # Step 5: build the real training dataset with resampling enabled.
         dataset = self.data_kit.build_dataset(data_spec)
 
         # Step 6: wrap the dataset in the normal TorchLoader.
-        dataloader = self.data_kit.build_dataloader(dataset, data_spec, device=self.device)
-
-        # Step 7: OpenBee forward requires one image tensor even for text-only batches.
-        tokenizer = self.processor.tokenizer
-        image_handler = QwenImageHandler()
-        return dataloader.map(
-            MLLMTextOnlyBatchGuard(
-                dummy_inputs=image_handler.build_dummy_inputs(self.processor),
-                media_keys=image_handler.OUTPUT_TENSOR_KEYS,
-                pad_token_id=int(tokenizer.pad_token_id),
-                ignore_index=sample_spec.tokenization_handler.ignore_index,
-            )
-        )
+        return self.data_kit.build_dataloader(dataset, data_spec, device=self.device)
 
     def prepare_model(self) -> torch.nn.Module:
         """Build, patch, compile, and parallelize the recipe model.
 
         Returns:
-            The distributed-ready Qwen3-VL model.
+            The distributed-ready Qwen3 text model.
         """
         model = self.model_kit.build_model(
             self.config.model.pretrained_model_name_or_path,
-            trust_remote_code=getattr(self.config.model, "trust_remote_code", True),
+            load_pretrained_model=self.config.model.load_pretrained_model,
+            random_init_seed=int(self.config.seed),
             torch_dtype=getattr(self.config.model, "torch_dtype", "auto"),
             attn_implementation=self.config.model.attn_implementation,
         ).to(self.device)
         logger.info(f"Model name: {model.__class__.__name__}")
 
-        model = self.model_kit.apply_model_patches(model, [patch_qwen3vl_conv3d, patch_qwen3vl_model_flops])
+        model = self.model_kit.apply_model_patches(model, [patch_qwen3_model_flops])
         model = self.token_loss_kit.apply_chunked_token_loss_patch(model)
-
-        model = self.model_kit.apply_freeze_policy(
-            model,
-            freeze_vit=self.config.model.freeze_vit,
-            freeze_projector=self.config.model.freeze_projector,
-            freeze_llm=self.config.model.freeze_llm,
-        )
+        model = self.model_kit.apply_freeze_policy(model, freeze_llm=self.config.model.freeze_llm)
 
         for parameter in model.parameters():
             if parameter.requires_grad and parameter.dtype != torch.float32:
@@ -219,6 +183,7 @@ class OpenBeeEngine(Engine):
             model = self.model_kit.apply_gradient_checkpointing(
                 model,
                 use_reentrant=self.config.model.gradient_checkpointing.use_reentrant,
+                mode="hf",
             )
 
         if self.config.model.compile.enabled:
@@ -228,20 +193,14 @@ class OpenBeeEngine(Engine):
                 mode=self.config.model.compile.mode,
             )
 
-        parallelized_model = parallelize_model(
+        return parallelize_model(
             model,
             parallel_mesh=self.parallel_mesh,
             backend_kwargs=self.config.parallel.backend_kwargs.model_dump(),
         )
 
-        return parallelized_model
-
     def prepare_optimizer(self) -> torch.optim.Optimizer:
-        """Construct AdamW.
-
-        Returns:
-            The optimizer used by this recipe.
-        """
+        """Construct the AdamW optimizer used by this recipe."""
         return self.optim_kit.build_optimizer(
             self.model,
             optimizer=self.config.optim.optimizer,
@@ -250,11 +209,7 @@ class OpenBeeEngine(Engine):
         )
 
     def prepare_scheduler(self):
-        """Construct the learning-rate schedule used by this recipe.
-
-        Returns:
-            The Hugging Face cosine scheduler used by this recipe.
-        """
+        """Construct the learning-rate schedule used by this recipe."""
         warmup_steps = math.ceil(self.total_steps * float(self.config.optim.warmup_ratio))
         return self.optim_kit.build_lr_scheduler(
             optimizer=self.optimizer,
@@ -264,31 +219,17 @@ class OpenBeeEngine(Engine):
         )
 
     def train_pre_step(self, ctx: TrainStepContext) -> TrainStepContext:
-        """Prepare one micro-batch for forward.
-
-        This reads DataKit token counts, moves tensors to the local device,
-        prepares packed Qwen3-VL inputs, and casts visual tensors to the active
-        mixed-precision dtype.
-        """
+        """Move one micro-batch to device and build packed text model inputs."""
         batch: ModelInputs = self.data_kit.to_device(ctx.data, self.device)
-
-        batch = prepare_packed_model_inputs(
+        ctx.data = prepare_packed_model_inputs(
             batch,
-            model_config=self.unwrapped_model.config,
             attn_implementation=getattr(self.unwrapped_model.config, "_attn_implementation", None),
             mask_dtype=self.dtype if self.dtype.is_floating_point else torch.float32,
         )
-
-        ctx.data = self.data_kit.to_device(batch, self.device)
         return ctx
 
     def forward_step(self, ctx: TrainStepContext) -> None:
-        """Run one forward pass and collect micro-batch training metrics.
-
-        The patched model returns unreduced per-token CE loss. Token counts and
-        local FLOPs are carried into later hooks for accumulation-window
-        reduction and logging.
-        """
+        """Run one forward pass and accumulate micro-batch FLOPs."""
         data: ModelInputs = ctx.data
         with torch.autocast(
             device_type=self.device_type,
@@ -310,10 +251,7 @@ class OpenBeeEngine(Engine):
             batch_size=int(data["input_ids"].shape[0]),
             seq_len=int(data["input_ids"].shape[1]),
             attention_mask=flops_attention_mask,
-            image_grid_thw=data.get("image_grid_thw"),
             is_training=True,
-            freeze_vit=bool(self.config.model.freeze_vit),
-            freeze_projector=bool(self.config.model.freeze_projector),
             freeze_llm=bool(self.config.model.freeze_llm),
         )
 
@@ -325,12 +263,7 @@ class OpenBeeEngine(Engine):
         }
 
     def backward_step(self, ctx: TrainStepContext) -> None:
-        """Backward one micro-batch with delayed global token normalization.
-
-        Per-token loss is backpropagated immediately with a fixed provisional
-        divisor so data loading can overlap with GPU work. At the sync micro
-        step, accumulated gradients are rescaled by the reduced global supervised token count.
-        """
+        """Backward one micro-batch with delayed global token normalization."""
         outputs = ctx.outputs
         assert outputs is not None, "The forward step must populate ctx.outputs."
         assert "loss" in outputs, "The model output must contain 'loss' key."
@@ -338,14 +271,10 @@ class OpenBeeEngine(Engine):
 
         ctx.should_sync = self.ga_state.advance()
 
-        # 1. Read this micro-step's local token/loss/flops.
         local_micro_loss_sum = outputs["loss"].sum()
         micro_effective_token_count = int(ctx.data["effective_tokens"])
         micro_total_token_count = int(ctx.data["total_tokens"])
 
-        # 2. Backward immediately so the dataloader can prepare later micro-batches
-        # while GPU work is active. The exact per-token denominator is applied to
-        # accumulated gradients once the full accumulation window token count is known.
         backward_loss_divisor = (
             int(self.config.data.batch_size)
             * int(self.config.data.max_seq_len)
@@ -379,6 +308,7 @@ class OpenBeeEngine(Engine):
 
         self.scaler.unscale_(self.optimizer)
         self.token_loss_kit.rescale_gradients(self.model.parameters(), token_loss_stats)
+
         max_grad_norm = self.config.optim.clip_grad_norm
         if max_grad_norm is not None:
             clip_grad_norm_(self.model, max_grad_norm)
@@ -401,7 +331,6 @@ class OpenBeeEngine(Engine):
 
     def train_post_step(self, ctx: TrainStepContext) -> None:
         """Log one synchronized optimizer step and save checkpoints."""
-
         outputs = ctx.outputs
 
         step_time_seconds = float(self.timer.progress_time_latest)

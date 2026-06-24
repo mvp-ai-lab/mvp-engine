@@ -59,7 +59,7 @@ from mvp_engine.kit import (
     MLLMPackingSpec,
     MLLMSampleSpec,
     MLLMSourceSpec,
-    QwenChatSchemaHandler,
+    QwenVLChatSchemaHandler,
     QwenVLMediaHandler,
     QwenVLTokenizationHandler,
 )
@@ -68,7 +68,7 @@ self.data_kit = MLLMDataKit()
 processor = self.data_kit.build_processor(...)
 
 sample_spec = MLLMSampleSpec(
-    schema_handler=QwenChatSchemaHandler(processor=processor, thinking_mode=config.data.thinking_mode),
+    schema_handler=QwenVLChatSchemaHandler(processor=processor, thinking_mode=config.data.thinking_mode),
     media_handler=QwenVLMediaHandler(processor=processor),
     tokenization_handler=QwenVLTokenizationHandler(
         processor=processor,
@@ -87,7 +87,7 @@ loader_spec = MLLMLoaderSpec(
     batch_size=int(config.data.batch_size),
     num_workers=int(config.data.num_workers),
 )
-distribution = self.data_kit.build_distribution_spec(device_mesh=self.device_mesh)
+distribution = self.data_kit.build_distribution_spec(parallel_mesh=self.parallel_mesh)
 ```
 
 ### 2. Build Train And Estimation Specs if Needed
@@ -218,7 +218,7 @@ and other model-forward details.
 
 #### Qwen Components
 
-- `QwenChatSchemaHandler`: conversation rows, Qwen chat template rendering,
+- `QwenVLChatSchemaHandler`: conversation rows, Qwen chat template rendering,
   thinking-mode handling, and ordered image slots.
 - `QwenVLMediaHandler`: Qwen media registry with image support.
 - `QwenImageHandler`: Qwen image placeholder expansion, smart resize, image

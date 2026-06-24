@@ -11,8 +11,8 @@ if TYPE_CHECKING:
     from .media import MLLMMediaHandler, MLLMMediaTypeHandler
     from .packing import MLLMPackingAssembler, build_packed_block_causal_mask
     from .qwen import (
-        QwenChatSchemaHandler,
         QwenImageHandler,
+        QwenVLChatSchemaHandler,
         QwenVLMediaHandler,
         QwenVLTokenizationHandler,
     )
@@ -50,8 +50,8 @@ _EXPORT_MODULES = {
     "MLLMTextOnlyBatchGuard": ".guard",
     "MLLMTokenizationHandler": ".tokenization",
     "ModelInputs": ".types",
-    "QwenChatSchemaHandler": ".qwen",
     "QwenImageHandler": ".qwen",
+    "QwenVLChatSchemaHandler": ".qwen",
     "QwenVLMediaHandler": ".qwen",
     "QwenVLTokenizationHandler": ".qwen",
     "build_packed_block_causal_mask": ".packing",

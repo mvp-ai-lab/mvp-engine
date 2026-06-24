@@ -16,14 +16,13 @@ from typing import Any, ClassVar, Type, Union
 import torch
 from accelerate.utils import set_seed
 from omegaconf import DictConfig, OmegaConf
-from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.fsdp import FSDPModule
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
 from mvp_engine.config.schema import BaseEngineConfig
-from mvp_engine.distributed.device_mesh import initialize_device_mesh
 from mvp_engine.distributed.init import initialize_process_group
+from mvp_engine.distributed.parallel_mesh import ParallelMesh
 from mvp_engine.distributed.utils import (
     broadcast_from_main,
     get_local_rank,
@@ -95,7 +94,7 @@ class Engine(ABC):
     ConfigClass: ClassVar[Type[BaseEngineConfig]] = BaseEngineConfig
     config: BaseEngineConfig
 
-    device_mesh: DeviceMesh
+    parallel_mesh: ParallelMesh
 
     train_loader: DataLoader
     evaluate_loader: DataLoader
@@ -214,7 +213,7 @@ class Engine(ABC):
         """Initialize distributed training backend."""
         initialize_process_group()
         mesh_cfg = self.config.parallel.mesh.model_dump()
-        self.device_mesh = initialize_device_mesh(self.device.type, mesh_cfg)
+        self.parallel_mesh = ParallelMesh.initialize(self.device.type, mesh_cfg)
 
     def prepare_runtime_info(self) -> None:
         """Inject runtime metadata that depends on the initialized distributed state."""
@@ -328,7 +327,7 @@ class Engine(ABC):
         torch.distributed.barrier()
 
         save_checkpoint(
-            self.device_mesh,
+            self.parallel_mesh.device_mesh,
             cur_checkpoint_dir,
             self.model,
             self.optimizer,
@@ -361,7 +360,7 @@ class Engine(ABC):
         logger.info(f"{action} {ckpt_path}...")
 
         engine_state = load_checkpoint(
-            self.device_mesh,
+            self.parallel_mesh.device_mesh,
             ckpt_path,
             self.model,
             self.optimizer if restore_training_state else None,
