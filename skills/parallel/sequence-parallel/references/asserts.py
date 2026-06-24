@@ -78,9 +78,9 @@ def assert_before_train_end(engine) -> None:
     if not engine.config.parallel.backend_kwargs.sequence_parallel:
         return
 
-    if hasattr(engine, "device_mesh"):
-        tp_size = engine.device_mesh["tensor"].size()
-        shard_size = engine.device_mesh["shard"].size()
+    if hasattr(engine, "parallel_mesh"):
+        tp_size = engine.parallel_mesh.tp.world_size
+        shard_size = engine.parallel_mesh.dim_size("shard")
     else:
         tp_size = engine.config.parallel.mesh.tensor
         shard_size = engine.config.parallel.mesh.shard

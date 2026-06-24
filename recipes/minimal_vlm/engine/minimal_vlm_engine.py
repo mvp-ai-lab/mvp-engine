@@ -82,7 +82,7 @@ class MinimalVLMEngine(Engine):
 
         parallelized_model = parallelize_model(
             model,
-            device_mesh=self.device_mesh,
+            parallel_mesh=self.parallel_mesh,
             backend_kwargs=self.config.parallel.backend_kwargs.model_dump(),
         )
 
