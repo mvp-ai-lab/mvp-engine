@@ -33,6 +33,8 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
+            const crypto = require("crypto");
+
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const run = context.payload.workflow_run;
@@ -44,6 +46,100 @@ jobs:
 
             function normalizePath(filename) {
               return filename.replace(/\\/g, "/");
+            }
+
+            function escapeRegExp(value) {
+              return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            }
+
+            function codeSpan(value) {
+              return `\`${String(value).replace(/`/g, "'")}\``;
+            }
+
+            function prFileDiffUrl(pr, filename) {
+              const diffHash = crypto.createHash("sha256").update(normalizePath(filename)).digest("hex");
+              return `https://github.com/${owner}/${repo}/pull/${pr.number}/files#diff-${diffHash}`;
+            }
+
+            function withProtectedMarkdown(value, formatter) {
+              const placeholders = [];
+              const protectedValue = value.replace(/\[[^\]]+\]\([^)]+\)|`[^`]+`/g, (match) => {
+                const placeholder = `@@AI_REVIEW_MARKDOWN_${placeholders.length}@@`;
+                placeholders.push([placeholder, match]);
+                return placeholder;
+              });
+              let formatted = formatter(protectedValue);
+              for (const [placeholder, markdown] of placeholders) {
+                formatted = formatted.replace(new RegExp(escapeRegExp(placeholder), "g"), markdown);
+              }
+              return formatted;
+            }
+
+            function withProtectedMarkdownLinks(value, formatter) {
+              const placeholders = [];
+              const protectedValue = value.replace(/\[[^\]]+\]\([^)]+\)/g, (match) => {
+                const placeholder = `@@AI_REVIEW_LINK_${placeholders.length}@@`;
+                placeholders.push([placeholder, match]);
+                return placeholder;
+              });
+              let formatted = formatter(protectedValue);
+              for (const [placeholder, markdown] of placeholders) {
+                formatted = formatted.replace(new RegExp(escapeRegExp(placeholder), "g"), markdown);
+              }
+              return formatted;
+            }
+
+            function changedFileReferenceCandidates(files) {
+              const paths = files.map((file) => normalizePath(file.filename));
+              const basenameCounts = new Map();
+              for (const path of paths) {
+                const basename = path.split("/").pop();
+                basenameCounts.set(basename, (basenameCounts.get(basename) || 0) + 1);
+              }
+              return paths.flatMap((path) => {
+                const basename = path.split("/").pop();
+                const candidates = [{ text: path, filename: path }];
+                if (basename && basename !== path && basenameCounts.get(basename) === 1) {
+                  candidates.push({ text: basename, filename: path });
+                }
+                return candidates;
+              }).sort((left, right) => right.text.length - left.text.length);
+            }
+
+            function linkChangedFiles(value, pr, files) {
+              return withProtectedMarkdownLinks(value, (unlinkedValue) => {
+                let formatted = unlinkedValue;
+                const replacements = [];
+                for (const candidate of changedFileReferenceCandidates(files)) {
+                  const pattern = new RegExp(`\`?${escapeRegExp(candidate.text)}\`?(?::(\\d+))?\`?`, "g");
+                  formatted = formatted.replace(pattern, (_match, line) => {
+                    const label = line ? `${candidate.text}:${line}` : candidate.text;
+                    const placeholder = `@@AI_REVIEW_FILE_${replacements.length}@@`;
+                    replacements.push([
+                      placeholder,
+                      `[${codeSpan(label)}](${prFileDiffUrl(pr, candidate.filename)})`,
+                    ]);
+                    return placeholder;
+                  });
+                }
+                for (const [placeholder, link] of replacements) {
+                  formatted = formatted.replace(new RegExp(escapeRegExp(placeholder), "g"), link);
+                }
+                return formatted;
+              });
+            }
+
+            function highlightCodeReferences(value) {
+              return withProtectedMarkdown(value, (unformattedValue) => {
+                return unformattedValue.replace(
+                  /\b([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\(\))/g,
+                  (_match, code) => codeSpan(code),
+                );
+              });
+            }
+
+            function formatReviewSequenceItem(value, pr, files) {
+              return highlightCodeReferences(linkChangedFiles(String(value).trim(), pr, files));
             }
 
             function deniedPathReason(filename) {
@@ -230,7 +326,6 @@ jobs:
               approvalState,
               approvalError,
             }) {
-              const blockers = asList(aiDecision.blockers, []);
               const changeDescription = asList(aiDecision.change_description, [
                 `Changed ${pr.changed_files} file(s) with ${pr.additions} additions and ${pr.deletions} deletions.`,
               ]);
@@ -238,19 +333,17 @@ jobs:
                 "Start with the changed file list above, then inspect each diff hunk in dependency order.",
               ]);
               const diagram = sanitizeMermaid(aiDecision.diagram_walkthrough_mermaid, files);
-              const notApprovedReasons = [
-                ...gateFailures,
-                ...aiRejected,
-                approvalError ? `GitHub approve API failed: ${approvalError}` : "",
-              ].filter(Boolean);
+              const gateDetails = [
+                `- Approval state: \`${approvalState}\``,
+                ...(gateFailures.length > 0
+                  ? gateFailures.map((item) => `- ${item}`)
+                  : ["- Static gates passed."]),
+                ...(aiRejected.length > 0 ? aiRejected.map((item) => `- ${item}`) : ["- AI gate passed."]),
+                ...(approvalError ? [`- GitHub approve API failed: ${approvalError}`] : []),
+              ];
               const decision = approvalState === "approved" || approvalState === "already-approved"
                 ? "APPROVED"
                 : "NOT APPROVED";
-              const approvalLine = approvalState === "approved"
-                ? "AI gate approved this PR and submitted a GitHub APPROVE review."
-                : approvalState === "already-approved"
-                  ? "AI gate already approved this commit in an earlier run."
-                  : `AI gate did not approve this PR: ${notApprovedReasons.join("; ") || "AI did not classify it as low-risk."}`;
 
               return [
                 commentMarker,
@@ -261,9 +354,14 @@ jobs:
                 "### Approval Decision",
                 "",
                 `- Decision: **${decision}**`,
-                `- Reason: ${approvalLine}`,
                 `- AI risk level: \`${aiDecision.risk_level || "unknown"}\``,
-                blockers.length > 0 ? `- AI blockers: ${blockers.join("; ")}` : "- AI blockers: none reported",
+                "",
+                "<details>",
+                "<summary>ℹ️ Gate Details</summary>",
+                "",
+                ...gateDetails,
+                "",
+                "</details>",
                 "",
                 "### Change Description",
                 "",
@@ -277,13 +375,9 @@ jobs:
                 "",
                 "### Suggested Review Order",
                 "",
-                ...reviewSequence.map((item, index) => `${index + 1}. ${item}`),
-                "",
-                "### Gate Details",
-                "",
-                gateFailures.length > 0
-                  ? gateFailures.map((item) => `- ${item}`).join("\n")
-                  : "- Static gates passed.",
+                ...reviewSequence.map((item, index) => {
+                  return `${index + 1}. ${formatReviewSequenceItem(item, pr, files)}`;
+                }),
                 "",
                 `AI summary: ${aiDecision.summary || "n/a"}`,
               ].join("\n");
@@ -355,7 +449,9 @@ jobs:
                 "Even when workflow gate findings make the PR ineligible for approval, still review the PR.",
                 "change_description must contain 3-6 concise bullets describing what changed.",
                 "diagram_walkthrough_mermaid must be Mermaid body only, start with 'flowchart LR', and show the change flow.",
-                "review_sequence must be ordered review advice. Prefer entries like 'Start at file.py line 42...'.",
+                "review_sequence must be ordered Markdown review advice without list markers.",
+                "Each review_sequence entry should mention the exact changed file path when possible,",
+                "put file paths and code symbols in inline code spans, and explain what to inspect.",
                 "Recipe-local changes under recipes/*/model/**, recipes/*/engine/**, and recipes/*/configs/schema.py",
                 "are eligible for low-risk approval when the diff is small and does not affect shared APIs,",
                 "migrations, security, permissions, CI/CD, dependencies, deployment, or stable core behavior.",
@@ -495,7 +591,7 @@ jobs:
             const aiRejected = [
               aiDecision.approve !== true ? "AI did not approve." : "",
               riskLevel !== "low" ? `AI risk level is '${aiDecision.risk_level || "missing"}'.` : "",
-              blockers.length > 0 ? `AI blockers: ${blockers.join("; ")}.` : "",
+              blockers.length > 0 ? `AI gate reported: ${blockers.join("; ")}.` : "",
               aiDecision.touches_public_api ? "AI detected public API changes." : "",
               aiDecision.touches_schema_or_migration ? "AI detected schema or migration changes." : "",
               aiDecision.touches_security_permissions_ci_dependencies_deploy
