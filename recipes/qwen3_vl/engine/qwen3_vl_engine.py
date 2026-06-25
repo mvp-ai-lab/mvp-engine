@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import json
 import math
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import torch
 
+from mvp_engine.distributed.cp import sync_cp_grads
 from mvp_engine.distributed.parallelize import parallelize_model
 from mvp_engine.engine import ENGINE_REGISTRY, Engine, TrainStepContext
 from mvp_engine.kit import (
+    CPSequenceSpec,
     MFUKit,
     MLLMDataKit,
     MLLMDataSpec,
@@ -24,6 +27,7 @@ from mvp_engine.kit import (
     ModelInputs,
     OptimKit,
     QwenVLChatSchemaHandler,
+    QwenVLCPKit,
     QwenVLMediaHandler,
     QwenVLTokenizationHandler,
     TokenNormedLossKit,
@@ -32,7 +36,11 @@ from mvp_engine.utils.log import logger
 from mvp_engine.utils.training import accumulate_gradients, clip_grad_norm_
 
 from ..configs.schema import Qwen3VLConfig
-from ..model import patch_qwen3vl_conv3d, patch_qwen3vl_model_flops
+from ..model import (
+    patch_qwen3vl_context_parallel,
+    patch_qwen3vl_conv3d,
+    patch_qwen3vl_model_flops,
+)
 from ..model.packing import prepare_packed_model_inputs
 
 if TYPE_CHECKING:
@@ -54,11 +62,13 @@ class Qwen3VLEngine(Engine):
     mfu_kit: MFUKit
     optim_kit: OptimKit
     token_loss_kit: TokenNormedLossKit
+    cp_kit: QwenVLCPKit
 
     def __init__(self, config):
         """Initialize Qwen3-VL-local distributed state and metric reducers."""
         super().__init__(config)
         self.config.resolve_batching_config(data_parallel_world_size=self.parallel_mesh.dp.world_size)
+        self.cp_kit = QwenVLCPKit(self.parallel_mesh)
         self.data_kit = MLLMDataKit()
         self.model_kit = MLLMModelKit()
         self.step_estimation_kit = MLLMStepEstimationKit()
@@ -186,7 +196,10 @@ class Qwen3VLEngine(Engine):
         ).to(self.device)
         logger.info(f"Model name: {model.__class__.__name__}")
 
-        model = self.model_kit.apply_model_patches(model, [patch_qwen3vl_conv3d, patch_qwen3vl_model_flops])
+        model_patches = [patch_qwen3vl_conv3d, patch_qwen3vl_model_flops]
+        if self.parallel_mesh.cp.active:
+            model_patches.append(partial(patch_qwen3vl_context_parallel, cp_kit=self.cp_kit))
+        model = self.model_kit.apply_model_patches(model, model_patches)
         model = self.token_loss_kit.apply_chunked_token_loss_patch(model)
 
         model = self.model_kit.apply_freeze_policy(
@@ -256,6 +269,26 @@ class Qwen3VLEngine(Engine):
         mixed-precision dtype.
         """
         batch: ModelInputs = self.data_kit.to_device(ctx.data, self.device)
+        cp_sequence_specs: list[CPSequenceSpec] | None = None
+
+        if self.parallel_mesh.cp.active:
+            tokenizer = getattr(self.processor, "tokenizer", None)
+            pad_token_id = getattr(tokenizer, "pad_token_id", None)
+            if pad_token_id is None:
+                pad_token_id = getattr(self.unwrapped_model.config, "pad_token_id", 0)
+            spatial_merge_size = int(self.unwrapped_model.config.vision_config.spatial_merge_size)
+            visual_pad_scale = spatial_merge_size**2
+            cp_sequence_specs = [
+                CPSequenceSpec("input_ids", dim=1, pad_value=int(pad_token_id or 0)),
+                CPSequenceSpec("attention_mask", dim=1, pad_value=0),
+                CPSequenceSpec("labels", dim=1, pad_value=-100),
+                CPSequenceSpec("shift_labels", dim=1, pad_value=-100),
+                CPSequenceSpec("pack_segment_ids", dim=1, pad_value=0),
+                CPSequenceSpec("position_ids", dim=2, pad_value=0),
+                CPSequenceSpec("pixel_values", dim=0, pad_value=0, pad_scale=visual_pad_scale),
+                CPSequenceSpec("pixel_values_videos", dim=0, pad_value=0, pad_scale=visual_pad_scale),
+            ]
+            batch = self.cp_kit.pad_sequence_batch(batch, cp_sequence_specs)
 
         batch = prepare_packed_model_inputs(
             batch,
@@ -263,6 +296,10 @@ class Qwen3VLEngine(Engine):
             attn_implementation=getattr(self.unwrapped_model.config, "_attn_implementation", None),
             mask_dtype=self.dtype if self.dtype.is_floating_point else torch.float32,
         )
+
+        if self.parallel_mesh.cp.active:
+            assert cp_sequence_specs is not None
+            batch = self.cp_kit.slice_sequence_batch(batch, cp_sequence_specs)
 
         ctx.data = self.data_kit.to_device(batch, self.device)
         return ctx
@@ -364,6 +401,8 @@ class Qwen3VLEngine(Engine):
 
         self.scaler.unscale_(self.optimizer)
         self.token_loss_kit.rescale_grads(self.model.parameters(), token_loss_stats)
+        if self.parallel_mesh.cp.active:
+            sync_cp_grads(self.model)
         max_grad_norm = self.config.optim.clip_grad_norm
         if max_grad_norm is not None:
             clip_grad_norm_(self.model, max_grad_norm)

@@ -5,12 +5,14 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .qwen3_vl import (
         calculate_model_flops,
+        patch_qwen3vl_context_parallel,
         patch_qwen3vl_conv3d,
         patch_qwen3vl_model_flops,
     )
 
 __all__ = [
     "calculate_model_flops",
+    "patch_qwen3vl_context_parallel",
     "patch_qwen3vl_conv3d",
     "patch_qwen3vl_model_flops",
 ]
