@@ -127,27 +127,6 @@ def _adjust_attention_for_tp(module, tp_mesh) -> None:
 Keep postprocessors idempotent. Prefer updating derived module fields over
 mutating config objects.
 
-## Replicated Parameter Grad Sync
-
-Review trainable params that are not sharded by the TP plan but consume TP-local
-activations.
-
-Common cases:
-
-- Q/K layernorm;
-- `q_norm` / `k_norm`;
-- per-head norm or scale params;
-- small adapter params placed after a colwise projection.
-
-Rules:
-
-- If the param remains replicated, all-reduce its grad over the tensor group.
-- If CP also syncs that param, use one combined delta hook over both groups, or
-  explicitly replace/exclude one hook.
-- Do not stack independent post-accumulate delta hooks on the same param.
-- Install param hooks after FSDP2 unless you know the wrapper preserves them.
-- Add parity metrics for these params; loss/logits can hide bad local grads.
-
 ## Mesh Rules
 
 `parallel.mesh.tensor` is the TP size. In this repo, TP is applied before FSDP2
@@ -231,8 +210,6 @@ Common failure signals:
 - wrong `"col"` versus `"row"` placement;
 - sharded router input that expected full hidden states;
 - output projection missing the row-parallel reduction;
-- replicated TP-local norm grads missing tensor-group sync;
-- TP and CP grad hooks both updating the same param independently;
 - tensor-group ranks reading different samples or different packed-batch layouts;
 - TP-on run using a different precision, dropout state, or packed batch layout.
 

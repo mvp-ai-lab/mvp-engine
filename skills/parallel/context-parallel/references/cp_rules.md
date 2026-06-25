@@ -22,13 +22,15 @@ to use it. The runtime also attaches a `_cp_grad_sync` object when
 - `context` is not data parallel and must not multiply global batch size.
 - Exclude both `tensor` and `context` from samplers/loaders that choose dataset
   shards.
-- Include `context` in token/loss statistics reductions for token-normalized
-  training.
+- Reduce token/loss statistics across non-`tensor` mesh dimensions. CP combines
+  parameter gradients through explicit CP gradient synchronization.
+- Use `parallel.backend_kwargs.cp.grad_reduce_dtype=float32` for BF16/FP16
+  training to reduce CP gradient summation error. Use `same` only when CP
+  gradient sync bandwidth is the bottleneck.
 - Keep mesh order as `replicate / shard / context / tensor`. PyTorch TP needs
   `tensor` to be innermost.
-- CP may run with `tp.builtin_sequence_parallel=true`. CP uses the context mesh;
-  SP still reuses the tensor mesh, so validate per-module sequence dimensions
-  and shared gradient ownership together.
+- CP is not currently compatible with `tp.builtin_sequence_parallel=true`;
+  `parallelize_model` rejects this combination.
 
 ## Ulysses Tensor Shapes
 
@@ -51,30 +53,30 @@ Supported QKV layouts are `BSHD` and `BHSD`.
 
 ## Boundary Rules
 
-- Shard `input_ids`, labels, attention masks, position ids, and RoPE caches with
-  the same context layout.
+- Recipe `train_pre_step` should return ready local batches: local
+  `input_ids`, labels, shifted labels, `pack_segment_ids`, position ids, and
+  model-family local media tensors.
 - Build global `position_ids` first, then extract local `position_ids`.
-- Build global next-token labels first, then extract local labels.
-- Prefer `mvp_engine.kit.CPKit.prepare_causal_batch(...)` in recipe engines. It
-  pads, globally shifts labels, extracts token-aligned tensors, and returns
-  local global-position ids with one layout contract.
-- Keep `split_strategy="text"` for text-only data. For multimodal packed
-  batches, use `split_strategy="multimodal"` and provide
-  `global_packed_seq_params.cu_seqlens_q` plus per-media `grid_thw` metadata.
-- The text split rejects multimodal media metadata under CP to avoid silently
-  splitting image/video spans across context ranks.
-- Multimodal image split points must stay on image boundaries, so each context
-  rank owns an integer number of images. If there are fewer images than context
-  ranks, empty ranks use dummy padded entries.
-- Multimodal video split points must stay on video boundaries, or on tubelet
-  boundaries when `temporal_patch_size > 1`. Do not split inside a tubelet;
-  `num_frames` is required for tubelet-aware video splitting.
-- Normalize token loss with token/loss statistics reduced across context ranks.
+- DataKit must provide global, segment-safe `shift_labels`; CP then extracts
+  local labels and local shifted labels together.
+- Use the base `mvp_engine.kit.CPKit` for dense sequence padding, rank-local
+  slicing with local token-count metadata refresh, sequence gather, and
+  sequence/hidden layout transforms.
+- Put model-family media semantics in CPKit extensions, such as
+  `QwenVLCPKit`; do not add Qwen/VL field names to the base kit.
+- Build `CPSequenceSpec` lists in the recipe so batch ownership is explicit.
+  Model structure values such as Qwen-VL `spatial_merge_size` should stay in
+  the recipe/model patch and be passed as `pad_scale=spatial_merge_size**2`.
+- Avoid sequence holes. Multimodal model patches may temporarily gather local
+  embeddings into full-sequence / hidden-sharded layout for visual merge, then
+  scatter back to local-sequence / full-hidden layout before the LLM.
+- Reduce token/loss stats across the unique token-owner group, keep gradient
+  scale based on the data-parallel average world size, and combine CP parameter
+  gradients explicitly before clipping.
 - Attention masks must match the extracted layout. If the recipe cannot express
   a local mask, restrict smoke/training to supported causal batches.
-- Multimodal placeholder spans, such as image/video tokens, must be all-or-none
-  local after extraction. Select feature tensors in the same order that local
-  placeholder tokens appear, or reject/resample spans that cross context ranks.
+- Multimodal placeholder spans may cross context ranks only after the visual
+  features have been merged into dense embeddings and the LLM sequence is sliced.
 - Routers/top-k/metrics that require global sequence context need explicit
   gather/reduce logic or must be disabled for smoke validation.
 - Generation and KV-cache inference need a separate design; do not assume the
@@ -86,8 +88,12 @@ Supported QKV layouts are `BSHD` and `BHSD`.
   with `0`.
 - Build packed position ids and attention-isolation metadata on the global
   sequence before CP extraction.
-- Pass raw unshifted labels into `CPKit.prepare_causal_batch(...)`; it performs
-  global next-token shift and masks cross-segment labels.
+- Build next-token `shift_labels` in DataKit on the global dense sequence before
+  slicing them with `CPKit.slice_sequence_batch(...)`.
+- Build packed model metadata before slicing, then keep global topology metadata
+  such as `cu_seq_lens_*` while slicing dense token-aligned tensors.
+- Prefer packed `cu_seq_lens_*` metadata for Qwen-VL CP. Do not carry prebuilt
+  multi-dimensional attention masks into `CPKit.slice_sequence_batch(...)`.
 - Use segment-isolated causal attention for packed batches. Plain causal masks
   allow cross-sample attention and are incorrect.
 - Context ranks must read the same packed samples; do not shard packing or data
@@ -125,7 +131,7 @@ When TP also syncs a parameter, coordinate ownership:
 - RoPE positions restart from zero on every context rank.
 - recipes compute labels with a local-only shift.
 - multimodal placeholder spans are split across context ranks.
-- CP+SP is enabled without an active tensor mesh or without validated
-  sequence-dimension and gradient handling.
+- `tp.builtin_sequence_parallel=true` is enabled while `parallel.mesh.context`
+  is active.
 - `_cp_grad_sync` is attached but `sync_cp_grads(model)` is never called.
 - CP and TP sync paths both update the same parameter independently.

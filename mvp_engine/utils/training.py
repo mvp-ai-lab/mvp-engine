@@ -12,12 +12,6 @@ import torch.nn as nn
 from torch.distributed.fsdp import FSDPModule
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from mvp_engine.distributed.utils import (
-    get_mesh_dim_group,
-    get_mesh_identity_key,
-    get_mesh_reduce_device,
-)
-
 try:
     from torch.distributed.tensor import DTensor
 except Exception:  # pragma: no cover - runtime-dependent
@@ -40,7 +34,10 @@ def _get_dtensor_placements_key(grad: torch.Tensor) -> tuple[str, ...]:
 
 def _get_dtensor_reduce_device(grad: torch.Tensor) -> torch.device:
     """Return a device compatible with the DTensor mesh process group collectives."""
-    return get_mesh_reduce_device(grad.device_mesh)
+    device_type = grad.device_mesh.device_type
+    if device_type == "cuda":
+        return torch.device("cuda", torch.cuda.current_device())
+    return torch.device(device_type)
 
 
 def _get_dtensor_group_total_norm(group_grads: list[torch.Tensor], norm_type: float) -> torch.Tensor:
@@ -77,7 +74,7 @@ def _get_dtensor_group_total_norm(group_grads: list[torch.Tensor], norm_type: fl
     grad0 = group_grads[0]
     for mesh_dim, placement in enumerate(grad0.placements):
         if placement.is_shard() or placement.is_partial():
-            dist.all_reduce(total_norm, op=reduce_op, group=get_mesh_dim_group(grad0.device_mesh, mesh_dim))
+            dist.all_reduce(total_norm, op=reduce_op, group=grad0.device_mesh.get_group(mesh_dim))
 
     if not math.isinf(norm_type):
         total_norm = total_norm ** (1.0 / norm_type)
@@ -108,7 +105,10 @@ def _get_grad_mesh_key(grad: torch.Tensor) -> tuple:
     mesh = grad.device_mesh
     return (
         "dtensor",
-        *get_mesh_identity_key(mesh),
+        mesh.device_type,
+        tuple(mesh.mesh.shape),
+        tuple(mesh.mesh.reshape(-1).tolist()),
+        tuple(mesh.mesh_dim_names or ()),
         _get_dtensor_placements_key(grad),
     )
 

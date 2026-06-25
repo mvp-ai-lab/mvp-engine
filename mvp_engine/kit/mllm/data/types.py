@@ -53,6 +53,7 @@ class ModelInputs(TypedDict):
     input_ids: torch.Tensor
     attention_mask: torch.Tensor | None
     labels: torch.Tensor
+    shift_labels: torch.Tensor
     pack_segment_ids: torch.Tensor
     source_sample_num: torch.Tensor
     num_input_tokens: torch.Tensor

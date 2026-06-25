@@ -15,7 +15,7 @@ Use `MLLMDataKit` as the standard data setup API for MLLM recipes. The kit
 builds a complete mvp-dataset pipeline from explicit specs:
 
 - `build_processor(...)` loads and normalizes the processor;
-- `build_distribution_spec(...)` derives data-parallel mesh placement;
+- `build_distribution_spec(...)` builds explicit data-parallel mesh placement;
 - `build_dataset(...)` builds source, guards, sample wrapping, packing,
   reference resolution, and model-input conversion;
 - `build_collator(...)` pads packed samples and delegates media collation;
@@ -156,7 +156,8 @@ Dataset.from_source
 ```
 
 The collator then pads token fields, pads `pack_segment_ids` with `0`, creates
-token counters, and delegates media fields to `MLLMMediaHandler.collate(...)`.
+segment-safe `shift_labels`, creates token counters, and delegates media fields
+to `MLLMMediaHandler.collate(...)`.
 
 ### 4. Extend At The Smallest Boundary
 

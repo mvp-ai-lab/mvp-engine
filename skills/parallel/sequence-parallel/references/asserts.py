@@ -96,12 +96,10 @@ def assert_before_train_end(engine) -> None:
     tp_config = getattr(model.__class__, "TP_MODULE_CONFIG", None)
     sp_config = getattr(model.__class__, "SEQUENCE_PARALLEL_MODULE_CONFIG", {})
     sequence_dim = getattr(model.__class__, "SEQUENCE_PARALLEL_SEQUENCE_DIM", 1)
-    module_sequence_dims = getattr(model.__class__, "SEQUENCE_PARALLEL_MODULE_SEQUENCE_DIMS", {})
 
     assert isinstance(tp_config, dict) and tp_config, "SP-active smoke run must use a non-empty TP_MODULE_CONFIG."
     assert isinstance(sp_config, dict), "SEQUENCE_PARALLEL_MODULE_CONFIG must be a dict when present."
     assert isinstance(sequence_dim, int), "SEQUENCE_PARALLEL_SEQUENCE_DIM must be an int."
-    assert isinstance(module_sequence_dims, dict), "SEQUENCE_PARALLEL_MODULE_SEQUENCE_DIMS must be a dict when present."
 
     for module_name, plan in tp_config.items():
         assert isinstance(module_name, str) and module_name, "TP_MODULE_CONFIG keys must be runtime class names."
@@ -116,10 +114,6 @@ def assert_before_train_end(engine) -> None:
         assert set(plan.values()) <= ALLOWED_SP_MODES, (
             f"SP plan for {module_name} must use only {sorted(ALLOWED_SP_MODES)} unless this assertion is adapted."
         )
-
-    for module_name, module_sequence_dim in module_sequence_dims.items():
-        assert isinstance(module_name, str) and module_name, "SP sequence-dim keys must be runtime class names."
-        assert isinstance(module_sequence_dim, int), "SP module sequence dims must be ints."
 
     has_dtensor_param = any(hasattr(param, "to_local") for param in model.parameters())
     assert has_dtensor_param, "SP-active smoke run did not produce any DTensor parameters."

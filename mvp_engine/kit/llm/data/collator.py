@@ -9,7 +9,7 @@ from .types import ModelInputs
 
 
 class LLMBatchCollator:
-    """Pad packed token fields and add token-count metrics."""
+    """Pad packed token fields, build shifted labels, and add token-count metrics."""
 
     def __init__(self, pad_token_id: int, *, ignore_index: int = -100) -> None:
         """Store padding values used during batch collation."""
@@ -52,8 +52,15 @@ class LLMBatchCollator:
             )
 
         num_input_tokens = attention_mask.sum(dim=-1)
-        shifted_labels = torch.nn.functional.pad(labels, (0, 1), value=self.ignore_index)[..., 1:]
-        num_loss_tokens = shifted_labels.ne(self.ignore_index).sum(dim=-1)
+        shift_labels = torch.nn.functional.pad(labels[:, 1:], (0, 1), value=self.ignore_index)
+        same_segment = torch.nn.functional.pad(
+            pack_segment_ids[:, 1:] == pack_segment_ids[:, :-1],
+            (0, 1),
+            value=False,
+        )
+        shift_labels = shift_labels.masked_fill(~(same_segment & pack_segment_ids.ne(0)), self.ignore_index)
+        num_loss_tokens = shift_labels.ne(self.ignore_index).sum(dim=-1)
+        model_inputs["shift_labels"] = shift_labels
         model_inputs["num_input_tokens"] = num_input_tokens
         model_inputs["num_loss_tokens"] = num_loss_tokens
         model_inputs["num_source_samples"] = source_sample_num.clone()

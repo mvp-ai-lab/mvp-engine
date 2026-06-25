@@ -34,14 +34,14 @@ def test_engine_structure(engine_class: type) -> None:
         "backward_step must pass total/effective token counts."
     )
     assert "reduce_window" in optimizer_source, "optimizer_step must call TokenNormedLossKit.reduce_window()."
-    assert "rescale_gradients" in optimizer_source, "optimizer_step must call TokenNormedLossKit.rescale_gradients()."
+    assert "rescale_grads" in optimizer_source, "optimizer_step must call TokenNormedLossKit.rescale_grads()."
     assert "clip_grad" in optimizer_source, "Gradient clipping must remain after token rescale."
     assert "tokens/effective" in post_source and "perf/toks_per_sec" in post_source, (
         "train_post_step must log token metrics from global reduced values."
     )
 
-    _assert_order(optimizer_source, "unscale_", "rescale_gradients")
-    _assert_order(optimizer_source, "rescale_gradients", "clip_grad")
+    _assert_order(optimizer_source, "unscale_", "rescale_grads")
+    _assert_order(optimizer_source, "rescale_grads", "clip_grad")
 
 
 def assert_train_post_step_end(engine, ctx) -> None:

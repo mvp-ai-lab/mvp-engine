@@ -86,6 +86,7 @@ class BaseCPConfig(BaseModel):
     attn_implementation: Literal["sdpa", "flash_attention_2"] = "flash_attention_2"
     grad_sync: bool = True
     grad_bucket_mb: int = Field(128, ge=1)
+    grad_reduce_dtype: Literal["same", "float32"] = "float32"
     grad_sync_exclude: list[str] = Field(default_factory=list)
 
 

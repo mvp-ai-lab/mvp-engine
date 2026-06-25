@@ -25,14 +25,11 @@ Optional sequence-parallel plans live on the same top-level model class:
 ```python
 SEQUENCE_PARALLEL_MODULE_CONFIG: dict[str, object]
 SEQUENCE_PARALLEL_SEQUENCE_DIM: int = 1
-SEQUENCE_PARALLEL_MODULE_SEQUENCE_DIMS: dict[str, int] = {}
 ```
 
 `SEQUENCE_PARALLEL_MODULE_CONFIG` maps runtime module class names to direct child
 module names with the `"sequence"` style. The runtime merges it with
 `TP_MODULE_CONFIG` before calling `parallelize_module(...)`.
-`SEQUENCE_PARALLEL_MODULE_SEQUENCE_DIMS` overrides the default sequence dim for
-runtime classes whose hidden states use a different layout.
 
 ## Mesh Rules
 
@@ -48,8 +45,8 @@ runtime classes whose hidden states use a different layout.
 - Do not add `parallel.mesh.sequence`.
 - The product of explicit or inferred mesh dimensions must match world size.
 - Preserve global batch semantics when changing `replicate`.
-- SP can be combined with CP. SP uses `parallel.mesh.tensor`; CP uses
-  `parallel.mesh.context`, and both are model-parallel dimensions.
+- SP is not currently compatible with CP. `parallelize_model` rejects
+  `tp.builtin_sequence_parallel=true` when `parallel.mesh.context > 1`.
 
 ## Data-Loading Rules
 
@@ -89,9 +86,7 @@ modules produce sequence-sharded outputs. Do not assume every op inside a
 TP-covered module sees the same local sequence length as its caller.
 
 Use `SEQUENCE_PARALLEL_SEQUENCE_DIM = 1` for `[batch, seq, hidden]` tensors. Use
-`0` for `[seq, batch, hidden]` or 2D `[seq, hidden]` tensors. Use
-`SEQUENCE_PARALLEL_MODULE_SEQUENCE_DIMS` for runtime classes whose layout differs
-from the default.
+`0` for `[seq, batch, hidden]` or 2D `[seq, hidden]` tensors.
 
 ## Planning Rules
 

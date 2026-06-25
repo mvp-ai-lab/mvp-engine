@@ -12,30 +12,12 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .utils import get_context_parallel_rank, get_context_parallel_size, get_world_size
+from .utils import get_world_size
 
 try:
     from torch.distributed.tensor import DTensor
 except Exception:  # pragma: no cover - runtime-dependent
     DTensor = ()
-
-
-def get_local_sequence_position_indices(
-    global_sequence_length: int,
-    device_mesh,
-    *,
-    device: torch.device | None = None,
-) -> torch.Tensor:
-    """Return global token positions held by this context rank."""
-    context_size = get_context_parallel_size(device_mesh)
-    positions = torch.arange(global_sequence_length, device=device)
-    if context_size <= 1:
-        return positions
-    if global_sequence_length % context_size != 0:
-        raise ValueError("Global sequence length must be divisible by context size.")
-
-    context_rank = get_context_parallel_rank(device_mesh)
-    return positions.chunk(context_size, dim=0)[context_rank]
 
 
 class SeqAllToAll4D(torch.autograd.Function):
@@ -274,27 +256,6 @@ def run_attention(
     if normalized == _FLASH_ATTENTION_IMPL and query.device.type == "npu":
         normalized = _NPU_ATTENTION_IMPL
 
-    if attention_mask is not None and _has_cu_seqlens(cu_seq_lens_q, cu_seq_lens_k, max_length_q, max_length_k):
-        return _compact_masked_varlen_attention(
-            query,
-            key,
-            value,
-            attn_implementation=normalized,
-            attention_mask=attention_mask,
-            cu_seq_lens_q=cu_seq_lens_q,
-            cu_seq_lens_k=cu_seq_lens_k,
-            max_length_q=max_length_q,
-            max_length_k=max_length_k,
-            dropout_p=dropout_p,
-            scaling=scaling,
-            is_causal=is_causal,
-            window_size=window_size,
-            softcap=softcap,
-            alibi_slopes=alibi_slopes,
-            deterministic=deterministic,
-            return_attn_probs=return_attn_probs,
-        )
-
     if normalized == _FLASH_ATTENTION_IMPL:
         return _flash_attention(
             query,
@@ -442,73 +403,6 @@ def _normalize_2d_attention_mask(attention_mask: torch.Tensor) -> torch.Tensor:
     if attention_mask.numel() > 0 and (torch.any(attention_mask < 0) or torch.any(attention_mask > 1)):
         raise ValueError("attention_mask must be a 0/1 mask.")
     return attention_mask.to(dtype=torch.bool)
-
-
-def _compact_masked_varlen_attention(
-    query: torch.Tensor,
-    key: torch.Tensor,
-    value: torch.Tensor,
-    *,
-    attn_implementation: str,
-    attention_mask: torch.Tensor,
-    cu_seq_lens_q: torch.Tensor,
-    cu_seq_lens_k: torch.Tensor,
-    max_length_q: int,
-    max_length_k: int,
-    dropout_p: float,
-    scaling: float | None,
-    is_causal: bool,
-    window_size: tuple[int, int],
-    softcap: float,
-    alibi_slopes: torch.Tensor | None,
-    deterministic: bool,
-    return_attn_probs: bool,
-) -> torch.Tensor:
-    if return_attn_probs:
-        raise ValueError("Compacted packed CP attention does not support return_attn_probs.")
-    if query.shape[:2] != key.shape[:2] or query.shape[:2] != value.shape[:2]:
-        raise ValueError("Compacted packed CP attention requires self-attention with matching q/k/v sequence shapes.")
-
-    attention_mask = _normalize_2d_attention_mask(attention_mask)
-    if tuple(attention_mask.shape) != tuple(query.shape[:2]):
-        raise ValueError(
-            "Compacted packed CP attention_mask must match gathered query shape "
-            f"{tuple(query.shape[:2])}, got {tuple(attention_mask.shape)}."
-        )
-
-    flat_mask = attention_mask.reshape(-1)
-    indices = torch.nonzero(flat_mask, as_tuple=False).flatten()
-    if indices.numel() == 0:
-        raise ValueError("Compacted packed CP attention requires at least one valid token.")
-
-    flat_shape = (query.shape[0] * query.shape[1], query.shape[2], query.shape[3])
-    compact_query = query.reshape(flat_shape).index_select(0, indices).unsqueeze(0)
-    compact_key = key.reshape(flat_shape).index_select(0, indices).unsqueeze(0)
-    compact_value = value.reshape(flat_shape).index_select(0, indices).unsqueeze(0)
-
-    compact_output = run_attention(
-        compact_query,
-        compact_key,
-        compact_value,
-        attn_implementation=attn_implementation,
-        attention_mask=None,
-        cu_seq_lens_q=cu_seq_lens_q,
-        cu_seq_lens_k=cu_seq_lens_k,
-        max_length_q=max_length_q,
-        max_length_k=max_length_k,
-        dropout_p=dropout_p,
-        scaling=scaling,
-        is_causal=is_causal,
-        window_size=window_size,
-        softcap=softcap,
-        alibi_slopes=alibi_slopes,
-        deterministic=deterministic,
-        return_attn_probs=False,
-    )
-
-    flat_output = torch.zeros_like(query.reshape(flat_shape))
-    flat_output.index_copy_(0, indices, compact_output.reshape(indices.numel(), query.shape[2], query.shape[3]))
-    return flat_output.reshape_as(query)
 
 
 def _flash_attention(
@@ -909,14 +803,18 @@ class CPGradSync:
         cp_mesh,
         *,
         bucket_mb: int = 128,
+        reduce_dtype: str = "float32",
         exclude: Sequence[str] = (),
     ) -> None:
         if bucket_mb <= 0:
             raise ValueError(f"bucket_mb must be positive, got {bucket_mb}.")
+        if reduce_dtype not in {"same", "float32"}:
+            raise ValueError(f"reduce_dtype must be 'same' or 'float32', got {reduce_dtype!r}.")
 
         self.model = model
         self.group = cp_mesh.get_group() if hasattr(cp_mesh, "get_group") else cp_mesh
         self.bucket_bytes = int(bucket_mb) * 1024 * 1024
+        self.reduce_dtype = reduce_dtype
         self.exclude = tuple(str(pattern) for pattern in exclude)
 
     @torch.no_grad()
@@ -929,7 +827,7 @@ class CPGradSync:
         tensors = 0
         bytes_count = 0
         grouped_items: dict[
-            tuple[torch.device, torch.dtype],
+            tuple[torch.device, torch.dtype, torch.dtype],
             list[tuple[torch.Tensor, torch.Tensor]],
         ] = {}
 
@@ -948,17 +846,21 @@ class CPGradSync:
                 raise ValueError(f"CP grad sync does not support sparse gradients: {name}.")
 
             flat_grad = local_grad.detach().reshape(-1)
-            grouped_items.setdefault((flat_grad.device, flat_grad.dtype), []).append((local_grad, flat_grad))
+            grad_dtype = flat_grad.dtype
+            reduce_dtype = grad_dtype
+            if self.reduce_dtype == "float32" and grad_dtype in (torch.float16, torch.bfloat16):
+                reduce_dtype = torch.float32
+            grouped_items.setdefault((flat_grad.device, grad_dtype, reduce_dtype), []).append((local_grad, flat_grad))
 
-        for (device, dtype), items in grouped_items.items():
+        for (device, _grad_dtype, reduce_dtype), items in grouped_items.items():
             bucket_items: list[tuple[torch.Tensor, torch.Tensor]] = []
             bucket_numel = 0
-            dtype_size = torch.empty((), device=device, dtype=dtype).element_size()
+            reduce_dtype_size = torch.empty((), device=device, dtype=reduce_dtype).element_size()
 
             for local_grad, flat_grad in items:
-                item_bytes = flat_grad.numel() * dtype_size
-                if bucket_items and (bucket_numel + flat_grad.numel()) * dtype_size > self.bucket_bytes:
-                    self._sync_bucket(bucket_items, bucket_numel, device, dtype)
+                item_bytes = flat_grad.numel() * reduce_dtype_size
+                if bucket_items and (bucket_numel + flat_grad.numel()) * reduce_dtype_size > self.bucket_bytes:
+                    self._sync_bucket(bucket_items, bucket_numel, device, reduce_dtype)
                     buckets += 1
                     bucket_items = []
                     bucket_numel = 0
@@ -969,7 +871,7 @@ class CPGradSync:
                 bytes_count += item_bytes
 
             if bucket_items:
-                self._sync_bucket(bucket_items, bucket_numel, device, dtype)
+                self._sync_bucket(bucket_items, bucket_numel, device, reduce_dtype)
                 buckets += 1
 
         return CPGradSyncStats(buckets=buckets, tensors=tensors, bytes=bytes_count)
@@ -979,9 +881,9 @@ class CPGradSync:
         bucket_items: list[tuple[torch.Tensor, torch.Tensor]],
         bucket_numel: int,
         device: torch.device,
-        dtype: torch.dtype,
+        reduce_dtype: torch.dtype,
     ) -> None:
-        bucket = torch.empty(bucket_numel, device=device, dtype=dtype)
+        bucket = torch.empty(bucket_numel, device=device, dtype=reduce_dtype)
         offset = 0
         for _, flat_grad in bucket_items:
             next_offset = offset + flat_grad.numel()
@@ -1002,10 +904,17 @@ def attach_cp_grad_sync(
     cp_mesh,
     *,
     bucket_mb: int = 128,
+    reduce_dtype: str = "float32",
     exclude: Sequence[str] = (),
 ) -> nn.Module:
     """Attach a CP gradient synchronizer to a model."""
-    model._cp_grad_sync = CPGradSync(model, cp_mesh, bucket_mb=bucket_mb, exclude=exclude)
+    model._cp_grad_sync = CPGradSync(
+        model,
+        cp_mesh,
+        bucket_mb=bucket_mb,
+        reduce_dtype=reduce_dtype,
+        exclude=exclude,
+    )
     return model
 
 
@@ -1057,10 +966,6 @@ def parallelize_model_with_context_parallel(model: nn.Module, cp_mesh, backend_k
             query = query.transpose(1, 2).contiguous()
             key = key.transpose(1, 2).contiguous()
             value = value.transpose(1, 2).contiguous()
-
-        cp_attention_mask = kwargs.get("cp_attention_mask")
-        if cp_attention_mask is not None:
-            attention_mask = cp_attention_mask
 
         return (
             attention(

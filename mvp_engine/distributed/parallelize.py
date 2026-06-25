@@ -179,6 +179,7 @@ def parallelize_model(
                 parallelized_model,
                 cp_mesh,
                 bucket_mb=cp_backend_kwargs.get("grad_bucket_mb", 128),
+                reduce_dtype=cp_backend_kwargs.get("grad_reduce_dtype", "float32"),
                 exclude=cp_backend_kwargs.get("grad_sync_exclude", []),
             )
 

@@ -22,27 +22,27 @@ The kit provides:
 - `build_loss_guard(...)` and `guard_loss(...)` for optional per-token spike
   skipping;
 - `reduce_window()`;
-- `rescale_gradients(...)`;
+- `rescale_grads(...)`;
 - `reset()`.
 
 ## Required Inputs
 
 - recipe engine forward/backward/optimizer-step hooks;
 - batch fields for total and supervised token counts;
-- data-parallel world size for gradient scale;
-- token-statistics world size and process group for loss/token reduction;
+- `parallel_mesh` for gradient-average and token-statistics communication
+  layouts;
 - model compatibility with the chunked causal-LM loss patch;
 - gradient accumulation divisor.
 
 ## Workflow
 
-1. Create the kit in engine init with the local reduction device, data-parallel
-   world size, and token-statistics group.
+1. Create the kit in engine init with the local reduction device and
+   `parallel_mesh`.
 2. Patch the model if it does not already return unreduced per-token loss.
 3. In `backward_step()`, sum the microbatch loss and call
    `accumulate_microbatch(...)`.
 4. At synchronized optimizer step, call `reduce_window()`, unscale the optimizer,
-   then call `rescale_gradients(...)`.
+   then call `rescale_grads(...)`.
 5. Clip gradients, step optimizer/scheduler, log reduced loss and token counts,
    then call `reset()`.
 

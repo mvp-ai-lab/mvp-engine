@@ -141,8 +141,17 @@ class MLLMTextOnlyBatchGuard:
             batch[key] = value.detach().clone() if isinstance(value, torch.Tensor) else value
 
         batch["num_input_tokens"] = batch["attention_mask"].sum(dim=-1)
-        shifted_labels = torch.nn.functional.pad(batch["labels"], (0, 1), value=self.ignore_index)[..., 1:]
-        batch["num_loss_tokens"] = shifted_labels.ne(self.ignore_index).sum(dim=-1)
+        shift_labels = torch.nn.functional.pad(batch["labels"][:, 1:], (0, 1), value=self.ignore_index)
+        same_segment = torch.nn.functional.pad(
+            batch["pack_segment_ids"][:, 1:] == batch["pack_segment_ids"][:, :-1],
+            (0, 1),
+            value=False,
+        )
+        batch["shift_labels"] = shift_labels.masked_fill(
+            ~(same_segment & batch["pack_segment_ids"].ne(0)),
+            self.ignore_index,
+        )
+        batch["num_loss_tokens"] = batch["shift_labels"].ne(self.ignore_index).sum(dim=-1)
         batch["num_source_samples"] = batch["source_sample_num"].clone()
         batch["total_tokens"] = int(batch["num_input_tokens"].sum().item())
         batch["effective_tokens"] = int(batch["num_loss_tokens"].sum().item())

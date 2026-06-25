@@ -36,7 +36,7 @@ class MLLMBatchCollator:
         self.ignore_index = ignore_index
 
     def __call__(self, batch: list[dict[str, Any]]) -> dict[str, Any]:
-        """Pad token tensors, collate media tensors, and add token-count metrics.
+        """Pad token tensors, build shifted labels, collate media tensors, and add token-count metrics.
 
         Args:
             batch: Packed model-input samples yielded by the dataset pipeline.
@@ -81,8 +81,18 @@ class MLLMBatchCollator:
         model_inputs.update(self.media_handler.collate(batch))
 
         model_inputs["num_input_tokens"] = model_inputs["attention_mask"].sum(dim=-1)
-        shifted_labels = torch.nn.functional.pad(model_inputs["labels"], (0, 1), value=self.ignore_index)[..., 1:]
-        model_inputs["num_loss_tokens"] = shifted_labels.ne(self.ignore_index).sum(dim=-1)
+        shift_labels = torch.nn.functional.pad(model_inputs["labels"][:, 1:], (0, 1), value=self.ignore_index)
+        same_segment = torch.nn.functional.pad(
+            model_inputs["pack_segment_ids"][:, 1:] == model_inputs["pack_segment_ids"][:, :-1],
+            (0, 1),
+            value=False,
+        )
+        shift_labels = shift_labels.masked_fill(
+            ~(same_segment & model_inputs["pack_segment_ids"].ne(0)),
+            self.ignore_index,
+        )
+        model_inputs["shift_labels"] = shift_labels
+        model_inputs["num_loss_tokens"] = shift_labels.ne(self.ignore_index).sum(dim=-1)
         model_inputs["num_source_samples"] = model_inputs["source_sample_num"].clone()
         model_inputs["total_tokens"] = int(model_inputs["num_input_tokens"].sum().item())
         model_inputs["effective_tokens"] = int(model_inputs["num_loss_tokens"].sum().item())

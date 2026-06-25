@@ -261,7 +261,7 @@ class QwenImageHandler(MLLMMediaTypeHandler):
         processor_size = getattr(image_processor, "size", {})
         min_pixels = getattr(processor, "min_image_size", None)
         max_pixels = getattr(processor, "max_image_size", None)
-        if isinstance(processor_size, dict):
+        if hasattr(processor_size, "get"):
             min_pixels = min_pixels if min_pixels is not None else processor_size.get("shortest_edge")
             max_pixels = max_pixels if max_pixels is not None else processor_size.get("longest_edge")
         if not isinstance(min_pixels, int) or min_pixels <= 0:

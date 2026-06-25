@@ -32,8 +32,6 @@ Identify these before editing:
 - repeated module classes containing TP-covered linears;
 - direct child names of target `nn.Linear` modules;
 - forward code that reshapes, splits, indexes, or caches head/expert metadata;
-- trainable replicated params that consume TP-local activations, such as Q/K
-  layernorm or per-head norm;
 - dataset or dataloader sharding code, including any `RuntimeContext`,
   `DataLoadMesh`, sampler, or rank/world-size logic;
 - current `parallel.mesh` values and intended TP size;
@@ -113,17 +111,7 @@ TP sharding. Common examples:
 Keep postprocessors local and idempotent. Mutate module runtime fields, not the
 global config.
 
-### 5. Sync Replicated TP-Local Params
-
-If a replicated trainable parameter sees only TP-local activations, sync its grad
-over the tensor group or shard it correctly. Typical cases: `q_norm`, `k_norm`,
-QK layernorm, and per-head norms.
-
-Install param grad hooks after FSDP2 when possible. If CP also syncs the same
-param, use one combined hook or coordinated hook ownership; do not stack
-independent delta hooks on that param.
-
-### 6. Update Mesh Config
+### 5. Update Mesh Config
 
 Set `parallel.mesh.tensor` to the desired TP size. In this repo, pure TP without
 FSDP2 is rejected by `parallelize_model(...)`, so `parallel.mesh.shard` must be
@@ -165,8 +153,6 @@ Review the modified recipe without running tests:
 - all metadata-sensitive modules were reviewed for postprocessing;
 - postprocessors, if present, are idempotent and mutate only local runtime
   metadata;
-- replicated params on TP-local activations have tensor-group grad sync;
-- TP and CP grad hooks do not conflict on shared params;
 - TP, FSDP2 prefetching, and other class attributes are merged on the same
   top-level class when used together;
 - mesh `replicate`, `shard`, and `tensor` are compatible with the intended world
@@ -230,7 +216,6 @@ across tensor ranks, while data-parallel ranks receive distinct slots.
 - State which model and config files changed.
 - Summarize the TP plan by runtime module class.
 - State whether TP postprocessors were added and why.
-- State whether any replicated TP-local params need grad sync.
 - State final mesh settings.
 - State how dataloader sharding preserves identical batches within tensor groups.
 - Report soft validation and hard validation status.

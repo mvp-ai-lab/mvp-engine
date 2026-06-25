@@ -97,8 +97,9 @@ Rules:
   from dataloader sharding;
 - when using `mvp_dataset`, pass a `device_mesh` plus `dp_dims` that excludes
   `tensor`, or provide an equivalent sampler/loader guarantee;
-- `context > 1` may be combined with SP; context remains a separate CP mesh
-  dimension, and both `tensor` and `context` stay out of data-parallel sharding;
+- `context > 1` is not currently compatible with
+  `tp.builtin_sequence_parallel=true`; `parallelize_model` rejects this
+  combination;
 - prefer `seq_len % parallel.mesh.tensor == 0`; otherwise pad/mask explicitly
   and verify every SP gather/scatter/reduce path handles uneven sequence shards;
 - check routed, packed, or cached sequence lengths too, not only the raw input
@@ -127,13 +128,10 @@ class <TopModelClass>(...):
     TP_MODULE_CONFIG = MODEL_TP_MODULE_CONFIG
     SEQUENCE_PARALLEL_MODULE_CONFIG = MODEL_SEQUENCE_PARALLEL_MODULE_CONFIG
     SEQUENCE_PARALLEL_SEQUENCE_DIM = 1
-    SEQUENCE_PARALLEL_MODULE_SEQUENCE_DIMS = {"<RuntimeClassWithDifferentLayout>": 0}
 ```
 
 Use `SEQUENCE_PARALLEL_SEQUENCE_DIM = 1` for `[batch, seq, hidden]`. Use `0` for
-`[seq, batch, hidden]` or 2D `[seq, hidden]` tensors. Use
-`SEQUENCE_PARALLEL_MODULE_SEQUENCE_DIMS` only when specific runtime classes use
-a different sequence dimension from the default.
+`[seq, batch, hidden]` or 2D `[seq, hidden]` tensors.
 
 ### 4. Review Boundaries
 
@@ -170,6 +168,7 @@ Review the modified recipe without running tests:
 
 - `builtin_sequence_parallel` is configured under `parallel.backend_kwargs.tp`;
 - `parallel.mesh.tensor > 1` and `parallel.mesh.shard > 1` for SP-active smoke;
+- `parallel.mesh.context` is not active when `tp.builtin_sequence_parallel=true`;
 - no `parallel.mesh.sequence` field was introduced;
 - dataloading uses identical samples for ranks that differ only on the `tensor`
   mesh dimension;
@@ -178,8 +177,6 @@ Review the modified recipe without running tests:
 - `TP_MODULE_CONFIG` remains bound on the real top-level model class;
 - `SEQUENCE_PARALLEL_MODULE_CONFIG`, if present, is bound on the same class;
 - `SEQUENCE_PARALLEL_SEQUENCE_DIM` matches the model hidden-state layout;
-- `SEQUENCE_PARALLEL_MODULE_SEQUENCE_DIMS`, if present, covers module classes
-  whose hidden-state layout differs from the default;
 - sequence plan values use `"sequence"` and TP plan values use `"col"` or
   `"row"`;
 - entry and output boundaries have been reviewed for full-sequence assumptions;
@@ -273,7 +270,6 @@ recipes/<recipe>/tests/skills/sequence-parallel/test_dataloader_identity_impact.
   groups.
 - Summarize `SEQUENCE_PARALLEL_MODULE_CONFIG` by runtime module class.
 - State whether `SEQUENCE_PARALLEL_SEQUENCE_DIM` was added and why.
-- State whether `SEQUENCE_PARALLEL_MODULE_SEQUENCE_DIMS` was added and why.
 - Report soft validation and hard validation status.
 - Call out any remaining gap, such as no SP-active smoke run or no parity check.
 

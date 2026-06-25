@@ -76,7 +76,7 @@ class LLMDataKit:
             source.dataset_path,
             context=context,
             resample=source.resample,
-            shuffle_mode=source.shuffle_mode,
+            shuffle_mode="chunk",
         )
         dataset = dataset.assemble(partial(LLMRawRowGuard, schema_handler=spec.sample.schema_handler))
         dataset = dataset.assemble(partial(LLMSampleAssembler, spec.sample))

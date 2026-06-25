@@ -9,8 +9,6 @@ import inspect
 import textwrap
 from pathlib import Path
 
-from mvp_engine.distributed.utils import get_context_parallel_size
-
 
 def test_file_structure(recipe_root: Path) -> None:
     """Verify context-parallel recipe wiring can be discovered."""
@@ -27,7 +25,9 @@ def test_file_structure(recipe_root: Path) -> None:
 
     assert "CP_MODULE_CONFIG" in model_source, "Top-level model class must bind CP_MODULE_CONFIG."
     assert "CPKit" in engine_source, "Engine should use CPKit for context-parallel batch helpers."
-    assert "prepare_causal_batch" in engine_source, "Engine should use CPKit to shard token tensors."
+    assert "slice_sequence_batch" in engine_source or "QwenVLCPKit" in engine_source, (
+        "Engine should use CPKit or a model-family CPKit extension to shard dense token tensors."
+    )
     assert "sync_cp_grads" in engine_source, "optimizer_step must sync CP gradients before clipping."
     assert "labels" in engine_source, "Engine must pass CP-shifted labels to local loss."
     assert "cp" in config_source, "Config must expose parallel.backend_kwargs.cp."
@@ -47,6 +47,7 @@ def test_config_structure(config) -> None:
         "cp.attn_implementation must be sdpa or flash_attention_2."
     )
     assert isinstance(cp_config.grad_sync, bool), "cp.grad_sync must be a bool."
+    assert cp_config.grad_reduce_dtype in {"same", "float32"}, "cp.grad_reduce_dtype must be same or float32."
 
     if mesh.context > 1 or mesh.context == -1:
         assert mesh.shard != 1, "This repo requires FSDP2 shard > 1 when context mesh is active."
@@ -75,7 +76,10 @@ def test_engine_structure(engine_class: type) -> None:
 def assert_before_train_end(engine) -> None:
     """After setup, verify a context-parallel smoke run produced expected runtime state."""
     cp_config = engine.config.parallel.backend_kwargs.cp
-    context_size = get_context_parallel_size(engine.device_mesh)
+    if hasattr(engine, "parallel_mesh"):
+        context_size = engine.parallel_mesh.cp.world_size
+    else:
+        context_size = engine.config.parallel.mesh.context
     if context_size <= 1:
         return
 
@@ -86,7 +90,10 @@ def assert_before_train_end(engine) -> None:
 
 def assert_train_pre_step_end(engine, ctx) -> None:
     """Verify token batches are sharded along sequence over context ranks."""
-    context_size = get_context_parallel_size(engine.device_mesh)
+    if hasattr(engine, "parallel_mesh"):
+        context_size = engine.parallel_mesh.cp.world_size
+    else:
+        context_size = engine.config.parallel.mesh.context
     if context_size <= 1:
         return
     if not isinstance(ctx.data, dict) or "input_ids" not in ctx.data:

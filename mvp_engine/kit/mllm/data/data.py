@@ -81,7 +81,7 @@ class MLLMDataKit:
         image_processor = getattr(processor, "image_processor", None)
         if image_processor is not None and (image_min_pixels is not None or image_max_pixels is not None):
             size = getattr(image_processor, "size", None)
-            if isinstance(size, dict):
+            if hasattr(size, "__setitem__"):
                 if image_min_pixels is not None:
                     size["shortest_edge"] = int(image_min_pixels)
                 if image_max_pixels is not None:
@@ -124,7 +124,7 @@ class MLLMDataKit:
             source.dataset_path,
             context=context,
             resample=source.resample,
-            shuffle_mode="fragment_aware",
+            shuffle_mode="chunk",
         )
         dataset = dataset.assemble(MLLMRawRowGuard)
         dataset = dataset.map(partial(MLLMSample.from_row, sample_spec=spec.sample))
