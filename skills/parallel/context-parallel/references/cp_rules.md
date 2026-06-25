@@ -67,6 +67,9 @@ Supported QKV layouts are `BSHD` and `BHSD`.
 - Build `CPSequenceSpec` lists in the recipe so batch ownership is explicit.
   Model structure values such as Qwen-VL `spatial_merge_size` should stay in
   the recipe/model patch and be passed as `pad_scale=spatial_merge_size**2`.
+- Model-family patches must follow the installed model implementation. Prefer
+  methods already present on the model object for media position or interpolation
+  metadata instead of relying on version-specific private Transformers helpers.
 - Avoid sequence holes. Multimodal model patches may temporarily gather local
   embeddings into full-sequence / hidden-sharded layout for visual merge, then
   scatter back to local-sequence / full-hidden layout before the LLM.
@@ -128,6 +131,8 @@ When TP also syncs a parameter, coordinate ownership:
 
 - `parallel.mesh.context > 1` on a model without `CP_MODULE_CONFIG`.
 - context ranks read different samples.
+- model-family patches import private helpers that are absent in the installed
+  Transformers version.
 - RoPE positions restart from zero on every context rank.
 - recipes compute labels with a local-only shift.
 - multimodal placeholder spans are split across context ranks.

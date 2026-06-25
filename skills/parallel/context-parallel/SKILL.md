@@ -201,7 +201,10 @@ For VLMs, split the patch by component:
   be cut on the model's valid media-token boundary.
 - **Media metadata:** derive local media position or interpolation metadata from
   global metadata plus the local media indices. Keep model constants, such as
-  merge size, in the recipe/model patch.
+  merge size, in the recipe/model patch. Follow the installed model
+  implementation's actual helpers or methods for position/interpolation data;
+  do not assume unstable Transformers-internal helper names exist across
+  versions.
 - **Feature merge point:** if text placeholders need a global sequence view,
   convert local sequence/full hidden to full sequence/hidden shard with
   `gather_seq_scatter_hidden(...)`, insert or scatter media features there, then
@@ -292,6 +295,8 @@ Expected result:
 
 If loss or gradients differ materially:
 
+- verify the model-family patch matches the installed model implementation and
+  does not depend on missing version-specific private helpers;
 - verify all context ranks saw the same logical batch;
 - verify `input_ids`, `shift_labels`, `pack_segment_ids`, and `position_ids`
   reconstruct the CP-off global tensors when gathered;
