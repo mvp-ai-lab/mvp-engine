@@ -51,10 +51,9 @@ def test_config_structure(config) -> None:
 
     if mesh.context > 1 or mesh.context == -1:
         assert mesh.shard != 1, "This repo requires FSDP2 shard > 1 when context mesh is active."
-        if backend_kwargs.tp.builtin_sequence_parallel:
-            assert mesh.tensor > 1 or mesh.tensor == -1, (
-                "CP+TP built-in sequence parallel requires parallel.mesh.tensor > 1 or -1."
-            )
+        assert not backend_kwargs.tp.builtin_sequence_parallel, (
+            "TP built-in sequence parallel is not compatible with active context parallel."
+        )
 
 
 def test_engine_structure(engine_class: type) -> None:

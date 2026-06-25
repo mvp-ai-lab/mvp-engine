@@ -67,8 +67,7 @@ class Qwen3VLEngine(Engine):
         self.optim_kit = OptimKit()
         self.token_loss_kit = TokenNormedLossKit(
             device=self.device,
-            dp_world_size=self.parallel_mesh.dp.world_size,
-            dp_group=self.parallel_mesh.dp.group,
+            parallel_mesh=self.parallel_mesh,
         )
         self.token_loss_kit.build_loss_guard(
             spike_multiplier=self.config.optim.loss_spike_skip_multiplier,
@@ -365,8 +364,9 @@ class Qwen3VLEngine(Engine):
         token_loss_stats = self.token_loss_kit.reduce_window()
 
         self.scaler.unscale_(self.optimizer)
-        self.token_loss_kit.rescale_gradients(self.model.parameters(), token_loss_stats)
-        sync_cp_grads(self.model)
+        self.token_loss_kit.rescale_grads(self.model.parameters(), token_loss_stats)
+        if self.parallel_mesh.cp.active:
+            sync_cp_grads(self.model)
         max_grad_norm = self.config.optim.clip_grad_norm
         if max_grad_norm is not None:
             clip_grad_norm_(self.model, max_grad_norm)
