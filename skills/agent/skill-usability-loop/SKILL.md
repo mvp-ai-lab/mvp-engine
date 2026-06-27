@@ -1,61 +1,66 @@
 ---
 name: skill-usability-loop
-description: Optimize a repository skill for a first-time user by running a
-  fixed six-role fresh-subagent loop until a fresh novice can produce correct
-  validated output within the declared task scope. Use when a user provides a
-  target skill, novice task, optional evaluation-only demo/reference, and round
-  budget; the novice coder must implement only from the task and skill
-  instructions, never from a user-provided reference implementation. Derive
-  per-round reviewer/tester checks and final reporting from the target skill
-  instead of asking the user to script the loop.
+description: Optimize a repository skill by running a fixed six-role fresh
+  subagent loop that improves both first-pass instructions and executable
+  validation until a fresh agent can converge to correct code within the
+  declared task scope. Use when a user provides a target skill, novice task,
+  optional evaluation-only demo/reference, and round budget; demo/reference
+  code is oracle material only and must not become novice implementation
+  context or demo-specific skill guidance.
 ---
 
 # Skill Usability Loop
 
 ## Goal
 
-Improve a skill so a first-time agent can use it successfully and produce a
-correct result within the declared task and validation scope, without turning
-the skill into a demo-recipe bug log.
+Improve a skill so a user agent can run it and converge to correct code within
+the declared task and validation scope.
+
+Optimize three surfaces together:
+
+- **Instruction quality:** the skill should make a correct first implementation
+  likely.
+- **Validation quality:** the skill should require public tests or checks that
+  expose wrong code and guide self-repair.
+- **Generality:** skill edits must apply to all suitable recipes, model
+  families, or frameworks, not only to the current demo.
 
 Use this skill when the user asks to optimize, audit, or regression-test the
-first-use experience of a skill.
+first-use and self-repair experience of a repository skill.
 
 ## User Prompt Contract
 
-Expect the user to provide only task-level inputs:
+Expect the user to provide task-level inputs:
 
-- target skill path;
-- novice task;
-- optional demo/reference code area, used only as evaluation or diagnostic
-  material and never as novice-coder implementation context;
+- target skill path, such as `skills/parallel/context-parallel/SKILL.md`;
+- realistic one-sentence novice task;
+- optional demo recipe or reference implementation, used only as an oracle for
+  tester, reviewer, and diagnoser roles;
 - optional round budget or correctness goal.
 
 Do not require the user to write per-round instructions, reviewer checklists,
 tester commands, failure taxonomy, or final output format. Derive those from
 this loop plus the target skill's `Required Inputs`, `Workflow`, `Validation`,
-and `Output` sections. Ask the user only when the target skill and repository
-context do not reveal the task, correctness standard, or runtime resources.
+and `Output` sections. Ask only when repository context cannot reveal the task,
+correctness standard, or runtime resources.
 
 ## Required Inputs
 
-Identify these before starting:
+Identify before starting:
 
-- target skill path, such as `skills/parallel/context-parallel/SKILL.md`;
-- realistic one-sentence user task for the novice run;
-- optional demo recipe or reference implementation used only as a usability
-  probe, oracle, or comparison artifact for reviewer/tester/diagnoser roles;
-- correctness standard for the novice output, derived first from the target
-  skill's validation and output requirements, including required static,
-  runtime, parity, or reviewer checks;
-- stop criteria, usually two fresh novice runs with no unresolved correctness
-  findings in the declared scope, or a fixed round budget;
-- whether runtime validation is required in this round and the exact resources
-  or scheduler parameters needed to run it.
+- target skill path;
+- novice task;
+- optional demo/reference artifact and which non-novice roles may use it;
+- correctness standard for final code, including static, runtime, parity,
+  reviewer, and blocked-validation requirements;
+- public validation that the novice may see and run;
+- private acceptance checks that only tester/reviewer use;
+- stop criteria, usually two fresh novice runs with no unresolved reviewer or
+  tester correctness findings, or a fixed round budget;
+- runtime resources or scheduler parameters needed for hard validation.
 
 If the target skill or task is unclear, ask before spawning subagents. If only
-the reviewer/tester checklist is unclear, read the target skill and derive it;
-do not ask the user to spell out loop mechanics.
+the reviewer/tester checklist is unclear, read the target skill and derive it.
 
 ## Subagent Roles
 
@@ -72,197 +77,256 @@ Every subagent must be fresh with `fork_context=false`. Close each subagent
 after its report is captured. Do not store subagent prompt files under this
 skill; `.codex/agents/*.toml` is the prompt source of truth.
 
-## Workflow
+## Round Flow
 
-### Round Worktree Isolation
+### 1. Freeze Round
+
+Record:
+
+- target skill revision and changed reference files;
+- baseline code revision;
+- one-sentence novice task;
+- demo/reference oracle, if any, and which non-novice roles may use it;
+- stop criteria or round budget;
+- validation budget and unavailable resources.
 
 For every round that may produce code changes, create a fresh temporary git
 worktree before spawning the novice. The worktree must contain the intended
 baseline code plus the current target skill revision for that round.
 
-All novice code edits for that round must happen only inside that worktree; do
+All novice code edits for that round must happen only inside that worktree. Do
 not let probe code changes modify or dirty the main repository checkout. Pass
-the same worktree path to `code-reviewer` and `tester`, and require them to
-inspect and validate the novice output from that worktree. At the end of the
-round, after all reports are captured, remove the temporary worktree.
+the same worktree path to `novice-coder`, `code-reviewer`, and `tester`. Remove
+the worktree after all round reports are captured.
 
 Use the main repository checkout's existing `uv` virtual environment for all
 code execution, testing, and validation from the temporary worktree. Do not
 create or sync a separate virtual environment inside the round worktree unless
 the user explicitly asks.
 
-### 1. Freeze The Round
-
-Record:
-
-- target skill revision and changed reference files;
-- temporary git worktree path used for this round, if code output will be
-  produced;
-- one-sentence novice task;
-- demo recipe or reference implementation, if any, and which non-novice roles
-  may use it for evaluation;
-- derived correctness checklist from the target skill;
-- validation budget and unavailable resources.
-
-Do not change the skill during the novice run.
-
 Do not include user-provided reference implementations, completed patches,
-expected diffs, or solution walkthroughs in the novice-coder prompt or
-workspace. The novice-coder probe measures whether the skill itself is
-sufficient for a fresh implementation.
+expected diffs, solution walkthroughs, or private acceptance checks in the
+novice-coder prompt or workspace.
 
-If runtime validation is required and resources are available, use them. If
-resources are unavailable, record the exact missing values or credentials before
-starting probes so blocked validation is not mistaken for success.
+Do not change the target skill during validation design, novice implementation,
+review, testing, or diagnosis. Skill edits happen only in step 7.
 
-### 2. Novice Implementation Probe
+### 2. Derive Validation Before Coding
 
-Spawn `novice-coder` with only the one-sentence user task and any explicit skill
-name/path needed to trigger the skill. Do not pass any user-provided reference
-implementation, solution patch, reviewer oracle, or demo code that reveals the
-intended implementation. If the repository already contains similar code, the
-novice may discover it naturally through the task and skill, but the parent
-agent must not point the novice at reference material.
+Spawn `tester` before coding to derive a validation plan from the target skill,
+task, repository context, and optional demo/reference oracle.
 
-The novice may edit code only in the round's temporary git worktree. Its final
-report must list:
+The tester must separate:
+
+- **public validation:** checks the novice may see, run, and use for self-repair;
+- **private acceptance:** checks hidden from the novice and used only for final
+  tester/reviewer acceptance.
+
+Public validation must encode general invariants, not demo-specific expected
+diffs. It should be suitable for eventual absorption into the target skill as a
+reusable test, assertion template, blocked-validation schema, or workflow step.
+It may be delivered as a text plan or as public test files in the round
+worktree. If files are created before novice coding, create only public
+validation artifacts, list them explicitly, and keep private acceptance outside
+the novice-visible workspace until post-coding validation.
+
+Private acceptance may be demo-derived, but it must test behavior or invariants
+rather than requiring the novice to copy demo code.
+
+### 3. Novice Implementation And Self-Repair
+
+Spawn `novice-coder` with only:
+
+- the one-sentence user task;
+- the target skill name/path needed to trigger the skill;
+- the temporary worktree path;
+- public validation from step 2.
+
+The novice may discover repository files naturally, but the parent agent must
+not point it at demo/reference implementation details.
+
+The novice must implement code, run public validation, and self-repair within
+the same round until public validation passes or a blocker is clearly recorded.
+It must not delete, weaken, skip, or fake public validation.
+
+Its final report must list:
 
 - files changed;
-- validation attempted;
-- decisions it inferred from the skill;
-- places where it was uncertain.
+- first-pass failures or uncertainty before self-repair;
+- public validation attempted and final result;
+- fixes made because validation failed;
+- decisions inferred from the skill;
+- unresolved blockers or places it still had to guess.
 
-### 3. Correctness Review
+### 4. Independent Correctness Review
 
-Spawn `code-reviewer` to review the novice output in the same temporary git
-worktree.
+Spawn `code-reviewer` to review the novice's final output in the same temporary
+git worktree.
 
-Pass the reviewer the derived correctness checklist, not a user-authored
-checklist. The reviewer should still classify any additional correctness issue
-it discovers.
+Pass the reviewer the correctness standard, public validation, and private
+acceptance intent. The reviewer may use demo/reference oracle material.
 
-The reviewer must separate findings into:
+The reviewer must classify each finding as exactly one of:
 
-- implementation bug;
-- skill-caused ambiguity;
-- bad or misleading example;
-- missing validation;
-- not a skill issue.
-
-Do not stop only because the reviewer labels a finding as an implementation
-bug. A first-time user's implementation bug is usability evidence unless it is
-outside the task scope, depends only on unavailable external resources, or is
-caused by unrelated repository state.
-
-### 4. Runtime Or Test Probe
-
-Spawn `tester` only on the novice output in the same temporary git worktree,
-not on skill edits.
-
-Pass the tester the derived validation checks and ask it to run the smallest
-available commands that can expose whether the skill led to a runnable outcome.
-If hardware or credentials are unavailable, it reports the exact blocked command
-and expected environment.
-
-When the expected correct output is code, the tester must include a validation
-that would have failed for each reviewer correctness finding when such a check
-can run without unavailable external resources.
-
-### 5. Diagnose Skill Usability
-
-Spawn `skill-diagnoser` with the novice report, code review, and tester report.
-
-The diagnoser must produce a failure taxonomy:
-
-- `missing_rule`
-- `ambiguous_wording`
+- `implementation_bug`
+- `instruction_gap`
+- `validation_gap`
+- `debug_guidance_gap`
+- `missing_scaffold`
 - `misleading_example`
-- `rule_too_buried`
-- `validation_unclear`
 - `over_specific_to_demo`
 - `not_skill_issue`
 
-Only `missing_rule`, `ambiguous_wording`, `misleading_example`,
-`rule_too_buried`, `validation_unclear`, and `over_specific_to_demo` may drive
-skill edits.
+Do not stop only because a finding is an `implementation_bug`. A first-time
+implementation bug is usability evidence unless it is outside task scope,
+depends only on unavailable external resources, or is caused by unrelated dirty
+state.
+
+### 5. Runtime Or Acceptance Probe
+
+Spawn `tester` after coding to run public validation and private acceptance on
+the novice output in the same temporary git worktree, not on later skill edits.
+
+If hard runtime, GPU, data, or credential validation is unavailable, tester must
+run the strongest cheap surrogate checks available, such as static, AST,
+config, import, py_compile, or CPU shape/contract checks. Blocked hard
+validation is unresolved or resource-blocked; it is not success.
+
+When expected output is code, tester should include a validation that would
+have failed for each reviewer correctness finding when such a check can run
+without unavailable resources.
+
+### 6. Diagnose Failure
+
+Spawn `skill-diagnoser` with:
+
+- validation plan;
+- novice first-pass and self-repair report;
+- code review;
+- tester acceptance report.
+
+The diagnoser must explain whether failures came from instructions,
+validation, missing scaffold, debug guidance, over-specific examples, unrelated
+implementation errors, or blocked resources.
 
 Classification rules:
 
-- If the novice missed a rule that is present but did not affect the output,
-  classify it as `rule_too_buried`, `ambiguous_wording`, or
-  `validation_unclear`, not `not_skill_issue`.
-- If a correctness issue could have been caught by a cheap static, config, or
-  unit check that the skill did not require, classify it as
-  `validation_unclear`.
-- Use `not_skill_issue` only for issues outside the task scope, issues caused
-  by unrelated dirty state, or checks blocked solely by missing external
-  resources after the blocked command is recorded.
+- If public validation did not catch a correctness issue that a cheap check
+  could catch, classify it as `validation_gap`.
+- If public validation caught the issue but the novice could not repair it from
+  the skill, classify it as `instruction_gap`, `debug_guidance_gap`, or
+  `missing_scaffold`.
+- If a proposed fix depends on current demo details, classify it as
+  `over_specific_to_demo` and require a general invariant before editing the
+  skill.
+- Use `not_skill_issue` only for issues outside task scope, issues caused by
+  unrelated dirty state, or hard checks blocked solely by missing external
+  resources after exact blocked commands are recorded.
 
-### 6. Edit The Skill
+Only `instruction_gap`, `validation_gap`, `debug_guidance_gap`,
+`missing_scaffold`, `misleading_example`, and `over_specific_to_demo` may drive
+skill edits.
 
-Spawn `skill-writer` to make the smallest general-first edits.
+### 7. Edit Skill
+
+Spawn `skill-writer` to make the smallest general-first edits from the
+diagnoser's skill-caused findings.
+
+Prefer improvements in this order:
+
+- public validation;
+- assertion templates;
+- scaffold or blocked-validation schema;
+- debug guidance;
+- concise prose.
 
 Rules for edits:
 
 - keep `SKILL.md` as a short route map;
-- put model-, recipe-, or framework-specific detail in `references/`;
+- put model-, recipe-, or framework-specific detail in `references/`, gated by
+  applicability;
 - avoid recording round history in `SKILL.md`;
-- turn demo failures into general invariants;
-- turn repeated novice implementation misses into explicit required actions or
-  executable validation checks;
+- never write the current demo branch or implementation as the answer;
+- never paste recipe-specific implementation code into the main `SKILL.md`;
+- turn demo failures into general invariants, required actions, reusable tests,
+  or conditional model-family guidance;
+- if a fix applies only to one recipe, keep it recipe-local and out of the
+  generic skill;
+- if a fix applies to one model family, write it as a model-family rule rather
+  than a demo-recipe rule;
+- if a fix applies to all suitable recipes, promote it to the main workflow or
+  validation section;
 - make copyable snippets real APIs or clearly mark them as pseudocode;
-- prefer deleting or moving text over expanding the main skill.
+- prefer deleting, moving, or tightening text over expanding the main skill.
 
-### 7. Writing Review
+### 8. Writing Review
 
-Spawn `writing-supervisor` to review only the skill/config changes.
+Spawn `writing-supervisor` to review only skill, reference, and subagent/config
+changes.
 
-The supervisor checks:
+The supervisor must reject edits that are too demo-specific. It checks:
 
-- the guidance is general, not demo-recipe-specific;
-- first-time readers can find the next action quickly;
-- examples are accurate and scoped;
-- validation is executable;
+- guidance applies beyond the current demo recipe;
+- examples are accurate, scoped, and clearly examples;
+- model-family rules are conditional and scoped;
+- validation checks encode invariants, not branch-specific diffs;
+- public tests help a future recipe author find mistakes without knowing the
+  demo;
+- validation is executable or clearly marked as resource-blocked;
 - references are read-on-demand rather than required up front.
 
-If it fails, return once to `skill-writer` with only the supervisor findings.
-Do not restart the novice implementation until writing passes.
+If writing fails, return once to `skill-writer` with only the supervisor
+findings. Do not restart novice implementation until writing passes.
 
-### 8. Regression Probe
+### 9. Regression Or Continue
 
-After writing passes, start a new round from step 1 with a fresh `novice-coder`.
+After writing passes, remove the round worktree, create a new clean worktree,
+and start a new round from step 1 with a fresh `novice-coder`.
 
-Do not reuse the previous novice context. Reuse the same one-sentence task
-unless intentionally testing a new user path.
-
-If code output is the evaluation artifact, run the regression probe from a clean
-temporary git worktree that contains only the updated skill changes and the
-intended baseline code. Do not let previous novice edits contaminate the next
-run, and remove each round worktree before starting another round.
-
-If the user set a round budget, stop after the last round and report unresolved
-correctness findings. Otherwise, stop only after two fresh novice runs produce
-no unresolved reviewer or tester correctness findings within the declared
-validation scope. Do not stop merely because a remaining issue is now labeled an
-implementation bug if it is still a first-time output correctness failure.
+Do not reuse previous novice context. Reuse the same one-sentence task unless
+intentionally testing a new user path.
 
 If the current round does not meet the stop criteria or stop rationale, continue
-the complete loop after the fresh `novice-coder` finishes its new code output:
-run correctness review, runtime or test probe, skill diagnosis, skill edit, and
-writing review before starting any later regression probe.
+the complete loop after the fresh `novice-coder` finishes new code output: run
+correctness review, acceptance probe, diagnosis, skill edit, and writing review
+before starting any later regression probe.
+
+## Stop Criteria
+
+Default stop criteria:
+
+- two consecutive fresh novice runs pass public validation;
+- private acceptance passes, or only explicitly resource-blocked hard
+  validation remains;
+- reviewer/tester have no unresolved correctness findings;
+- coder reached correctness without hidden demo implementation details;
+- latest skill edits remain general and reusable.
+
+Budget stop:
+
+- If the user set a round budget, stop after the last round and report
+  unresolved findings.
+- Explain whether each unresolved issue is instruction still unclear,
+  validation still weak, scaffold missing, runtime resource blocked, task needs
+  code/kit support, or the attempted edit would be too demo-specific.
+
+Do not stop merely because a remaining issue is labeled an implementation bug
+if it is still a first-time output correctness failure within scope.
 
 ## Output
 
 Return:
 
-- Subagent Reports: one line per role with pass/fail and artifact links;
+- Subagent Reports: one line per role and round with pass/fail and artifacts;
+- First-Pass Result: whether the initial novice output was correct;
+- Self-Repair Result: whether public validation led to a correct final output;
+- Public Validation Coverage: what it caught and missed;
+- Private Acceptance Result: pass/fail/resource-blocked;
 - Failure Taxonomy: grouped by skill-caused vs not skill-caused;
-- Skill Changes: files changed and general principle behind each edit;
-- Regression Result: whether the same skill-caused failure recurred;
-- Correctness Result: whether fresh novice output has unresolved reviewer or
-  tester correctness findings within scope;
-- Next Round Recommendation: stop, run another novice probe, or escalate to
-  code/kit changes.
+- Skill Changes: files changed and why each change is general;
+- Correctness Result: unresolved reviewer/tester findings within scope;
+- Next Round Recommendation: stop, run another round, or escalate to code/kit
+  changes.
 
 ## Read On Demand
 
