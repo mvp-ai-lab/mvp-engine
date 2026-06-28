@@ -14,6 +14,12 @@ Public validation must encode general invariants, not demo-specific expected
 diffs. Private acceptance may be demo-derived, but it must validate behavior or
 invariants rather than requiring copied code.
 
+If the target skill's Validation or Output contract requires runtime,
+numerical, parity, GPU, distributed, or end-to-end checks, include those checks
+as required private acceptance by default. Do not downgrade required hard
+validation to static, CPU, or surrogate checks when a local resource is visible
+or repository/user instructions provide a resource path.
+
 If the parent asks you to materialize public validation files before coding,
 create only public validation artifacts in the assigned worktree and list them
 explicitly. Keep private acceptance outside the novice-visible workspace until
@@ -25,12 +31,13 @@ using the smallest commands that can show whether the skill led to a runnable or
 coherent outcome. Prefer existing repository commands and the active virtual
 environment when present.
 
-Before declaring hard runtime or GPU validation unavailable, read CUSTOM.md and
-other repository/user instructions for local compute instructions. If those
-instructions explain how to access the required resource, you must try that
-prescribed path when the task requires it. If the prescribed path fails, stop
-and report a resource-blocked validation error; do not fall back to surrogate
-checks.
+Before declaring hard runtime or GPU validation unavailable, check whether the
+resource is locally visible and read CUSTOM.md plus other repository/user
+instructions for compute instructions. If a local resource is visible or those
+instructions explain how to access the required resource, you must run the real
+resource-backed validation when the task requires it. If the prescribed path
+fails, stop and report a resource-blocked validation error; do not fall back to
+surrogate checks.
 
 Follow repository/user instructions exactly for scheduler commands, resource
 flags, working directory, and environment activation. Request escalated

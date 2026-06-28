@@ -55,6 +55,9 @@ Identify before starting:
   reviewer, and blocked-validation requirements;
 - public validation that the novice may see and run;
 - private acceptance checks that only tester/reviewer use;
+- hard validation requirements from the target skill, especially runtime,
+  numerical, parity, GPU, or distributed checks that must run when resources or
+  resource instructions are available;
 - stop criteria, usually two fresh novice runs with no unresolved reviewer or
   tester correctness findings, or a fixed round budget;
 - runtime resources or scheduler parameters needed for hard validation.
@@ -133,6 +136,14 @@ the novice-visible workspace until post-coding validation.
 Private acceptance may be demo-derived, but it must test behavior or invariants
 rather than requiring the novice to copy demo code.
 
+If the target skill's validation or output contract requires runtime,
+numerical, parity, GPU, distributed, or end-to-end checks, the tester must make
+those checks required private acceptance. When a GPU is locally visible or
+repository/user instructions provide a path to GPU or other required resources,
+the real resource-backed validation must be attempted. Do not replace it with
+static, CPU, or surrogate checks. If the prescribed resource path fails, the
+round is resource-blocked or failed, not passed.
+
 ### 3. Novice Implementation And Self-Repair
 
 Spawn `novice-coder` with only:
@@ -187,10 +198,18 @@ state.
 Spawn `tester` after coding to run public validation and private acceptance on
 the novice output in the same temporary git worktree, not on later skill edits.
 
-If hard runtime, GPU, data, or credential validation is unavailable, tester must
-run the strongest cheap surrogate checks available, such as static, AST,
-config, import, py_compile, or CPU shape/contract checks. Blocked hard
-validation is unresolved or resource-blocked; it is not success.
+If required hard validation needs GPU, data, credentials, a scheduler, or other
+external resources, tester must first read repository/user resource instructions
+and attempt the prescribed path when it exists. If a local GPU or prescribed
+resource path exists, tester must run the real validation and must not downgrade
+it to static, CPU, or surrogate checks. If the prescribed path fails, report the
+exact command and error as resource-blocked or failed validation.
+
+Only when no local resource is available and no repository/user instructions
+explain how to access the required resource may tester run the strongest cheap
+surrogate checks available, such as static, AST, config, import, py_compile, or
+CPU shape/contract checks. Surrogate checks do not satisfy required hard
+validation.
 
 When expected output is code, tester should include a validation that would
 have failed for each reviewer correctness finding when such a check can run
@@ -296,11 +315,16 @@ before starting any later regression probe.
 Default stop criteria:
 
 - two consecutive fresh novice runs pass public validation;
-- private acceptance passes, or only explicitly resource-blocked hard
-  validation remains;
+- private acceptance passes, including any required real GPU/runtime/parity
+  validation when a local resource or prescribed resource path exists;
 - reviewer/tester have no unresolved correctness findings;
 - coder reached correctness without hidden demo implementation details;
 - latest skill edits remain general and reusable.
+
+Do not stop successfully with resource-blocked hard validation if repository or
+user instructions provided a resource path. Stop as blocked/failed instead. Only
+when no resource path exists may blocked hard validation remain as an explicit
+unresolved risk.
 
 Budget stop:
 
