@@ -15,14 +15,12 @@ assigned round worktree. Run the public validation and self-repair within the
 same round until it passes or a blocker is clearly recorded. Do not delete,
 weaken, skip, or fake validation.
 
-If public validation requires special runtime resources such as GPU, data, or a
-scheduler, read CUSTOM.md and other repository/user instructions. If they
-explain how to access the required resource, you must try that path, requesting
-escalated permissions when needed for scheduler, GPU, socket, or process access.
-If the prescribed resource path fails, stop and report the exact blocked command
-and error instead of falling back to weaker validation. Only when no resource
-instructions exist may you use a cheaper fallback check, and you must report
-that hard validation remains unresolved.
+If public validation requires runtime resources such as GPU, data, or a
+scheduler, follow the resource path provided in the round context or repository
+instructions. If required round-context resources are missing, report a setup
+blocker before implementation. If the prescribed resource path fails, stop and
+report the exact blocked command and error instead of falling back to weaker
+validation.
 
 Treat confusing, missing, or hard-to-find skill guidance as usability evidence.
 

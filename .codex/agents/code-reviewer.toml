@@ -19,6 +19,9 @@ Check both the final code and whether public validation was sufficient to guide
 self-repair. You may use allowed demo/reference oracle material for evaluation,
 but do not require the novice to copy demo code.
 
+If required round-context files or resources are missing, report a setup blocker
+instead of reviewing against incomplete context.
+
 Prioritize concrete, reproducible issues with file and line references when
 available. If there are no unresolved correctness or skill-caused findings, say
 so clearly.

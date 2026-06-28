@@ -60,7 +60,10 @@ Identify before starting:
   resource instructions are available;
 - stop criteria, usually two fresh novice runs with no unresolved reviewer or
   tester correctness findings, or a fixed round budget;
-- runtime resources or scheduler parameters needed for hard validation.
+- runtime resources or scheduler parameters needed for hard validation;
+- local resource paths needed by validation, such as `CUSTOM.md`, data
+  directories, model/cache directories, credential mounts, or other untracked
+  files referenced by repository/user instructions.
 
 If the target skill or task is unclear, ask before spawning subagents. If only
 the reviewer/tester checklist is unclear, read the target skill and derive it.
@@ -94,8 +97,34 @@ Record:
 - validation budget and unavailable resources.
 
 For every round that may produce code changes, create a fresh temporary git
-worktree before spawning the novice. The worktree must contain the intended
-baseline code plus the current target skill revision for that round.
+worktree before spawning the novice. The worktree path must live on the same
+shared filesystem as the main checkout, not under `/tmp`, so scheduler jobs and
+multi-node workers can see the same files. Prefer a dedicated directory under
+the main checkout's parent directory, for example
+`<main-checkout-parent>/.skill-usability-worktrees/<repo-name>/<round-id>`,
+unless the user provides another shared worktree root. The worktree must contain
+the intended baseline code plus the current target skill revision for that
+round.
+
+After creating the worktree, freeze the local resource context before spawning
+any subagent:
+
+- Copy small local instruction overlays from the main checkout into the
+  worktree. In particular, if `CUSTOM.md` exists in the main checkout, copy it
+  to `<round-worktree>/CUSTOM.md` with the exact current contents.
+- Link large or mutable resources instead of copying them. If repository/user
+  instructions, target-skill validation, public tests, or smoke commands need
+  paths such as `data/`, model/checkpoint/cache directories, credential mounts,
+  or other untracked local resources, create symlinks in the worktree that point
+  to the main checkout or shared resource paths.
+- Do not copy data directories or other potentially large resources into the
+  worktree.
+
+Treat copied overlays and resource symlinks as frozen round context, not novice
+implementation output: do not stage or edit them, and delete them with the
+worktree. This is required even when those files are ignored or untracked,
+because resource instructions, scheduler accounts, data paths, and existing
+virtual-environment rules must be identical for tester, novice, and reviewer.
 
 All novice code edits for that round must happen only inside that worktree. Do
 not let probe code changes modify or dirty the main repository checkout. Pass
@@ -106,6 +135,18 @@ Use the main repository checkout's existing `uv` virtual environment for all
 code execution, testing, and validation from the temporary worktree. Do not
 create or sync a separate virtual environment inside the round worktree unless
 the user explicitly asks.
+
+When spawning subagents, include both paths in the prompt:
+
+- main checkout path, for the existing `.venv` and any source-of-truth local
+  instruction overlays;
+- round worktree path, where all code edits and validation commands must run.
+
+If `CUSTOM.md` exists in the main checkout but is absent from the round
+worktree, or if required local resources are absent and not linked into the
+worktree, stop setup and fix the worktree context before continuing. Do not let
+any subagent infer that resource instructions or data are unavailable merely
+because the temporary worktree omitted ignored local files.
 
 Do not include user-provided reference implementations, completed patches,
 expected diffs, solution walkthroughs, or private acceptance checks in the

@@ -17,8 +17,8 @@ invariants rather than requiring copied code.
 If the target skill's Validation or Output contract requires runtime,
 numerical, parity, GPU, distributed, or end-to-end checks, include those checks
 as required private acceptance by default. Do not downgrade required hard
-validation to static, CPU, or surrogate checks when a local resource is visible
-or repository/user instructions provide a resource path.
+validation to static, CPU, or surrogate checks when the round context or
+repository instructions provide a resource path.
 
 If the parent asks you to materialize public validation files before coding,
 create only public validation artifacts in the assigned worktree and list them
@@ -31,28 +31,21 @@ using the smallest commands that can show whether the skill led to a runnable or
 coherent outcome. Prefer existing repository commands and the active virtual
 environment when present.
 
-Before declaring hard runtime or GPU validation unavailable, check whether the
-resource is locally visible and read CUSTOM.md plus other repository/user
-instructions for compute instructions. If a local resource is visible or those
-instructions explain how to access the required resource, you must run the real
-resource-backed validation when the task requires it. If the prescribed path
-fails, stop and report a resource-blocked validation error; do not fall back to
-surrogate checks.
+Before declaring hard runtime or GPU validation unavailable, use the resource
+path provided in the round context or repository instructions. If required
+round-context resources are missing, report a setup blocker before validation.
+If the prescribed path fails, stop and report a resource-blocked validation
+error; do not fall back to surrogate checks.
 
 Follow repository/user instructions exactly for scheduler commands, resource
 flags, working directory, and environment activation. Request escalated
 permissions before resource manager, remote execution, scheduler, GPU, socket,
 or process-access commands when the sandbox may block them.
 
-Use the main checkout's existing uv virtual environment from the round worktree
-unless repository/user instructions explicitly say otherwise. Do not create or
-sync a separate environment.
-
-Only if no repository or user instructions explain how to access the required
-resource may you fall back to the strongest cheap surrogate checks available,
-such as static, AST, config, import, py_compile, or CPU shape/contract checks.
-Surrogate checks do not satisfy the blocked hard validation; report the missing
-resource instructions and mark hard validation unresolved.
+Only if no resource path is provided may you fall back to the strongest cheap
+surrogate checks available, such as static, AST, config, import, py_compile, or
+CPU shape/contract checks. Surrogate checks do not satisfy blocked hard
+validation; report that hard validation remains unresolved.
 
 Do not broaden scope. In post-coding validation, do not edit files. If
 validation is blocked, report:
