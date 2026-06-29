@@ -26,9 +26,14 @@ if TYPE_CHECKING:
         MLLMTokenizationHandler,
         ModelInputs,
         QwenChatSchemaHandler,
+        QwenImageFrameHandler,
         QwenImageHandler,
+        QwenVideoChatSchemaHandler,
+        QwenVideoHandler,
+        QwenVisualHandler,
         QwenVLMediaHandler,
         QwenVLTokenizationHandler,
+        attach_onevision_processor,
     )
     from .model import MLLMModelKit
     from .utils import Confidence, MLLMStepEstimationKit, StepEstimateResult
@@ -57,10 +62,15 @@ _EXPORT_MODULES = {
     "MLLMTokenizationHandler": ".data",
     "ModelInputs": ".data",
     "QwenChatSchemaHandler": ".data",
+    "QwenImageFrameHandler": ".data",
     "QwenImageHandler": ".data",
+    "QwenVideoChatSchemaHandler": ".data",
+    "QwenVideoHandler": ".data",
+    "QwenVisualHandler": ".data",
     "QwenVLMediaHandler": ".data",
     "QwenVLTokenizationHandler": ".data",
     "StepEstimateResult": ".utils",
+    "attach_onevision_processor": ".data",
 }
 
 __all__ = list(_EXPORT_MODULES)
