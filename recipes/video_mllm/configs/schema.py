@@ -117,6 +117,10 @@ class VideoMLLMGradientCheckpointingConfig(BaseModel):
 
     enabled: bool = False
     use_reentrant: bool = False
+    mode: Literal["hf", "custom", "hf_with_custom"] = (
+        "hf"  # "custom": checkpoint only target_modules (e.g. the vision encoder)
+    )
+    target_modules: list[str] | None = None  # "ParentClassName:child_module" entries for custom/hf_with_custom mode
 
 
 class VideoMLLMCompileConfig(BaseModel):
@@ -187,6 +191,9 @@ class VideoMLLMOptimConfig(BaseOptimConfig):
     model_config = ConfigDict(frozen=False)
 
     optimizer: str = "AdamW"
+    vision_lr: float | None = Field(
+        None, gt=0.0
+    )  # separate LR for the unfrozen OneVision encoder (model.visual.encoder.*)
     gradient_accumulation_steps: int = 1
     global_batch_size: int | None = Field(None, ge=1)
     loss_spike_skip_multiplier: float | None = Field(None, gt=0.0)

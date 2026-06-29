@@ -34,6 +34,7 @@ CONFIG_OVERRIDES: tuple[str, ...] = (
     "optim.gradient_accumulation_steps=1",
     "loop.total_steps=2",
     "log.interval=1",
+    "dev_mode=true",
 )
 PROCESS_TIMEOUT_SECONDS = 12000
 

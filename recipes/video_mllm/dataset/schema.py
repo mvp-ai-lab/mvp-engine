@@ -5,8 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-import torch
-
 from mvp_engine.kit import MLLMMediaSlot, MLLMSchemaHandler, MLLMSegment
 from mvp_engine.kit.mllm.data.schema import ROLE_MAP
 
@@ -209,24 +207,3 @@ class VideoChatSchemaHandler(MLLMSchemaHandler):
                 blocks.append({"type": "video"})
                 video_count += 1
         return blocks, video_count
-
-
-def build_video_generation_input_ids(
-    sample: Mapping[str, Any],
-    *,
-    processor: Any,
-    video_token_count: int,
-) -> torch.Tensor:
-    """Render one eval prompt with the same video-token expansion as training."""
-    if video_token_count < 1:
-        raise ValueError("video_token_count must be positive.")
-
-    schema_handler = VideoChatSchemaHandler(processor)
-    prompt_messages = schema_handler.build_prompt_messages(sample)
-    video_token = schema_handler._video_token()
-    text = processor.apply_chat_template(prompt_messages, tokenize=False, add_generation_prompt=True)
-    if text.count(video_token) != 1:
-        raise ValueError("generation prompt must contain exactly one video token.")
-    text = text.replace(video_token, video_token * int(video_token_count))
-    input_ids = processor.tokenizer(text, add_special_tokens=False)["input_ids"]
-    return torch.tensor(input_ids, dtype=torch.long)

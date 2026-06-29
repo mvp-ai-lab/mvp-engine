@@ -218,6 +218,8 @@ class VideoMLLMEngine(Engine):
             model = self.model_kit.apply_gradient_checkpointing(
                 model,
                 use_reentrant=self.config.model.gradient_checkpointing.use_reentrant,
+                mode=self.config.model.gradient_checkpointing.mode,
+                target_modules=self.config.model.gradient_checkpointing.target_modules,
             )
 
         if self.config.model.compile.enabled:
@@ -238,15 +240,30 @@ class VideoMLLMEngine(Engine):
     def prepare_optimizer(self) -> torch.optim.Optimizer:
         """Construct AdamW.
 
+        When ``optim.vision_lr`` is set and the OneVision encoder is unfrozen, its
+        parameters (``model.visual.encoder.*``) get a separate, lower learning rate
+        (mirrors LLaVA-OneVision-2.0's ``--vision_lr``); the merger/projector and the
+        LLM keep the main ``optim.lr``.
+
         Returns:
             The optimizer used by this recipe.
         """
-        return self.optim_kit.build_optimizer(
+        vision_lr = getattr(self.config.optim, "vision_lr", None)
+        lr_groups = None
+        if vision_lr is not None:
+            lr_groups = [(("model.visual.encoder.",), float(vision_lr))]
+        optimizer = self.optim_kit.build_optimizer(
             self.model,
             optimizer=self.config.optim.optimizer,
             lr=float(self.config.optim.lr),
             weight_decay=float(self.config.optim.weight_decay),
+            lr_groups=lr_groups,
         )
+        group_summary = [
+            (f"{group['lr']:.2e}", sum(p.numel() for p in group["params"])) for group in optimizer.param_groups
+        ]
+        logger.info(f"optimizer LR groups (lr, n_params): {group_summary}")
+        return optimizer
 
     def prepare_scheduler(self):
         """Construct the learning-rate schedule used by this recipe.
