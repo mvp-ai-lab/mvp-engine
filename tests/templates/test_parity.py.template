@@ -1,0 +1,119 @@
+"""Parity or impact tests for a recipe.
+
+Copy this file to ``recipes/<recipe>/tests/test_parity.py`` or to a
+skill-specific path such as
+``recipes/<recipe>/tests/skills/<skill-id>/test_parity.py`` when a skill needs
+hard evidence of numerical or resource impact.
+
+Layer boundary:
+- Allowed: validating recorded metrics from real runs, such as CP-off/CP-on
+  loss or gradient parity, memory reduction, throughput, checkpoint
+  compatibility, or other declared impact metrics.
+- Forbidden: replacing structure, contract, or smoke tests. A blocked/not-run
+  artifact is an explicit unresolved state, not a correctness pass.
+
+Metric collection should be non-invasive by default. Generate artifacts with a
+recipe-local test runner that uses existing smoke hooks, method wrappers, or
+runtime observers. Do not modify production recipe engine/model code only to
+collect parity metrics. If hooks cannot expose required state, add a small
+generic observation surface before adding skill-specific production logic.
+"""
+
+import json
+import math
+from pathlib import Path
+
+import pytest
+
+# Paths are relative to the recipe root. Each artifact must be JSON with:
+# {"status": "passed", "metrics": {"metric_name": 0.0}}
+PARITY_ARTIFACTS: tuple[str, ...] = ()
+
+# Example:
+# REQUIRED_METRIC_THRESHOLDS = {
+#     "loss_abs_diff": {"max": 1e-4},
+#     "grad_max_abs_diff": {"max": 1e-3},
+#     "memory_saved_bytes": {"min": 1},
+# }
+REQUIRED_METRIC_THRESHOLDS: dict[str, dict[str, float]] = {}
+
+# Keep False for hard correctness validation. Set True only for a separate
+# artifact-format check where resource-blocked status is intentionally accepted.
+ALLOW_BLOCKED_ARTIFACTS = False
+
+PASSED_STATUSES = {"pass", "passed", "success", "succeeded"}
+BLOCKED_STATUSES = {"blocked", "resource-blocked", "resource_blocked", "skipped", "not-run", "not_run"}
+BLOCKED_REASON_KEYS = ("reason", "blocked_reason", "resource_blocked_reason", "error")
+
+
+def _recipe_root() -> Path:
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        if (parent / "configs").is_dir():
+            return parent
+    return current.parent.parent
+
+
+def _load_artifact(path: Path) -> dict:
+    assert path.exists(), f"Parity artifact does not exist: {path}"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise AssertionError(f"Parity artifact must be JSON: {path}") from exc
+    assert isinstance(data, dict), f"Parity artifact must be a JSON object: {path}"
+    return data
+
+
+def _artifact_status(data: dict) -> str:
+    status = str(data.get("status", "")).strip().lower()
+    assert status, "Parity artifact must include a non-empty status."
+    return status
+
+
+def _blocked_reason(data: dict) -> str:
+    for key in BLOCKED_REASON_KEYS:
+        reason = data.get(key)
+        if reason:
+            return str(reason)
+    return ""
+
+
+def _assert_metric_thresholds(metrics: dict, thresholds: dict[str, dict[str, float]], artifact_path: Path) -> None:
+    for metric_name, limits in thresholds.items():
+        assert metric_name in metrics, f"{artifact_path}: missing required metric {metric_name!r}."
+        value = metrics[metric_name]
+        assert isinstance(value, int | float), f"{artifact_path}: metric {metric_name!r} must be numeric."
+        assert math.isfinite(float(value)), f"{artifact_path}: metric {metric_name!r} must be finite."
+
+        if "max" in limits:
+            assert value <= limits["max"], (
+                f"{artifact_path}: metric {metric_name!r}={value} exceeds max threshold {limits['max']}."
+            )
+        if "min" in limits:
+            assert value >= limits["min"], (
+                f"{artifact_path}: metric {metric_name!r}={value} is below min threshold {limits['min']}."
+            )
+
+
+def test_parity_artifacts():
+    """Validate declared parity or impact artifacts from real runs."""
+    if not PARITY_ARTIFACTS:
+        pytest.skip("No parity artifacts configured for this recipe.")
+
+    recipe_root = _recipe_root()
+    for relative_path in PARITY_ARTIFACTS:
+        artifact_path = recipe_root / relative_path
+        artifact = _load_artifact(artifact_path)
+        status = _artifact_status(artifact)
+
+        if status in BLOCKED_STATUSES:
+            reason = _blocked_reason(artifact)
+            assert reason, f"{artifact_path}: blocked/not-run artifact must include a concrete reason."
+            if ALLOW_BLOCKED_ARTIFACTS:
+                pytest.skip(f"{artifact_path}: parity validation is blocked: {reason}")
+            pytest.fail(f"{artifact_path}: parity validation is blocked, not passed: {reason}")
+
+        assert status in PASSED_STATUSES, f"{artifact_path}: unsupported parity status {status!r}."
+        metrics = artifact.get("metrics", {})
+        assert isinstance(metrics, dict), f"{artifact_path}: metrics must be a JSON object."
+        _assert_metric_thresholds(metrics, REQUIRED_METRIC_THRESHOLDS, artifact_path)

@@ -4,6 +4,13 @@ Copy this file to ``recipes/<recipe>/tests/test_smoke.py`` and update the
 constants below for that recipe. The test runs the real ``engine.train()`` path
 in spawned distributed worker processes and injects recipe-local skill assertions
 around engine phases.
+
+Layer boundary:
+- Allowed: real one-step runtime path, distributed environment initialization,
+  dataloader/model/forward/backward/optimizer execution, and runtime hook
+  assertions about observed shapes or state.
+- Forbidden: claiming numerical parity, memory reduction, throughput, long-run
+  stability, or broad quality impact. Put those in impact/parity tests.
 """
 
 import traceback
@@ -66,7 +73,11 @@ def smoke_process(
 
 
 def test_smoke(tmp_path: Path):
-    """Run recipe smoke validation across ``WORLD_SIZE`` spawned workers."""
+    """Run recipe smoke validation across ``WORLD_SIZE`` spawned workers.
+
+    Passing smoke means the configured runtime path runs. It does not imply
+    numerical equivalence, memory improvement, or performance impact.
+    """
     master_port = find_free_port()
     output_dir = tmp_path / "smoke_outputs"
 
