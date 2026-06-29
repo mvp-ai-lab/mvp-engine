@@ -12,9 +12,14 @@ if TYPE_CHECKING:
     from .packing import MLLMPackingAssembler, build_packed_block_causal_mask
     from .qwen import (
         QwenChatSchemaHandler,
+        QwenImageFrameHandler,
         QwenImageHandler,
+        QwenVideoChatSchemaHandler,
+        QwenVideoHandler,
+        QwenVisualHandler,
         QwenVLMediaHandler,
         QwenVLTokenizationHandler,
+        attach_onevision_processor,
     )
     from .sample import MLLMPack, MLLMSample
     from .schema import MLLMSchemaHandler
@@ -50,9 +55,14 @@ _EXPORT_MODULES = {
     "MLLMTokenizationHandler": ".tokenization",
     "ModelInputs": ".types",
     "QwenChatSchemaHandler": ".qwen",
+    "QwenImageFrameHandler": ".qwen",
     "QwenImageHandler": ".qwen",
+    "QwenVideoChatSchemaHandler": ".qwen",
+    "QwenVideoHandler": ".qwen",
+    "QwenVisualHandler": ".qwen",
     "QwenVLMediaHandler": ".qwen",
     "QwenVLTokenizationHandler": ".qwen",
+    "attach_onevision_processor": ".qwen",
     "build_packed_block_causal_mask": ".packing",
 }
 
