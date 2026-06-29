@@ -17,8 +17,17 @@ log:
 parallel:
   mesh:
     replicate: -1
-    shard: 8
+    shard: 4
+    context: 2
     tensor: 1
+  backend_kwargs:
+    tp:
+      builtin_sequence_parallel: false
+    cp:
+      implementation: "ulysses"
+      attn_implementation: "flash_attention_2"
+      grad_sync: true
+      grad_reduce_dtype: float32
 
 data:
   train_path: "./data/mvp-engine-vlm-dev-data/meta.json"
