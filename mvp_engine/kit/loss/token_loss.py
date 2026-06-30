@@ -58,32 +58,29 @@ class PerTokenLossGuard(LossGuard):
         if self.spike_multiplier is None:
             return False
 
-        loss_stats = torch.stack(
-            (
-                self._as_tensor(loss_sum, device=device),
-                torch.tensor(float(token_count), device=device, dtype=torch.float64),
-            )
-        )
+        loss_sum_t = self._as_tensor(loss_sum, device=device)  # float32
+        count_t = torch.tensor(int(token_count), device=device, dtype=torch.int64)  # int64
         should_reduce = self.group_world_size is None or self.group_world_size > 1
         if should_reduce and dist.is_available() and dist.is_initialized():
-            dist.all_reduce(loss_stats, op=dist.ReduceOp.SUM, group=self.group)
+            dist.all_reduce(loss_sum_t, op=dist.ReduceOp.SUM, group=self.group)
+            dist.all_reduce(count_t, op=dist.ReduceOp.SUM, group=self.group)
 
-        global_token_count = int(loss_stats[1].item())
+        global_token_count = int(count_t.item())
         if global_token_count <= 0:
             return False
 
         return super().check(
-            loss_stats[0] / loss_stats[1],
+            loss_sum_t / count_t,
             step=step,
             token_count=global_token_count,
         )
 
     @staticmethod
     def _as_tensor(value: torch.Tensor | float, *, device: torch.device) -> torch.Tensor:
-        """Convert a per-rank loss sum into a float64 scalar tensor."""
+        """Convert a per-rank loss sum into a float32 scalar tensor."""
         if isinstance(value, torch.Tensor):
-            return value.detach().to(device=device, dtype=torch.float64)
-        return torch.tensor(float(value), device=device, dtype=torch.float64)
+            return value.detach().to(device=device, dtype=torch.float32)
+        return torch.tensor(float(value), device=device, dtype=torch.float32)
 
 
 class TokenNormedLossKit:
@@ -168,7 +165,7 @@ class TokenNormedLossKit:
 
         self._total_tokens += int(total_tokens)
         self._effective_tokens += int(effective_tokens)
-        detached_loss = loss_sum.detach().to(device=self.device, dtype=torch.float64)
+        detached_loss = loss_sum.detach().to(device=self.device, dtype=torch.float32)
         self._loss_sum = detached_loss if self._loss_sum is None else self._loss_sum + detached_loss
         return loss_sum / float(backward_divisor)
 
@@ -180,7 +177,7 @@ class TokenNormedLossKit:
         token_values = torch.tensor(
             [self._total_tokens, self._effective_tokens],
             device=self.device,
-            dtype=torch.float64,
+            dtype=torch.int64,
         )
         loss_sum = self._loss_sum.clone()
         if dist.is_available() and dist.is_initialized() and self.dp_world_size > 1:
