@@ -11,6 +11,8 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
+from mvp_engine.distributed import ParallelMesh
+
 from .loss import LossGuard
 
 
@@ -93,14 +95,32 @@ class TokenNormedLossKit:
         self,
         *,
         device: torch.device,
-        dp_world_size: int,
-        dp_group: dist.ProcessGroup | None = None,
+        parallel_mesh: ParallelMesh,
         loss_guard: PerTokenLossGuard | None = None,
     ) -> None:
         """Create an empty token-loss window on the given reduction device."""
         self.device = device
-        self.dp_world_size = int(dp_world_size)
-        self.dp_group = dp_group
+        self.parallel_mesh = parallel_mesh
+        self.grad_average_world_size = parallel_mesh.dp.world_size
+        self.grad_average_group = parallel_mesh.dp.group
+
+        stats_dim_names = tuple(
+            dim_name
+            for dim_name in parallel_mesh.dim_names
+            if dim_name != "tensor" and parallel_mesh.dim_size(dim_name) > 1
+        )
+        self.stats_world_size = 1
+        for dim_name in stats_dim_names:
+            self.stats_world_size *= parallel_mesh.dim_size(dim_name)
+        if not stats_dim_names:
+            self.stats_group = None
+        elif len(stats_dim_names) == 1:
+            self.stats_group = parallel_mesh.device_mesh[stats_dim_names[0]].get_group()
+        else:
+            self.stats_group = (
+                parallel_mesh.device_mesh[stats_dim_names]._flatten("_".join(stats_dim_names)).get_group()
+            )
+
         self.loss_guard = loss_guard
         self.reset()
 
@@ -132,8 +152,8 @@ class TokenNormedLossKit:
             spike_multiplier=spike_multiplier,
             window_size=window_size,
             min_history=min_history,
-            group=self.dp_group if group is None else group,
-            group_world_size=self.dp_world_size if group_world_size is None else group_world_size,
+            group=self.stats_group if group is None else group,
+            group_world_size=self.stats_world_size if group_world_size is None else group_world_size,
         )
         return self.loss_guard
 
@@ -183,15 +203,17 @@ class TokenNormedLossKit:
             dtype=torch.float64,
         )
         loss_sum = self._loss_sum.clone()
-        if dist.is_available() and dist.is_initialized() and self.dp_world_size > 1:
-            dist.all_reduce(token_values, op=dist.ReduceOp.SUM, group=self.dp_group)
-            dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM, group=self.dp_group)
+        if dist.is_available() and dist.is_initialized() and self.stats_world_size > 1:
+            dist.all_reduce(token_values, op=dist.ReduceOp.SUM, group=self.stats_group)
+            dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM, group=self.stats_group)
 
         global_effective_tokens = int(token_values[1].item())
         if global_effective_tokens <= 0:
             raise ValueError("Accumulation window must contain at least one supervised token.")
 
-        gradient_scale = float(self._backward_divisor) * float(self.dp_world_size) / float(global_effective_tokens)
+        gradient_scale = (
+            float(self._backward_divisor) * float(self.grad_average_world_size) / float(global_effective_tokens)
+        )
         return TokenLossStats(
             global_total_tokens=int(token_values[0].item()),
             global_effective_tokens=global_effective_tokens,
@@ -200,7 +222,7 @@ class TokenNormedLossKit:
             gradient_scale=gradient_scale,
         )
 
-    def rescale_gradients(self, parameters: Iterable[torch.nn.Parameter], stats: TokenLossStats) -> None:
+    def rescale_grads(self, parameters: Iterable[torch.nn.Parameter], stats: TokenLossStats) -> None:
         """Apply the final token-normalization factor to accumulated gradients."""
         with torch.no_grad():
             for parameter in parameters:
@@ -254,6 +276,7 @@ def apply_chunked_token_loss_patch(
             forward_kwargs = dict(kwargs)
 
         labels = forward_kwargs.pop("labels", None)
+        shift_labels = forward_kwargs.pop("shift_labels", None)
         logits_to_keep = forward_kwargs.pop("logits_to_keep", 0)
         if not inner_accepts_kwargs:
             forward_kwargs = {name: value for name, value in forward_kwargs.items() if name in inner_param_names}
@@ -270,7 +293,9 @@ def apply_chunked_token_loss_patch(
         if labels is None:
             logits = self.lm_head(hidden_states)
         else:
-            shift_labels = F.pad(labels, (0, 1), value=-100)[..., 1:].contiguous()
+            if shift_labels is None:
+                shift_labels = F.pad(labels, (0, 1), value=-100)[..., 1:]
+            shift_labels = shift_labels.contiguous()
             shift_labels = shift_labels[:, logits_slice] if shift_labels.dim() == 2 else shift_labels[logits_slice]
             flat_hidden_states = hidden_states.reshape(-1, hidden_states.size(-1))
             flat_labels = shift_labels.reshape(-1)

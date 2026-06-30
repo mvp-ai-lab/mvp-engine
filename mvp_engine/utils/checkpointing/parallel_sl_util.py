@@ -38,6 +38,23 @@ def _get_checkpoint_process_group():
     return None
 
 
+def _infer_checkpoint_backend(mesh: DeviceMesh) -> str:
+    """Infer whether checkpoint IO should use the DDP or FSDP2 path from the mesh."""
+    mesh_dim_names = mesh.mesh_dim_names or ()
+
+    if "shard" in mesh_dim_names and mesh["shard"].size() > 1:
+        return "fsdp2"
+    if "tensor" in mesh_dim_names and mesh["tensor"].size() > 1:
+        return "fsdp2"
+
+    mesh_shape = tuple(mesh.shape)
+    if len(mesh_shape) <= 1:
+        return "ddp"
+    if any(dim_size > 1 for dim_size in mesh_shape[1:]):
+        return "fsdp2"
+    return "ddp"
+
+
 def _get_accelerator_rng_state() -> tuple[str | None, torch.Tensor | None]:
     """Capture RNG state for the active accelerator when supported."""
     if torch.cuda.is_available():
@@ -62,25 +79,6 @@ def _set_accelerator_rng_state(device_type: str | None, rng_state: torch.Tensor 
     npu_module = getattr(torch, "npu", None)
     if device_type == "npu" and npu_module is not None and hasattr(npu_module, "set_rng_state"):
         npu_module.set_rng_state(rng_state)
-
-
-def _infer_checkpoint_backend(mesh: DeviceMesh) -> str:
-    """Infer whether checkpoint IO should use the DDP or FSDP2 path from the mesh."""
-    mesh_dim_names = mesh.mesh_dim_names or ()
-
-    if "shard" in mesh_dim_names and mesh["shard"].size() > 1:
-        return "fsdp2"
-    if "tensor" in mesh_dim_names and mesh["tensor"].size() > 1:
-        return "fsdp2"
-
-    # Fallback for unnamed meshes: any extra non-replicate dimension implies
-    # sharded checkpointing rather than rank-0-only DDP checkpointing.
-    mesh_shape = tuple(mesh.shape)
-    if len(mesh_shape) <= 1:
-        return "ddp"
-    if any(dim_size > 1 for dim_size in mesh_shape[1:]):
-        return "fsdp2"
-    return "ddp"
 
 
 def _optimizer_state_contains_fqn(optim_state: dict[str, Any], fqn: str) -> bool:

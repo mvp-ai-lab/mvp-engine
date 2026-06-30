@@ -26,7 +26,7 @@ kit cannot represent the training loop.
 - batch fields for total and supervised token counts;
 - engine `forward_step()`, `backward_step()`, `optimizer_step()`, and
   `train_post_step()` paths;
-- gradient accumulation and data-parallel process group;
+- gradient accumulation and `parallel_mesh`;
 - recipe-local structure/smoke tests.
 
 ## Workflow
@@ -38,10 +38,14 @@ from mvp_engine.kit import TokenNormedLossKit
 
 self.token_loss_kit = TokenNormedLossKit(
     device=self.device,
-    dp_world_size=self.dp_world_size,
-    dp_group=self.dp_group,
+    parallel_mesh=self.parallel_mesh,
 )
 ```
+
+The kit infers the gradient-average layout from `parallel_mesh.dp` and reduces
+token/loss statistics across all non-`tensor` mesh dimensions. This includes
+`context` when context parallelism is active, while excluding tensor-parallel
+ranks that do not own different token slices.
 
 ### 2. Ensure Unreduced Per-Token Loss
 
@@ -71,7 +75,7 @@ At the synchronized optimizer step:
 ```python
 stats = self.token_loss_kit.reduce_window()
 self.scaler.unscale_(self.optimizer)
-self.token_loss_kit.rescale_gradients(self.model.parameters(), stats)
+self.token_loss_kit.rescale_grads(self.model.parameters(), stats)
 ```
 
 Then clip, step optimizer/scheduler, log reduced stats, and call `reset()`.
@@ -81,11 +85,13 @@ Then clip, step optimizer/scheduler, log reduced stats, and call `reset()`.
 ### Soft Validation
 
 - model returns unreduced per-token loss when labels are present;
+- pre-shifted `shift_labels` may be passed when the recipe must handle packed
+  sequence boundaries before local slicing;
 - `effective_tokens` matches shifted supervised labels after masking and
   packing;
 - all microbatches in one accumulation window use the same backward divisor;
 - `reduce_window()` happens once per synchronized optimizer step;
-- `rescale_gradients()` runs after unscale and before clipping/optimizer step;
+- `rescale_grads()` runs after unscale and before clipping/optimizer step;
 - logs use `TokenLossStats.global_*` values.
 
 ### Hard Validation

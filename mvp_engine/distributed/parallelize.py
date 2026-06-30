@@ -53,8 +53,15 @@ def parallelize_model(
                   parsed and handled inside fsdp2.py
                 - Additional kwargs passed to fully_shard()
 
-            For Tensor Parallel and Sequence Parallel (if tensor mesh is active):
-                - sequence_parallel: Enables sequence parallel layouts on the tensor mesh before FSDP2 (default: False)
+            For Tensor Parallel and TP built-in Sequence Parallel (if tensor mesh is active):
+                - tp.builtin_sequence_parallel: Enables sequence parallel layouts on the tensor mesh before FSDP2
+                  (default: False)
+
+            For Context Parallel:
+                - cp.implementation: ulysses, ring, or usp, with ulysses as the default
+                - cp.attn_implementation: The attention implementation to use,
+                  either sdpa or flash_attention_2 (default: flash_attention_2)
+                - cp.grad_sync: Whether to synchronize gradients across devices (default: True)
 
     Returns:
         The parallelized model wrapped with the specified backend.
@@ -75,14 +82,24 @@ def parallelize_model(
     ddp_role = parallel_mesh.ddp
     fsdp_role = parallel_mesh.fsdp
     tp_role = parallel_mesh.tp
+    cp_role = parallel_mesh.cp
     shard_role = parallel_mesh.role("shard") if parallel_mesh.has_dim("shard") else None
 
-    sequence_parallel = bool(backend_kwargs.pop("sequence_parallel", False))
-    if sequence_parallel and not tp_role.active:
-        raise ValueError("Sequence parallel requires an active tensor mesh with parallel.mesh.tensor > 1.")
+    tp_backend_kwargs = dict(backend_kwargs.pop("tp", {}))
+    tp_backend_kwargs.setdefault("builtin_sequence_parallel", False)
+    if tp_backend_kwargs["builtin_sequence_parallel"] and not tp_role.active:
+        raise ValueError("TP builtin sequence parallel requires an active tensor mesh with parallel.mesh.tensor > 1.")
+
+    if tp_backend_kwargs["builtin_sequence_parallel"] and cp_role.active:
+        raise ValueError("TP builtin sequence parallel is not compatible with context parallel.")
+
+    cp_backend_kwargs = dict(backend_kwargs.pop("cp", {}))
+    cp_backend_kwargs.setdefault("implementation", "ulysses")
+    cp_backend_kwargs.setdefault("attn_implementation", "flash_attention_2")
+    cp_backend_kwargs.setdefault("grad_sync", True)
 
     shard_active = shard_role is not None and shard_role.active
-    if not shard_active and not tp_role.active:
+    if not shard_active and not tp_role.active and not cp_role.active:
         # For Pure DDP: [N, 1, 1]
         from torch.nn.parallel import DistributedDataParallel
 
@@ -92,15 +109,33 @@ def parallelize_model(
         parallelized_model = DistributedDataParallel(model, **backend_kwargs)
     else:
         # For FSDP2: [N, M, ...]
-        if not shard_active and tp_role.active:
+        if not shard_active and (tp_role.active or cp_role.active):
             raise ValueError(
                 f"Invalid device mesh shape {parallel_mesh.device_mesh.shape}. "
-                "Tensor/sequence parallel should be used with FSDP rather than the pure DDP"
+                "Tensor/context parallel should be used with FSDP rather than the pure DDP"
             )
 
         from mvp_engine.distributed.fsdp2 import parallelize_model_with_fsdp2
 
         fsdp2_mesh = fsdp_role.mesh
+        cp_mesh = cp_role.mesh
+        if cp_role.active:
+            if cp_backend_kwargs["implementation"] not in ["ulysses"]:
+                raise NotImplementedError(
+                    f"Context parallel implementation {cp_backend_kwargs['implementation']} is not supported."
+                )
+            if cp_backend_kwargs["attn_implementation"] not in ["sdpa", "flash_attention_2"]:
+                raise NotImplementedError(
+                    "Context parallel attention implementation "
+                    f"{cp_backend_kwargs['attn_implementation']} is not supported."
+                )
+
+            from mvp_engine.distributed.cp import (
+                parallelize_model_with_context_parallel,
+            )
+
+            parallelize_model_with_context_parallel(model, cp_mesh, cp_backend_kwargs)
+
         tp_mesh = tp_role.mesh
 
         if tp_mesh is not None and tp_role.active:
@@ -111,7 +146,7 @@ def parallelize_model(
             parallelize_model_with_tensor_parallel(
                 model,
                 tp_mesh,
-                sequence_parallel=sequence_parallel,
+                sequence_parallel=tp_backend_kwargs.get("builtin_sequence_parallel", False),
             )
 
         parallelized_model = model
@@ -136,5 +171,16 @@ def parallelize_model(
                 backend_kwargs["offload_policy"] = CPUOffloadPolicy()
 
             parallelized_model = parallelize_model_with_fsdp2(model, backend_kwargs)
+
+        if cp_role.active and cp_backend_kwargs["grad_sync"]:
+            from mvp_engine.distributed.cp import attach_cp_grad_sync
+
+            attach_cp_grad_sync(
+                parallelized_model,
+                cp_mesh,
+                bucket_mb=cp_backend_kwargs.get("grad_bucket_mb", 128),
+                reduce_dtype=cp_backend_kwargs.get("grad_reduce_dtype", "float32"),
+                exclude=cp_backend_kwargs.get("grad_sync_exclude", []),
+            )
 
     return parallelized_model

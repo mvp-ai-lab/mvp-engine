@@ -26,6 +26,7 @@ parallel:
   mesh:
     replicate: 1
     shard: 8
+    context: 1
     tensor: 1
   backend_kwargs: {}
 

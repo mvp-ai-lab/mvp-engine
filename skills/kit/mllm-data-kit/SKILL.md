@@ -15,7 +15,7 @@ Use `MLLMDataKit` as the standard data setup API for MLLM recipes. The kit
 builds a complete mvp-dataset pipeline from explicit specs:
 
 - `build_processor(...)` loads and normalizes the processor;
-- `build_distribution_spec(...)` derives data-parallel mesh placement;
+- `build_distribution_spec(...)` builds explicit data-parallel mesh placement;
 - `build_dataset(...)` builds source, guards, sample wrapping, packing,
   reference resolution, and model-input conversion;
 - `build_collator(...)` pads packed samples and delegates media collation;
@@ -59,7 +59,7 @@ from mvp_engine.kit import (
     MLLMPackingSpec,
     MLLMSampleSpec,
     MLLMSourceSpec,
-    QwenChatSchemaHandler,
+    QwenVLChatSchemaHandler,
     QwenVLMediaHandler,
     QwenVLTokenizationHandler,
 )
@@ -68,7 +68,7 @@ self.data_kit = MLLMDataKit()
 processor = self.data_kit.build_processor(...)
 
 sample_spec = MLLMSampleSpec(
-    schema_handler=QwenChatSchemaHandler(processor=processor, thinking_mode=config.data.thinking_mode),
+    schema_handler=QwenVLChatSchemaHandler(processor=processor, thinking_mode=config.data.thinking_mode),
     media_handler=QwenVLMediaHandler(processor=processor),
     tokenization_handler=QwenVLTokenizationHandler(
         processor=processor,
@@ -156,7 +156,8 @@ Dataset.from_source
 ```
 
 The collator then pads token fields, pads `pack_segment_ids` with `0`, creates
-token counters, and delegates media fields to `MLLMMediaHandler.collate(...)`.
+segment-safe `shift_labels`, creates token counters, and delegates media fields
+to `MLLMMediaHandler.collate(...)`.
 
 ### 4. Extend At The Smallest Boundary
 
@@ -218,7 +219,7 @@ and other model-forward details.
 
 #### Qwen Components
 
-- `QwenChatSchemaHandler`: conversation rows, Qwen chat template rendering,
+- `QwenVLChatSchemaHandler`: conversation rows, Qwen chat template rendering,
   thinking-mode handling, and ordered image slots.
 - `QwenVLMediaHandler`: Qwen media registry with image support.
 - `QwenImageHandler`: Qwen image placeholder expansion, smart resize, image

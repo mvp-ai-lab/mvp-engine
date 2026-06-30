@@ -18,7 +18,6 @@ class LLMSourceSpec:
     dataset_source: str = "lance"
     seed: int = 42
     resample: bool = True
-    shuffle_mode: str = "fragment_aware"
 
     def __post_init__(self) -> None:
         """Validate source options."""

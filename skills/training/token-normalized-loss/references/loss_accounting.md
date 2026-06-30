@@ -46,12 +46,18 @@ At the synchronized optimizer step, after reducing global token counts:
 ```python
 gradient_scale = (
     backward_loss_divisor
-    * data_parallel_world_size
+    * grad_average_world_size
     / global_effective_token_count
 )
 ```
 
 Multiply every non-None gradient by `gradient_scale`.
+
+`grad_average_world_size` is inferred from `parallel_mesh.dp`, because that is
+the layout whose gradients are averaged by DDP/FSDP. Token/loss statistics are
+reduced across all non-`tensor` mesh dimensions, so context-parallel ranks
+contribute their local token counts without treating tensor-parallel ranks as
+separate token owners.
 
 ## Operation Order
 

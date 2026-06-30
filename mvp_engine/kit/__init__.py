@@ -66,11 +66,14 @@ if TYPE_CHECKING:
     )
     from .model import LigerKernelKit, LigerKernelReport, LigerPatch
     from .optim import OptimKit
+    from .parallel import CPKit, CPSequenceSpec, QwenVLCPKit
     from .perf.mfu import MFUKit
     from .util import StepCountingKit, StepCountResult
 
 _EXPORT_MODULES = {
     "Confidence": ".mllm",
+    "CPKit": ".parallel",
+    "CPSequenceSpec": ".parallel",
     "LLMBatchCollator": ".llm",
     "LLMDataKit": ".llm",
     "LLMDataSpec": ".llm",
@@ -123,6 +126,7 @@ _EXPORT_MODULES = {
     "QwenChatTokenizationHandler": ".llm",
     "QwenImageHandler": ".mllm",
     "QwenVLChatSchemaHandler": ".mllm",
+    "QwenVLCPKit": ".parallel",
     "QwenVLMediaHandler": ".mllm",
     "QwenVLTokenizationHandler": ".mllm",
     "StepCountResult": ".util",

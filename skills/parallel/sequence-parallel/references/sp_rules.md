@@ -16,7 +16,8 @@ Sequence parallel is enabled by config:
 ```yaml
 parallel:
   backend_kwargs:
-    sequence_parallel: true
+    tp:
+      builtin_sequence_parallel: true
 ```
 
 Optional sequence-parallel plans live on the same top-level model class:
@@ -44,6 +45,8 @@ module names with the `"sequence"` style. The runtime merges it with
 - Do not add `parallel.mesh.sequence`.
 - The product of explicit or inferred mesh dimensions must match world size.
 - Preserve global batch semantics when changing `replicate`.
+- SP is not currently compatible with CP. `parallelize_model` rejects
+  `tp.builtin_sequence_parallel=true` when `parallel.mesh.context > 1`.
 
 ## Data-Loading Rules
 
@@ -66,12 +69,12 @@ same logical model replica and must not consume different samples.
 
 ## TP/SP Layout Rules
 
-When `sequence_parallel=false`, TP styles keep the existing behavior:
+When `tp.builtin_sequence_parallel=false`, TP styles keep the existing behavior:
 
 - `"col"` maps to `ColwiseParallel()`;
 - `"row"` maps to `RowwiseParallel()`.
 
-When `sequence_parallel=true`, the same TP styles become sequence-layout aware:
+When `tp.builtin_sequence_parallel=true`, the same TP styles become sequence-layout aware:
 
 - `"col"` maps to `ColwiseParallel(input_layouts=Shard(sequence_dim))`;
 - `"row"` maps to `RowwiseParallel(output_layouts=Shard(sequence_dim))`;
@@ -83,7 +86,7 @@ modules produce sequence-sharded outputs. Do not assume every op inside a
 TP-covered module sees the same local sequence length as its caller.
 
 Use `SEQUENCE_PARALLEL_SEQUENCE_DIM = 1` for `[batch, seq, hidden]` tensors. Use
-`0` for `[seq, batch, hidden]` tensors.
+`0` for `[seq, batch, hidden]` or 2D `[seq, hidden]` tensors.
 
 ## Planning Rules
 
@@ -216,8 +219,8 @@ layers, and custom norms/dropouts not covered by `SequenceParallel`.
 
 ## Common Failure Cases
 
-- `sequence_parallel=true` with `parallel.mesh.tensor == 1`.
-- `sequence_parallel=true` with `parallel.mesh.shard == 1`.
+- `tp.builtin_sequence_parallel=true` with `parallel.mesh.tensor == 1`.
+- `tp.builtin_sequence_parallel=true` with `parallel.mesh.shard == 1`.
 - Sequence length is not divisible by TP/SP size and no explicit padding/masking
   or uneven-shard handling exists.
 - TP/SP group ranks read different samples or different packed-batch layouts.

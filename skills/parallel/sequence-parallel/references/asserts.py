@@ -31,8 +31,8 @@ def test_file_structure(recipe_root: Path) -> None:
     assert "SEQUENCE_PARALLEL" in model_source, (
         "Bind SEQUENCE_PARALLEL_MODULE_CONFIG or SEQUENCE_PARALLEL_SEQUENCE_DIM on the top-level model class."
     )
-    assert "sequence_parallel" in config_source, (
-        "Config must expose parallel.backend_kwargs.sequence_parallel for SP activation."
+    assert "builtin_sequence_parallel" in config_source, (
+        "Config must expose parallel.backend_kwargs.tp.builtin_sequence_parallel for SP activation."
     )
     assert "mesh.sequence" not in config_source, (
         "Do not add a parallel.mesh.sequence dimension; SP must reuse parallel.mesh.tensor."
@@ -44,19 +44,23 @@ def test_file_structure(recipe_root: Path) -> None:
 
 def test_config_structure(config) -> None:
     """Verify mesh and backend config can activate SP safely."""
-    backend_kwargs = config.parallel.backend_kwargs
-    assert hasattr(backend_kwargs, "sequence_parallel"), (
-        "parallel.backend_kwargs.sequence_parallel must be available in the config schema."
+    tp_backend_kwargs = config.parallel.backend_kwargs.tp
+    assert hasattr(tp_backend_kwargs, "builtin_sequence_parallel"), (
+        "parallel.backend_kwargs.tp.builtin_sequence_parallel must be available in the config schema."
     )
-    assert isinstance(backend_kwargs.sequence_parallel, bool), "sequence_parallel must be a bool."
+    assert isinstance(tp_backend_kwargs.builtin_sequence_parallel, bool), (
+        "parallel.backend_kwargs.tp.builtin_sequence_parallel must be a bool."
+    )
     assert isinstance(config.parallel.mesh.tensor, int), "parallel.mesh.tensor must be an int."
     assert isinstance(config.parallel.mesh.shard, int), "parallel.mesh.shard must be an int."
 
-    if backend_kwargs.sequence_parallel:
+    if tp_backend_kwargs.builtin_sequence_parallel:
         assert config.parallel.mesh.tensor > 1 or config.parallel.mesh.tensor == -1, (
-            "sequence_parallel=true requires parallel.mesh.tensor > 1 or -1."
+            "parallel.backend_kwargs.tp.builtin_sequence_parallel=true requires parallel.mesh.tensor > 1 or -1."
         )
-        assert config.parallel.mesh.shard != 1, "This repo requires FSDP2 shard > 1 when sequence_parallel=true."
+        assert config.parallel.mesh.shard != 1, (
+            "This repo requires FSDP2 shard > 1 when parallel.backend_kwargs.tp.builtin_sequence_parallel=true."
+        )
 
 
 def test_engine_structure(engine_class: type) -> None:
@@ -75,7 +79,7 @@ def test_engine_structure(engine_class: type) -> None:
 
 def assert_before_train_end(engine) -> None:
     """After setup, verify an SP-active smoke run produced TP/SP-compatible state."""
-    if not engine.config.parallel.backend_kwargs.sequence_parallel:
+    if not engine.config.parallel.backend_kwargs.tp.builtin_sequence_parallel:
         return
 
     if hasattr(engine, "parallel_mesh"):

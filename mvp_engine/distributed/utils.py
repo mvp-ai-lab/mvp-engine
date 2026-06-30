@@ -114,13 +114,13 @@ def configure_distributed_socket_ifnames(device_type: str) -> dict[str, str]:
     return configured
 
 
-def get_world_size() -> int:
+def get_world_size(group: dist.ProcessGroup | None = None) -> int:
     """Return the number of processes in the distributed group."""
     if not dist.is_available():
         return 1
     if not dist.is_initialized():
         return 1
-    return dist.get_world_size()
+    return dist.get_world_size(group)
 
 
 def is_main_process() -> bool:
