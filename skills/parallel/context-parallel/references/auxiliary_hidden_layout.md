@@ -22,6 +22,9 @@ CP-off/CP-on parity metrics.
   auxiliary hidden states.
 - `scatter_seq_gather_hidden(...)` alone is not proof that an auxiliary tensor
   was selected back to local token positions.
+- If the public contract layer cannot access tensors without running the model,
+  put `assert_auxiliary_hidden_layout(...)` in a smoke hook or parity runner.
+  Do not replace tensor-shape proof with marker strings.
 - A cheap runtime hook can compare auxiliary sequence length against
   `inputs_embeds.shape[1]`.
 

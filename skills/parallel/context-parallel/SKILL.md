@@ -67,8 +67,8 @@ Before large code edits, create the recipe-local validation surface:
 - keep that copied file as the canonical recipe-local CP assertion surface;
 - add `tests/test_contract.py` from `tests/templates/test_contract.py.template`
   when semantic CP checks are needed;
-- fill recipe-local knobs in assertions, such as attention class names or
-  model-family field names;
+- fill recipe-local knobs in assertions, such as attention class names,
+  model-family field names, runtime probe hooks, and parity artifact paths;
 - enable the mechanism-specific assertion hooks named by the references you
   read;
 - run the public tests on the baseline and confirm they fail for missing CP
@@ -142,9 +142,11 @@ class <TopModelClass>(...):
 ```
 
 `parallelize_model(...)` reads this metadata when CP is active and routes
-matching attention modules through Ulysses. If the installed model wraps or
-overrides attention dispatch, also validate the executable dispatch path with
-`references/custom_attention_dispatch.md`.
+matching attention modules through Ulysses. Class-level metadata is preferred,
+but recipe-local patchers may also bind `model.CP_MODULE_CONFIG` dynamically
+before `parallelize_model(...)`; public tests should recognize either pattern.
+If the installed model wraps or overrides attention dispatch, also validate the
+executable dispatch path with `references/custom_attention_dispatch.md`.
 
 ### 5. Prepare Context-Local Batches
 
@@ -238,7 +240,9 @@ smoke hooks, method wrappers, or generic observation surfaces before changing
 production recipe engine/model code.
 
 Use `references/validation_system.md` to map each mechanism reference to the
-recipe knobs and assertion hooks that public tests should call.
+recipe knobs, executable probes, and assertion hooks that public tests should
+call. Do not force parity artifacts into structure or contract tests; check them
+only in parity/impact tests or when a recipe explicitly declares artifact paths.
 
 ## Output
 

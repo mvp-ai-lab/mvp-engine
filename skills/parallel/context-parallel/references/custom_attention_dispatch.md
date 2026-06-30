@@ -20,16 +20,19 @@ Q/K/V topology math, or gradient synchronization order.
 - Contract tests must check executable binding or a runtime probe, not only the
   presence of class names or marker strings.
 - Accepted evidence includes instance-local `forward` binding, a patched
-  installer that binds an adapter, or a probe that observes the CP dispatch path.
+  installer that binds an adapter, dynamic `model.CP_MODULE_CONFIG` updates
+  before `parallelize_model(...)`, or a structured probe that observes the CP
+  dispatch path and reports the observed class names.
 - Class-level monkeypatches are risky because they can leak across instances and
   should be rejected unless the recipe documents why they are isolated.
 
 ## Assertion Hooks
 
-Fill `CP_ATTENTION_CLASS_NAMES` in the recipe-local assertion copy when static
-class inference is not enough. Use `assert_attention_dispatch_bound(...)` from a
-smoke hook or recipe-local probe when the model uses an external attention
-interface, wrapper, or dynamic dispatch path.
+Fill `CP_ATTENTION_CLASS_NAMES` in the recipe-local assertion copy. Use
+`assert_attention_dispatch_bound(...)` from a smoke hook or recipe-local probe
+when the model uses an external attention interface or wrapper that source
+inspection cannot prove. Dynamic `model.CP_MODULE_CONFIG` assignment is
+acceptable if the configured class names remain inspectable.
 
 ## Validation Targets
 

@@ -40,6 +40,12 @@ DOWNSTREAM_CALL_MARKERS = (
     "visual",
 )
 PACKED_TOPOLOGY_MARKERS = ("cu_seq_lens", "cu_seqlens", "max_seqlen")
+RUNTIME_HOOK_FUNCTIONS = {
+    "assert_before_train_end",
+    "assert_train_pre_step_end",
+    "assert_forward_step_end",
+    "assert_optimizer_step_end",
+}
 REQUIRED_PARITY_METRICS = (
     "loss_cp_off",
     "loss_cp_on",
@@ -106,10 +112,10 @@ def test_contract(recipe_root: Path) -> None:
     model_files = _files(recipe_root, MODEL_FILE_GLOBS)
     engine_files = _files(recipe_root, ENGINE_FILE_GLOBS)
     config_files = _files(recipe_root, CONFIG_FILE_GLOBS)
-    test_files = _recipe_test_files(recipe_root)
+    test_files = _recipe_validation_files(recipe_root)
 
     assert_sequence_specs_contract(engine_files)
-    assert_model_family_dataflow_contract(engine_files, model_files)
+    assert_model_family_dataflow_contract(engine_files, model_files, test_files)
     assert_cp_helper_outputs_drive_dataflow(model_files + engine_files)
     assert_attention_dispatch_contract(model_files, test_files)
     assert_packed_topology_contract(engine_files + model_files, test_files)
@@ -166,8 +172,15 @@ def assert_attention_dispatch_bound(model, *, class_names=None, probe=None) -> N
     static `CP_MODULE_CONFIG` metadata is not enough to prove executable dispatch.
     """
     if probe is not None:
-        result = probe(model) if callable(probe) else probe
-        assert bool(result), "Attention dispatch runtime probe failed."
+        assert callable(probe), "Attention dispatch probe must be callable and observe runtime binding."
+        result = probe(model)
+        assert isinstance(result, dict), "Attention dispatch probe must return structured evidence."
+        observed = bool(result.get("cp_dispatch_observed")) or int(result.get("bound_module_count", 0)) > 0
+        assert observed, "Attention dispatch runtime probe did not observe CP dispatch or bound modules."
+        observed_classes = set(result.get("class_names", ()))
+        required = set(class_names or CP_ATTENTION_CLASS_NAMES)
+        missing = sorted(required - observed_classes)
+        assert not missing, f"Attention dispatch probe did not observe configured classes: {missing}."
         return
 
     required = set(class_names or CP_ATTENTION_CLASS_NAMES)
@@ -186,6 +199,17 @@ def assert_auxiliary_hidden_layout(inputs_embeds, auxiliary_tensors: dict[str, o
         assert actual_seq == expected_seq, (
             f"{name} sequence length {actual_seq} must match inputs_embeds sequence length {expected_seq}."
         )
+
+
+def assert_native_local_forward(model, *, media_fields: tuple[str, ...], probe) -> None:
+    """Verify a model advertised as native-local really consumes CP-local media."""
+    assert callable(probe), "Native-local forward proof must use a callable runtime probe."
+    result = probe(model)
+    assert isinstance(result, dict), "Native-local forward probe must return structured evidence."
+    assert result.get("native_local_forward") is True, "Native-local forward probe did not pass."
+    observed_fields = set(result.get("media_fields", ()))
+    missing = sorted(set(media_fields) - observed_fields)
+    assert not missing, f"Native-local forward probe did not observe media fields: {missing}."
 
 
 def assert_cp_parity_artifact(path: str | Path, *, allow_blocked: bool = False) -> None:
@@ -213,13 +237,22 @@ def assert_sequence_specs_contract(engine_files: list[Path]) -> None:
     assert fields & {"labels", "shift_labels"}, "CPSequenceSpec should include labels or shift_labels."
 
 
-def assert_model_family_dataflow_contract(engine_files: list[Path], model_files: list[Path]) -> None:
+def assert_model_family_dataflow_contract(engine_files: list[Path], model_files: list[Path], test_files: list[Path]) -> None:
     fields = _cp_sequence_spec_fields(engine_files)
     inferred_model_fields = {field for field in fields if _looks_like_model_family_field(field)}
     model_family_fields = inferred_model_fields | set(MODEL_FAMILY_SEQUENCE_FIELDS)
     if not model_family_fields:
         return
     if MODEL_FAMILY_NATIVE_LOCAL_FORWARD:
+        has_native_probe = _files_call_executable_assertion(test_files, "assert_native_local_forward")
+        has_parity_validation = bool(PARITY_ARTIFACT_PATHS) and (
+            _files_call_executable_assertion(test_files, "assert_parity_artifacts_contract")
+            or _files_call_executable_assertion(test_files, "assert_cp_parity_artifact")
+        )
+        assert has_native_probe or has_parity_validation, (
+            "MODEL_FAMILY_NATIVE_LOCAL_FORWARD=True requires a runtime proof via assert_native_local_forward(...) "
+            "or an executable parity/impact artifact validation."
+        )
         return
 
     model_source = _source_for(model_files)
@@ -255,7 +288,7 @@ def assert_cp_helper_outputs_drive_dataflow(paths: list[Path]) -> None:
 
 def assert_attention_dispatch_contract(model_files: list[Path], test_files: list[Path]) -> None:
     config_names = _cp_module_config_names(model_files)
-    has_dispatch_probe = _files_call_function(test_files, "assert_attention_dispatch_bound")
+    has_dispatch_probe = _files_call_executable_assertion(test_files, "assert_attention_dispatch_bound", "probe")
     assert config_names or has_dispatch_probe, (
         "Model files must expose inspectable CP_MODULE_CONFIG names, or public tests must call "
         "assert_attention_dispatch_bound(...) with a runtime dispatch probe."
@@ -271,21 +304,22 @@ def assert_attention_dispatch_contract(model_files: list[Path], test_files: list
 def assert_packed_topology_contract(paths: list[Path], test_files: list[Path]) -> None:
     if not any(_source_uses_name_like(path, PACKED_TOPOLOGY_MARKERS) for path in paths):
         return
-    assert _files_call_function(test_files, "assert_packed_topology_matches_flattened_qkv"), (
+    has_runtime_check = _files_call_executable_assertion(test_files, "assert_packed_topology_matches_flattened_qkv")
+    assert has_runtime_check, (
         "Recipe builds packed/varlen attention metadata. Add a contract/smoke call to "
-        "assert_packed_topology_matches_flattened_qkv(...) using the actual attention Q/K/V length."
+        "assert_packed_topology_matches_flattened_qkv(...) using metadata and the actual attention Q/K/V length."
     )
 
 
 def assert_auxiliary_hidden_contract(model_files: list[Path], test_files: list[Path]) -> None:
     if not AUXILIARY_HIDDEN_NAMES:
         return
-    source = _source_for(model_files)
-    missing = [name for name in AUXILIARY_HIDDEN_NAMES if name not in source]
+    missing = [name for name in AUXILIARY_HIDDEN_NAMES if not _source_defines_or_uses_name_like(model_files, name)]
     assert not missing, f"Configured auxiliary hidden tensors are missing from model source: {missing}."
-    assert _files_call_function(test_files, "assert_auxiliary_hidden_layout"), (
+    has_runtime_check = _files_call_executable_assertion(test_files, "assert_auxiliary_hidden_layout")
+    assert has_runtime_check, (
         "Auxiliary hidden tensors require a smoke or contract hook calling "
-        "assert_auxiliary_hidden_layout(...)."
+        "assert_auxiliary_hidden_layout(...) at the LLM boundary."
     )
 
 
@@ -310,14 +344,19 @@ def _assert_optimizer_step_function_order(path: Path, function: ast.FunctionDef 
     sync_positions = [pos for pos, name in calls if name == "sync_cp_grads"]
     assert sync_positions, f"{path}: optimizer_step must call sync_cp_grads(...)."
     sync_pos = min(sync_positions)
+    unscale_positions = [pos for pos, name in calls if name in {"unscale", "unscale_"}]
 
     for pos, name in calls:
+        if name in {"rescale_grads", "reduce_window"}:
+            assert pos < sync_pos, f"{path}: token/global gradient rescale must run before sync_cp_grads(...)."
+            for unscale_pos in unscale_positions:
+                assert unscale_pos < pos, f"{path}: AMP unscale must run before token/global gradient rescale."
         if name in {"clip_grad", "clip_grad_norm", "clip_grad_norm_"}:
             assert sync_pos < pos, f"{path}: sync_cp_grads(...) must run before gradient clipping."
         if name in {"optimizer.step", "step"}:
             assert sync_pos < pos, f"{path}: sync_cp_grads(...) must run before optimizer.step()."
-        if name in {"rescale_grads", "reduce_window"}:
-            assert pos < sync_pos, f"{path}: token/global gradient rescale must run before sync_cp_grads(...)."
+    for unscale_pos in unscale_positions:
+        assert unscale_pos < sync_pos, f"{path}: AMP unscale must run before sync_cp_grads(...)."
 
 
 def _call_events(node: ast.AST) -> list[tuple[tuple[int, int], str]]:
@@ -357,6 +396,7 @@ def _cp_module_config_names(model_files: list[Path]) -> set[str]:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         dict_assignments = _dict_assignments(tree)
         for node in ast.walk(tree):
+            names.update(_cp_module_update_names(node))
             value = _cp_module_config_value(node, dict_assignments)
             if not isinstance(value, ast.Dict):
                 continue
@@ -400,7 +440,28 @@ def _dict_assignments(tree: ast.AST) -> dict[str, ast.Dict]:
 
 
 def _is_cp_module_config_target(node: ast.AST) -> bool:
-    return isinstance(node, ast.Name) and node.id == "CP_MODULE_CONFIG"
+    if isinstance(node, ast.Name) and node.id == "CP_MODULE_CONFIG":
+        return True
+    return isinstance(node, ast.Attribute) and node.attr == "CP_MODULE_CONFIG"
+
+
+def _cp_module_update_names(node: ast.AST) -> set[str]:
+    if not isinstance(node, ast.Call):
+        return set()
+    if not isinstance(node.func, ast.Attribute) or node.func.attr != "update":
+        return set()
+    owner = node.func.value
+    if not isinstance(owner, ast.Name) or "cp_module_config" not in owner.id.lower():
+        return set()
+    names: set[str] = set()
+    for arg in node.args:
+        if not isinstance(arg, ast.Dict):
+            continue
+        for key in arg.keys:
+            literal = _literal_string(key)
+            if literal is not None:
+                names.add(literal)
+    return names
 
 
 def _assigned_cp_helpers(tree: ast.AST) -> list[tuple[str, int]]:
@@ -521,8 +582,53 @@ def _files_call_function(paths: list[Path], function_name: str) -> bool:
     return False
 
 
+def _files_call_executable_assertion(paths: list[Path], function_name: str, keyword_name: str | None = None) -> bool:
+    for path in paths:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        _attach_parents(tree)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or _call_name(node.func).rsplit(".", 1)[-1] != function_name:
+                continue
+            if keyword_name is not None and not any(keyword.arg == keyword_name for keyword in node.keywords):
+                continue
+            if _call_is_in_executable_validation_function(node):
+                return True
+    return False
+
+
+def _call_is_in_executable_validation_function(node: ast.AST) -> bool:
+    parent = getattr(node, "_parent", None)
+    while parent is not None:
+        if isinstance(parent, ast.If) and isinstance(parent.test, ast.Constant) and parent.test.value is False:
+            return False
+        if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if _function_is_skipped_test(parent):
+                return False
+            return parent.name.startswith("test_") or parent.name in RUNTIME_HOOK_FUNCTIONS
+        parent = getattr(parent, "_parent", None)
+    return False
+
+
+def _function_is_skipped_test(function: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    for decorator in function.decorator_list:
+        name = _call_name(decorator.func if isinstance(decorator, ast.Call) else decorator)
+        if name.endswith(".skip") or name.endswith(".skipif") or name in {"skip", "skipif"}:
+            return True
+    return False
+
+
+def _source_defines_or_uses_name_like(paths: list[Path], name: str) -> bool:
+    markers = (name,)
+    return any(_source_uses_name_like(path, markers) for path in paths)
+
+
 def _recipe_test_files(recipe_root: Path) -> list[Path]:
     return sorted((recipe_root / "tests").rglob("test_*.py"))
+
+
+def _recipe_validation_files(recipe_root: Path) -> list[Path]:
+    assert_files = sorted((recipe_root / "tests" / "skills" / "context-parallel").glob("*.py"))
+    return sorted(set(_recipe_test_files(recipe_root) + assert_files))
 
 
 def _cp_helper_names() -> set[str]:

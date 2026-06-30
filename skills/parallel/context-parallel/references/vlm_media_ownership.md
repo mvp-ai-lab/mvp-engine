@@ -34,7 +34,9 @@ Use `MODEL_FAMILY_SEQUENCE_FIELDS` in the recipe-local copy of
 `CPSequenceSpec`. Put model-family helper names in
 `MODEL_FAMILY_HELPER_NAMES` instead of adding them to the generic helper set.
 Use `MODEL_FAMILY_NATIVE_LOCAL_FORWARD=True` only when a runtime validation
-proves the installed forward natively consumes CP-local media.
+proves the installed forward natively consumes CP-local media. Use
+`assert_native_local_forward(...)` or declared parity/impact artifacts for that
+proof.
 The contract helpers
 `assert_model_family_dataflow_contract(...)` and
 `assert_cp_helper_outputs_drive_dataflow(...)` enforce cheap source-level

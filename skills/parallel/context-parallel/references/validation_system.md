@@ -8,6 +8,7 @@ This file owns:
 - public validation before coding;
 - canonical recipe-local assertion ownership;
 - structure/contract/smoke/parity boundaries;
+- executable assertion placement;
 - blocked hard-validation semantics.
 
 This file does not own:
@@ -60,7 +61,8 @@ canonical template and fill recipe-local knobs.
 When a mechanism reference applies, connect it to executable validation:
 
 - packed attention topology:
-  `assert_packed_topology_matches_flattened_qkv(...)`;
+  `assert_packed_topology_matches_flattened_qkv(...)` using metadata and the
+  actual Q/K/V length observed at the attention boundary;
 - VLM or model-family media ownership:
   `MODEL_FAMILY_SEQUENCE_FIELDS`,
   `MODEL_FAMILY_HELPER_NAMES`,
@@ -69,14 +71,24 @@ When a mechanism reference applies, connect it to executable validation:
   `assert_cp_helper_outputs_drive_dataflow(...)`;
 - custom attention dispatch:
   `CP_ATTENTION_CLASS_NAMES` and `assert_attention_dispatch_bound(...)`;
+  dynamic `model.CP_MODULE_CONFIG` binding before `parallelize_model(...)` is
+  acceptable when the assertion can inspect the configured class names, and
+  dynamic dispatch wrappers must use a structured runtime probe;
 - auxiliary hidden layout:
-  `AUXILIARY_HIDDEN_NAMES` and `assert_auxiliary_hidden_layout(...)`;
+  `AUXILIARY_HIDDEN_NAMES` plus `assert_auxiliary_hidden_layout(...)` at the LLM
+  boundary;
 - gradient sync order:
   `assert_optimizer_order_contract(...)` and `assert_before_train_end(...)`;
 - runtime parity:
   `assert_cp_parity_artifact(...)` and `tests/templates/test_parity.py.template`.
+  Keep this in the parity/impact layer; do not make ordinary contract tests
+  require an artifact path unless the recipe explicitly opts in.
 
 Do not leave a selected mechanism as prose-only guidance.
+Runtime proof helpers must be called from collected `test_*` functions or from
+recognized smoke hook functions in the recipe-local assertion file; ordinary
+helper functions, skipped tests, dead branches, comments, and marker strings do
+not count.
 
 ## Layer Boundaries
 
@@ -90,6 +102,8 @@ Contract:
 - proves cheap CP semantics with AST/source/config/runtime-light checks;
 - may check helper dataflow, bound forward patches, attention dispatch, and
   optimizer-step order;
+- may check source-level AST/dataflow invariants, but marker strings, comments,
+  and unused helper calls are not evidence;
 - must not call `engine.train()` or require accelerators.
 
 Smoke:
