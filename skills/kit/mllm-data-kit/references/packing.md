@@ -6,10 +6,13 @@ tokenized `MLLMSample` objects and emits `MLLMPack` objects.
 
 ## Spec Fields
 
-Use `MLLMPackingSpec`:
+Use `data_kit.PackingSpec`:
 
 ```python
-MLLMPackingSpec(
+from mvp_engine.kit import MLLMDataKit
+
+data_kit = MLLMDataKit()
+data_kit.PackingSpec(
     max_seq_len=int(config.data.max_seq_len),
     algorithm="multi_pack",
     selection_strategy="best_fit",
@@ -35,7 +38,7 @@ Fields:
 Use `assembler_cls` for a packing algorithm replacement:
 
 ```python
-MLLMPackingSpec(..., assembler_cls=MyPackingAssembler)
+data_kit.PackingSpec(..., assembler_cls=MyPackingAssembler)
 ```
 
 The custom assembler follows the mvp-dataset contract:
@@ -82,7 +85,7 @@ Recipe/model code owns:
 - throughput and loss-token accounting conventions.
 
 Standard MLLM recipes expose packing through the knobs consumed by
-`MLLMPackingSpec`.
+`data_kit.PackingSpec`.
 
 ## Step Estimation
 

@@ -1,29 +1,20 @@
 """General-purpose utility kits."""
 
+# ruff: noqa: F401
+
 from typing import TYPE_CHECKING
 
+from mvp_engine.kit._lazy import resolve_lazy_export
+
 if TYPE_CHECKING:
-    from .step_counting import StepCountingKit, StepCountResult
+    from .step_counting import StepCountingKit
 
-__all__ = [
-    "StepCountResult",
-    "StepCountingKit",
-]
-
-_EXPORT_MODULES = {
-    "StepCountResult": ".step_counting",
+_KIT_MODULES = {
     "StepCountingKit": ".step_counting",
 }
 
+__all__ = list(_KIT_MODULES)
+
 
 def __getattr__(name: str):
-    """Lazily resolve utility kit exports from their implementation modules."""
-    if name not in _EXPORT_MODULES:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-    from importlib import import_module
-
-    module = import_module(_EXPORT_MODULES[name], __name__)
-    value = getattr(module, name)
-    globals()[name] = value
-    return value
+    return resolve_lazy_export(globals(), _KIT_MODULES, name)

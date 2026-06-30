@@ -36,15 +36,15 @@ def test_engine_structure(engine_class: type) -> None:
     calls = [ast.unparse(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)]
 
     uses_standard_data_kit = "MLLMDataKit" in source or "data_kit.build_dataset" in source
-    declares_packing_spec = "MLLMPackingSpec" in source
+    declares_packing_spec = "MLLMPackingSpec" in source or ".PackingSpec" in source
     assert declares_packing_spec or not uses_standard_data_kit, (
-        "Standard MLLM engines should declare packing through MLLMPackingSpec."
+        "Standard MLLM engines should declare packing through MLLMDataKit.PackingSpec."
     )
     assert "pack_segment_ids" in source or any("prepare_packed" in name for name in calls), (
         "Engine must preserve or prepare packed metadata before model forward."
     )
     assert not uses_standard_data_kit or re.search(r"\bconfig\.data\.packing\b", source) is None, (
-        "Packing policy should be expressed through MLLMPackingSpec fields."
+        "Packing policy should be expressed through MLLMDataKit.PackingSpec fields."
     )
 
 

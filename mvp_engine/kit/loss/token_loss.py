@@ -86,6 +86,9 @@ class PerTokenLossGuard(LossGuard):
 class TokenNormedLossKit:
     """Track one token-normalized gradient-accumulation window."""
 
+    Guard = PerTokenLossGuard
+    Stats = TokenLossStats
+
     def __init__(
         self,
         *,

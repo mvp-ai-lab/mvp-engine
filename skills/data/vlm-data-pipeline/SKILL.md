@@ -2,7 +2,7 @@
 name: vlm-data-pipeline
 description: Add, review, update, and validate VLM/MLLM data pipelines using
   the current spec/handler-based MLLMDataKit design. Use for raw schema
-  normalization, MLLMDataSpec wiring, source resample/resolve_refs policy, media
+  normalization, data_kit.DataSpec wiring, source resample/resolve_refs policy, media
   extensions, processor setup, packing, guards, collation, step estimation, and
   recipe integration.
 ---
@@ -11,7 +11,7 @@ description: Add, review, update, and validate VLM/MLLM data pipelines using
 
 ## Goal
 
-Use `MLLMDataKit` and explicit `MLLMDataSpec` objects as the default VLM data
+Use `MLLMDataKit` and explicit `data_kit.DataSpec` objects as the default VLM data
 implementation. Recipe-local code should describe recipe-specific schema,
 modality, tokenization, packing, model-input preparation, or backend lifecycle
 behavior.
@@ -40,7 +40,7 @@ Search:
 
 ```bash
 rg -n \
-  "MLLMDataKit|MLLMDataSpec|MLLMSampleSpec|MLLMSourceSpec|MLLMPackingSpec|QwenChatSchemaHandler|build_dataset" \
+  "MLLMDataKit|\\.DataSpec|\\.SampleSpec|\\.SourceSpec|\\.PackingSpec|QwenVLChatSchemaHandler|build_dataset" \
   recipes/<recipe>
 ```
 
@@ -51,7 +51,7 @@ handlers or specs.
 ### 2. Choose The Extension Point
 
 - Source path, backend, sharding, `resample`, or `resolve_refs`:
-  `MLLMSourceSpec` / `MLLMDistributionSpec`.
+  `data_kit.SourceSpec` / `data_kit.DistributionSpec`.
 - Raw row format, role aliases, prompt/target split, placeholders, media slot
   binding, or label policy: `MLLMSchemaHandler`.
 - Placeholder rendering, image/video/audio decode, model media tensors, pack
@@ -60,8 +60,8 @@ handlers or specs.
 - Tokenization, truncation, or ignore-index behavior:
   `MLLMTokenizationHandler`.
 - Packing strategy, buffer, open-pack limit, or custom packer:
-  `MLLMPackingSpec`.
-- Dataloader batch shape and worker settings: `MLLMLoaderSpec`.
+  `data_kit.PackingSpec`.
+- Dataloader batch shape and worker settings: `data_kit.LoaderSpec`.
 - Model-specific packed attention, position ids, FlashAttention metadata, or
   dummy media paths: recipe/model preparation code outside generic DataKit.
 - Dataset stage order or backend lifecycle: extend `MLLMDataKit`.
@@ -85,13 +85,13 @@ generic data kit.
 Training source spec normally uses:
 
 ```python
-MLLMSourceSpec(..., resample=True, resolve_refs=True)
+data_kit.SourceSpec(..., resample=True, resolve_refs=True)
 ```
 
 Step-estimation source spec normally uses:
 
 ```python
-MLLMSourceSpec(..., resample=False, resolve_refs=False)
+data_kit.SourceSpec(..., resample=False, resolve_refs=False)
 ```
 
 Pass the finite packed estimation dataset to `MLLMStepEstimationKit`. Keep these
@@ -101,7 +101,7 @@ choices visible on the source spec used at each engine callsite.
 
 Soft checks:
 
-- engine builds `MLLMDataSpec` from explicit source/sample/packing/loader specs;
+- engine builds `data_kit.DataSpec` from explicit source/sample/packing/loader specs;
 - media refs stay aligned with placeholders through packing and loading;
 - labels supervise only intended segments;
 - text-only, single-media, multi-media, invalid rows, and unreadable media have

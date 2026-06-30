@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import torch
 
@@ -14,20 +14,9 @@ from mvp_engine.engine import ENGINE_REGISTRY, Engine, TrainStepContext
 from mvp_engine.kit import (
     MFUKit,
     MLLMDataKit,
-    MLLMDataSpec,
-    MLLMLoaderSpec,
     MLLMModelKit,
-    MLLMPackingSpec,
-    MLLMSampleSpec,
-    MLLMSourceSpec,
     MLLMStepEstimationKit,
-    MLLMTextOnlyBatchGuard,
-    ModelInputs,
     OptimKit,
-    QwenImageHandler,
-    QwenVLChatSchemaHandler,
-    QwenVLMediaHandler,
-    QwenVLTokenizationHandler,
     TokenNormedLossKit,
 )
 from mvp_engine.utils.log import logger
@@ -99,13 +88,13 @@ class OpenBeeEngine(Engine):
         )
 
         # Step 2: declare the Qwen sample handlers.
-        sample_spec = MLLMSampleSpec(
-            schema_handler=QwenVLChatSchemaHandler(
+        sample_spec = self.data_kit.SampleSpec(
+            schema_handler=self.data_kit.QwenVLChatSchemaHandler(
                 processor=self.processor,
                 thinking_mode=self.config.data.thinking_mode,
             ),
-            media_handler=QwenVLMediaHandler(processor=self.processor),
-            tokenization_handler=QwenVLTokenizationHandler(
+            media_handler=self.data_kit.QwenVLMediaHandler(processor=self.processor),
+            tokenization_handler=self.data_kit.QwenVLTokenizationHandler(
                 processor=self.processor,
                 max_seq_len=int(self.config.data.max_seq_len),
             ),
@@ -113,7 +102,7 @@ class OpenBeeEngine(Engine):
 
         # Step 3: declare distributed placement and the training data spec.
         distribution = self.data_kit.build_distribution_spec(parallel_mesh=self.parallel_mesh)
-        packing_spec = MLLMPackingSpec(
+        packing_spec = self.data_kit.PackingSpec(
             max_seq_len=int(self.config.data.max_seq_len),
             algorithm="multi_pack",
             selection_strategy=self.config.data.packing_selection_strategy,
@@ -121,12 +110,12 @@ class OpenBeeEngine(Engine):
             buffer_size=int(self.config.data.packing_buffer_size),
             block_causal=True,
         )
-        loader_spec = MLLMLoaderSpec(
+        loader_spec = self.data_kit.LoaderSpec(
             batch_size=int(self.config.data.batch_size),
             num_workers=int(self.config.data.num_workers),
         )
-        data_spec = MLLMDataSpec(
-            source=MLLMSourceSpec(
+        data_spec = self.data_kit.DataSpec(
+            source=self.data_kit.SourceSpec(
                 dataset_path=self.config.data.train_path,
                 dataset_source="lance",
                 ref_columns=tuple(self.config.data.ref_columns),
@@ -142,8 +131,8 @@ class OpenBeeEngine(Engine):
 
         # Step 4: when total_steps=-1, consume one finite packed data pass to estimate one-epoch steps.
         if int(self.config.loop.total_steps) == -1:
-            estimation_spec = MLLMDataSpec(
-                source=MLLMSourceSpec(
+            estimation_spec = self.data_kit.DataSpec(
+                source=self.data_kit.SourceSpec(
                     dataset_path=self.config.data.train_path,
                     dataset_source="lance",
                     ref_columns=tuple(self.config.data.ref_columns),
@@ -177,9 +166,9 @@ class OpenBeeEngine(Engine):
 
         # Step 7: OpenBee forward requires one image tensor even for text-only batches.
         tokenizer = self.processor.tokenizer
-        image_handler = QwenImageHandler()
+        image_handler = self.data_kit.QwenImageHandler()
         return dataloader.map(
-            MLLMTextOnlyBatchGuard(
+            self.data_kit.TextOnlyBatchGuard(
                 dummy_inputs=image_handler.build_dummy_inputs(self.processor),
                 media_keys=image_handler.OUTPUT_TENSOR_KEYS,
                 pad_token_id=int(tokenizer.pad_token_id),
@@ -270,7 +259,7 @@ class OpenBeeEngine(Engine):
         prepares packed Qwen3-VL inputs, and casts visual tensors to the active
         mixed-precision dtype.
         """
-        batch: ModelInputs = self.data_kit.to_device(ctx.data, self.device)
+        batch: dict[str, Any] = self.data_kit.to_device(ctx.data, self.device)
 
         batch = prepare_packed_model_inputs(
             batch,
@@ -289,7 +278,7 @@ class OpenBeeEngine(Engine):
         local FLOPs are carried into later hooks for accumulation-window
         reduction and logging.
         """
-        data: ModelInputs = ctx.data
+        data: dict[str, Any] = ctx.data
         with torch.autocast(
             device_type=self.device_type,
             dtype=self.dtype,

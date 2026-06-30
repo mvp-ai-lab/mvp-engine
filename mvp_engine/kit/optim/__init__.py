@@ -1,50 +1,20 @@
-"""Reusable optimizer and scheduler utilities."""
+"""Reusable optimizer and scheduler kits."""
 
-from __future__ import annotations
+# ruff: noqa: F401
 
 from typing import TYPE_CHECKING
 
+from mvp_engine.kit._lazy import resolve_lazy_export
+
 if TYPE_CHECKING:
-    import torch
+    from .optim import OptimKit
+
+_KIT_MODULES = {
+    "OptimKit": ".optim",
+}
+
+__all__ = list(_KIT_MODULES)
 
 
-class OptimKit:
-    """Group reusable optimizer and scheduler construction utilities."""
-
-    def build_optimizer(
-        self,
-        model: torch.nn.Module,
-        optimizer: str,
-        lr: float,
-        weight_decay: float,
-        **kwargs,
-    ) -> torch.optim.Optimizer:
-        """Build a torch optimizer over parameters that are still trainable."""
-        import torch
-
-        trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
-        if not trainable_parameters:
-            raise ValueError("No trainable parameters found.")
-
-        assert hasattr(torch.optim, optimizer), f"Optimizer '{optimizer}' not found in torch.optim."
-        return getattr(torch.optim, optimizer)(
-            trainable_parameters,
-            lr=lr,
-            weight_decay=weight_decay,
-            **kwargs,
-        )
-
-    def build_lr_scheduler(
-        self,
-        optimizer: torch.optim.Optimizer,
-        lr_scheduler: str,
-        **kwargs,
-    ) -> torch.optim.lr_scheduler.LRScheduler:
-        """Build a Transformers learning-rate scheduler for the optimizer."""
-        from transformers import get_scheduler
-
-        return get_scheduler(
-            name=lr_scheduler,
-            optimizer=optimizer,
-            **kwargs,
-        )
+def __getattr__(name: str):
+    return resolve_lazy_export(globals(), _KIT_MODULES, name)

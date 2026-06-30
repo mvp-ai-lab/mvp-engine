@@ -14,16 +14,44 @@ from mvp_engine.distributed import ParallelMesh
 
 from .collator import LLMBatchCollator
 from .guard import LLMModelInputGuard, LLMRawRowGuard, LLMSampleGuard
-from .packing import LLMPackingAssembler
+from .packing import LLMPackingAssembler, build_packed_block_causal_mask
+from .qwen import QwenChatSchemaHandler, QwenChatTokenizationHandler
 from .sample import LLMSampleAssembler
-from .spec import LLMDataSpec, LLMDistributionSpec
-from .types import ModelInputs
+from .schema import LLMPretrainTextSchemaHandler, LLMSchemaHandler
+from .spec import (
+    LLMDataSpec,
+    LLMDistributionSpec,
+    LLMLoaderSpec,
+    LLMPackingSpec,
+    LLMSampleSpec,
+    LLMSourceSpec,
+)
+from .tokenization import LLMPretrainTextTokenizationHandler, LLMTokenizationHandler
+from .types import LLMSegment, ModelInputs
 
 IGNORE_INDEX = -100
 
 
 class LLMDataKit:
     """Build runtime text-only LM data objects from explicit data specs."""
+
+    BatchCollator = LLMBatchCollator
+    DataSpec = LLMDataSpec
+    DistributionSpec = LLMDistributionSpec
+    LoaderSpec = LLMLoaderSpec
+    ModelInputs = ModelInputs
+    PackingAssembler = LLMPackingAssembler
+    PackingSpec = LLMPackingSpec
+    PretrainTextSchemaHandler = LLMPretrainTextSchemaHandler
+    PretrainTextTokenizationHandler = LLMPretrainTextTokenizationHandler
+    QwenChatSchemaHandler = QwenChatSchemaHandler
+    QwenChatTokenizationHandler = QwenChatTokenizationHandler
+    SampleSpec = LLMSampleSpec
+    SchemaHandler = LLMSchemaHandler
+    Segment = LLMSegment
+    SourceSpec = LLMSourceSpec
+    TokenizationHandler = LLMTokenizationHandler
+    build_packed_block_causal_mask = staticmethod(build_packed_block_causal_mask)
 
     def build_distribution_spec(
         self,
@@ -140,9 +168,4 @@ class LLMDataKit:
         return batch_on_device
 
 
-__all__ = [
-    "IGNORE_INDEX",
-    "LLMBatchCollator",
-    "LLMDataKit",
-    "ModelInputs",
-]
+__all__ = ["LLMDataKit"]

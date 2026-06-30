@@ -9,7 +9,7 @@ import inspect
 import textwrap
 from typing import Any
 
-from mvp_engine.kit.mllm import MLLMModelKit
+from mvp_engine.kit import MLLMModelKit
 
 ALLOWED_COMPILE_BACKENDS = {"inductor", "aot_eager", "eager"}
 ALLOWED_COMPILE_MODES = {"default", "reduce-overhead", "max-autotune", "max-autotune-no-cudagraphs"}

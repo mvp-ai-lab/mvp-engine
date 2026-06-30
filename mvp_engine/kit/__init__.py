@@ -4,146 +4,39 @@
 
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from .llm import (
-        LLMBatchCollator,
-        LLMDataKit,
-        LLMDataSpec,
-        LLMDistributionSpec,
-        LLMLoaderSpec,
-        LLMModelKit,
-        LLMPack,
-        LLMPackingAssembler,
-        LLMPackingSpec,
-        LLMPretrainTextSchemaHandler,
-        LLMPretrainTextTokenizationHandler,
-        LLMSample,
-        LLMSampleSpec,
-        LLMSchemaHandler,
-        LLMSegment,
-        LLMSourceSpec,
-        LLMStepEstimateResult,
-        LLMStepEstimationKit,
-        LLMTokenizationHandler,
-        QwenChatSchemaHandler,
-        QwenChatTokenizationHandler,
-    )
-    from .loss.loss import LossGuard, LossKit
-    from .loss.token_loss import (
-        PerTokenLossGuard,
-        TokenLossStats,
-        TokenNormedLossKit,
-        apply_chunked_token_loss_patch,
-    )
-    from .mllm import (
-        Confidence,
-        MLLMBatchCollator,
-        MLLMDataKit,
-        MLLMDataSpec,
-        MLLMDistributionSpec,
-        MLLMLoaderSpec,
-        MLLMMediaHandler,
-        MLLMMediaSlot,
-        MLLMMediaTypeHandler,
-        MLLMModelKit,
-        MLLMPack,
-        MLLMPackingAssembler,
-        MLLMPackingSpec,
-        MLLMSample,
-        MLLMSampleSpec,
-        MLLMSchemaHandler,
-        MLLMSegment,
-        MLLMSourceSpec,
-        MLLMStepEstimationKit,
-        MLLMTextOnlyBatchGuard,
-        MLLMTokenizationHandler,
-        ModelInputs,
-        QwenImageHandler,
-        QwenVLChatSchemaHandler,
-        QwenVLMediaHandler,
-        QwenVLTokenizationHandler,
-        StepEstimateResult,
-    )
-    from .model import LigerKernelKit, LigerKernelReport, LigerPatch
-    from .optim import OptimKit
-    from .perf.mfu import MFUKit
-    from .util import StepCountingKit, StepCountResult
+from mvp_engine.kit._lazy import resolve_lazy_export
 
-_EXPORT_MODULES = {
-    "Confidence": ".mllm",
-    "LLMBatchCollator": ".llm",
-    "LLMDataKit": ".llm",
-    "LLMDataSpec": ".llm",
-    "LLMDistributionSpec": ".llm",
-    "LLMLoaderSpec": ".llm",
-    "LLMModelKit": ".llm",
-    "LLMPack": ".llm",
-    "LLMPackingAssembler": ".llm",
-    "LLMPackingSpec": ".llm",
-    "LLMPretrainTextSchemaHandler": ".llm",
-    "LLMPretrainTextTokenizationHandler": ".llm",
-    "LLMSample": ".llm",
-    "LLMSampleSpec": ".llm",
-    "LLMSchemaHandler": ".llm",
-    "LLMSegment": ".llm",
-    "LLMSourceSpec": ".llm",
-    "LLMStepEstimateResult": ".llm",
-    "LLMStepEstimationKit": ".llm",
-    "LLMTokenizationHandler": ".llm",
-    "LossGuard": ".loss.loss",
+if TYPE_CHECKING:
+    from .llm.data import LLMDataKit
+    from .llm.model import LLMModelKit
+    from .llm.utils import LLMStepEstimationKit
+    from .loss.loss import LossKit
+    from .loss.token_loss import TokenNormedLossKit
+    from .mllm.data import MLLMDataKit
+    from .mllm.model import MLLMModelKit
+    from .mllm.utils import MLLMStepEstimationKit
+    from .model import LigerKernelKit
+    from .optim import OptimKit
+    from .perf import MFUKit
+    from .util import StepCountingKit
+
+_KIT_MODULES = {
+    "LLMDataKit": ".llm.data",
+    "LLMModelKit": ".llm.model",
+    "LLMStepEstimationKit": ".llm.utils",
     "LossKit": ".loss.loss",
-    "MFUKit": ".perf.mfu",
-    "LigerKernelKit": ".model",
-    "LigerKernelReport": ".model",
-    "LigerPatch": ".model",
-    "MLLMBatchCollator": ".mllm",
-    "MLLMDataKit": ".mllm",
-    "MLLMDataSpec": ".mllm",
-    "MLLMDistributionSpec": ".mllm",
-    "MLLMLoaderSpec": ".mllm",
-    "MLLMMediaHandler": ".mllm",
-    "MLLMMediaSlot": ".mllm",
-    "MLLMMediaTypeHandler": ".mllm",
-    "MLLMModelKit": ".mllm",
-    "MLLMPack": ".mllm",
-    "MLLMPackingAssembler": ".mllm",
-    "MLLMPackingSpec": ".mllm",
-    "MLLMSample": ".mllm",
-    "MLLMSampleSpec": ".mllm",
-    "MLLMSchemaHandler": ".mllm",
-    "MLLMSegment": ".mllm",
-    "MLLMSourceSpec": ".mllm",
-    "MLLMStepEstimationKit": ".mllm",
-    "MLLMTextOnlyBatchGuard": ".mllm",
-    "MLLMTokenizationHandler": ".mllm",
-    "ModelInputs": ".mllm",
-    "OptimKit": ".optim",
-    "PerTokenLossGuard": ".loss.token_loss",
-    "QwenChatSchemaHandler": ".llm",
-    "QwenChatTokenizationHandler": ".llm",
-    "QwenImageHandler": ".mllm",
-    "QwenVLChatSchemaHandler": ".mllm",
-    "QwenVLMediaHandler": ".mllm",
-    "QwenVLTokenizationHandler": ".mllm",
-    "StepCountResult": ".util",
-    "StepCountingKit": ".util",
-    "StepEstimateResult": ".mllm",
-    "TokenLossStats": ".loss.token_loss",
     "TokenNormedLossKit": ".loss.token_loss",
-    "apply_chunked_token_loss_patch": ".loss.token_loss",
+    "MLLMDataKit": ".mllm.data",
+    "MLLMModelKit": ".mllm.model",
+    "MLLMStepEstimationKit": ".mllm.utils",
+    "LigerKernelKit": ".model",
+    "MFUKit": ".perf",
+    "OptimKit": ".optim",
+    "StepCountingKit": ".util",
 }
 
-__all__ = list(_EXPORT_MODULES)
+__all__ = list(_KIT_MODULES)
 
 
 def __getattr__(name: str):
-    """Lazily resolve training-kit exports from their implementation modules."""
-    if name not in _EXPORT_MODULES:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-    from importlib import import_module
-
-    module = import_module(_EXPORT_MODULES[name], __name__)
-    value = getattr(module, name)
-    globals()[name] = value
-    return value
+    return resolve_lazy_export(globals(), _KIT_MODULES, name)

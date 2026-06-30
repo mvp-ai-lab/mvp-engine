@@ -9,19 +9,19 @@ need source- or model-family-specific normalization.
 
 ```python
 (
-    list[MLLMSegment],
-    list[MLLMMediaSlot],
+    list[data_kit.Segment],
+    list[data_kit.MediaSlot],
     dict[str, Any],
 )
 ```
 
-`MLLMSegment` is the ordered stream unit:
+`data_kit.Segment` is the ordered stream unit:
 
 ```python
-MLLMSegment(type="text", loss=False, value="prompt text")
-MLLMSegment(type="text", loss=True, value="target text")
-MLLMSegment(type="image", loss=False, value="image:0")
-MLLMSegment(type="video", loss=False, value="video:0")
+data_kit.Segment(type="text", loss=False, value="prompt text")
+data_kit.Segment(type="text", loss=True, value="target text")
+data_kit.Segment(type="image", loss=False, value="image:0")
+data_kit.Segment(type="video", loss=False, value="video:0")
 ```
 
 Segment fields:
@@ -32,10 +32,10 @@ Segment fields:
 - `value`: text content for text segments; media id for media segments before
   media rendering.
 
-`MLLMMediaSlot` binds a media id to a raw source field:
+`data_kit.MediaSlot` binds a media id to a raw source field:
 
 ```python
-MLLMMediaSlot(
+data_kit.MediaSlot(
     media_id="image:0",
     media_type="image",
     field="images",
@@ -61,11 +61,11 @@ When implementing a schema handler:
 2. Validate cheap schema errors: role shape, text type, media field shape, media
    count, and required metadata.
 3. Normalize role aliases and message field aliases.
-4. Bind raw media values into ordered `MLLMMediaSlot` objects.
+4. Bind raw media values into ordered `data_kit.MediaSlot` objects.
 5. Split raw text on media placeholders and insert media segments with matching
    `media_id`.
 6. Apply model chat templates or source/target rendering.
-7. Emit final `MLLMSegment` objects with explicit `loss` flags.
+7. Emit final `data_kit.Segment` objects with explicit `loss` flags.
 8. Return small metadata only when another component uses it.
 
 Tokenization, media IO, tensor construction, and distributed state handling live
@@ -90,12 +90,12 @@ Example caption row:
 
 ```python
 segments = [
-    MLLMSegment(type="text", loss=False, value="Describe the image.\n"),
-    MLLMSegment(type="image", loss=False, value="image:0"),
-    MLLMSegment(type="text", loss=True, value="A red car parked beside a tree."),
+    data_kit.Segment(type="text", loss=False, value="Describe the image.\n"),
+    data_kit.Segment(type="image", loss=False, value="image:0"),
+    data_kit.Segment(type="text", loss=True, value="A red car parked beside a tree."),
 ]
 media_slots = [
-    MLLMMediaSlot("image:0", "image", field="images", index=0, metadata={"size": [720, 1280]}),
+    data_kit.MediaSlot("image:0", "image", field="images", index=0, metadata={"size": [720, 1280]}),
 ]
 ```
 
@@ -103,9 +103,9 @@ Example interleaved row:
 
 ```python
 segments = [
-    MLLMSegment(type="text", loss=True, value="A recipe begins with "),
-    MLLMSegment(type="image", loss=False, value="image:0"),
-    MLLMSegment(type="text", loss=True, value=" and then continues with the next step."),
+    data_kit.Segment(type="text", loss=True, value="A recipe begins with "),
+    data_kit.Segment(type="image", loss=False, value="image:0"),
+    data_kit.Segment(type="text", loss=True, value=" and then continues with the next step."),
 ]
 ```
 
@@ -124,7 +124,7 @@ token handling, media truncation rules, or label conversion.
 
 ## Qwen Reference
 
-`QwenChatSchemaHandler` supports conversation-style rows with:
+`data_kit.QwenVLChatSchemaHandler` supports conversation-style rows with:
 
 - `messages` or `conversations`;
 - role/content pairs using either `role`/`content` or `from`/`value`;
@@ -140,7 +140,7 @@ handles Qwen thinking-mode normalization, and emits image segments with
 ## Implementation Checklist
 
 - Placeholder count matches media slot count.
-- Every media segment value matches one `MLLMMediaSlot.media_id`.
+- Every media segment value matches one `data_kit.MediaSlot.media_id`.
 - Media slots use raw fields that remain available on `MLLMSample`.
 - Size or token-count metadata is present when media rendering needs it.
 - Loss flags match the training objective before tokenization.

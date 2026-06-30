@@ -2,7 +2,9 @@
 
 import torch
 
-from mvp_engine.kit.llm.data import build_packed_block_causal_mask
+from mvp_engine.kit import LLMDataKit
+
+_DATA_KIT = LLMDataKit()
 
 
 def prepare_packed_model_inputs(
@@ -28,7 +30,7 @@ def prepare_packed_model_inputs(
         batch["attention_mask"] = None
         batch.update(build_packed_fa2_varlen_kwargs(pack_segment_ids))
     else:
-        batch["attention_mask"] = build_packed_block_causal_mask(pack_segment_ids, dtype=mask_dtype)
+        batch["attention_mask"] = _DATA_KIT.build_packed_block_causal_mask(pack_segment_ids, dtype=mask_dtype)
     return batch
 
 

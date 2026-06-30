@@ -93,3 +93,6 @@ class LossGuard:
         if isinstance(loss, torch.Tensor):
             return float(loss.detach().item())
         return float(loss)
+
+
+LossKit.Guard = LossGuard
