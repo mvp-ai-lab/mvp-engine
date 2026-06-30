@@ -3,6 +3,13 @@
 Copy this file to ``recipes/<recipe>/tests/test_structure.py`` and update the
 constants below for that recipe. Keep recipe-specific skill assertions under
 ``recipes/<recipe>/tests/skills/<skill-id>/asserts.py``.
+
+Layer boundary:
+- Allowed: file presence, config parsing, engine registration, abstract-method
+  coverage, and minimal skill entrypoint/config surface checks.
+- Forbidden: semantic dataflow checks, executable forward-path proof, runtime
+  training, accelerator requirements, parity, memory, throughput, or quality
+  claims. Put those in contract, smoke, or impact/parity tests.
 """
 
 import importlib
@@ -44,7 +51,7 @@ def _iter_config_paths(recipe_root: Path):
 def test_file_structure():
     """Validate the baseline recipe file layout.
 
-    Skill assertion modules may add file checks by defining
+    Skill assertion modules may add structure-only file checks by defining
     ``test_file_structure(recipe_root)``.
     """
     recipe_root = _recipe_root()
@@ -60,7 +67,7 @@ def test_file_structure():
 def test_config_structure():
     """Validate recipe YAML configs against the recipe schema and engine registry.
 
-    Skill assertion modules may add config checks by defining
+    Skill assertion modules may add structure-only config checks by defining
     ``test_config_structure(config)``.
     """
     from mvp_engine.engine import ENGINE_REGISTRY
@@ -89,7 +96,7 @@ def test_config_structure():
 def test_engine_structure():
     """Validate that configured engine classes satisfy the engine interface.
 
-    Skill assertion modules may add engine checks by defining
+    Skill assertion modules may add structure-only engine checks by defining
     ``test_engine_structure(engine_class)``.
     """
     from mvp_engine.engine import ENGINE_REGISTRY, Engine

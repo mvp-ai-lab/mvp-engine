@@ -1,0 +1,68 @@
+"""Contract tests for a recipe.
+
+Copy this file to ``recipes/<recipe>/tests/test_contract.py`` when a skill needs
+fast semantic validation beyond structure. Keep recipe-specific skill assertions
+under ``recipes/<recipe>/tests/skills/<skill-id>/asserts.py``.
+
+Layer boundary:
+- Allowed: skill-specific AST/source/config/dataflow checks, executable binding
+  evidence, recipe-local knobs, and hook/entrypoint availability.
+- Forbidden: ``engine.train()``, accelerator/resource requirements, numerical
+  parity, memory, throughput, or quality claims. Put those in smoke or
+  impact/parity tests.
+"""
+
+import inspect
+from pathlib import Path
+
+import pytest
+
+from mvp_engine.testing.utils import load_recipe_skill_asserts
+
+# Optional: list contract assertion function names that must be provided by at
+# least one recipe-local skill assertion module.
+REQUIRED_CONTRACT_ASSERTIONS: tuple[str, ...] = ()
+
+
+def _recipe_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def _call_assertion(assertion, **payload) -> None:
+    signature = inspect.signature(assertion)
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()):
+        assertion(**payload)
+        return
+    assertion(**{name: payload[name] for name in signature.parameters if name in payload})
+
+
+def test_skill_contracts():
+    """Run recipe-local semantic contract assertions.
+
+    Skill assertion modules may define ``test_contract(recipe_root)`` or any
+    function listed in ``REQUIRED_CONTRACT_ASSERTIONS``. These assertions should
+    prove the implementation contract cheaply, for example that helper outputs
+    feed the downstream path or that patched callables are actually bound.
+    """
+    recipe_root = _recipe_root()
+    skill_asserts = load_recipe_skill_asserts(recipe_root)
+    missing_required = set(REQUIRED_CONTRACT_ASSERTIONS)
+    ran_assertion = False
+
+    for asserts_module in skill_asserts:
+        contract_assertion = getattr(asserts_module, "test_contract", None)
+        if callable(contract_assertion):
+            _call_assertion(contract_assertion, recipe_root=recipe_root)
+            ran_assertion = True
+
+        for assertion_name in tuple(missing_required):
+            assertion = getattr(asserts_module, assertion_name, None)
+            if not callable(assertion):
+                continue
+            _call_assertion(assertion, recipe_root=recipe_root)
+            missing_required.remove(assertion_name)
+            ran_assertion = True
+
+    assert not missing_required, f"Missing required contract assertions: {sorted(missing_required)}."
+    if not ran_assertion:
+        pytest.skip("No recipe-local skill contract assertions registered.")

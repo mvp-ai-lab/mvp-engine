@@ -35,6 +35,13 @@ tests/templates/test_structure.py.template -> recipes/<recipe>/tests/test_struct
 tests/templates/test_smoke.py.template -> recipes/<recipe>/tests/test_smoke.py
 ```
 
+Add these only when the recipe or a skill needs the corresponding layer:
+
+```text
+tests/templates/test_contract.py.template -> recipes/<recipe>/tests/test_contract.py
+tests/templates/test_parity.py.template -> recipes/<recipe>/tests/test_parity.py
+```
+
 ## Config Schema
 
 Start from `BaseEngineConfig`:
@@ -98,6 +105,17 @@ In `test_smoke.py`, set:
 
 Smoke is expected to fail until real training behavior exists. Structure should
 pass for a valid scaffold.
+
+In `test_contract.py`, keep checks fast and semantic: AST/source/config/dataflow
+invariants, executable binding evidence, and recipe-local skill contracts. Do
+not call `engine.train()` or require accelerator resources.
+
+In `test_parity.py`, validate metrics from real runs. Blocked/not-run artifacts
+are unresolved states, not correctness passes.
+
+Generate parity artifacts with recipe-local test runners that use existing
+hooks, method wrappers, or generic observation surfaces. Do not modify
+production recipe engine/model code only to collect parity metrics.
 
 ## Validation
 

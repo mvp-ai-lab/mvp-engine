@@ -186,4 +186,7 @@ slurmlogs
 # AI
 CUSTOM.md
 /references
-.codex
+.codex/*
+!.codex/
+!.codex/agents/
+!.codex/agents/*.toml

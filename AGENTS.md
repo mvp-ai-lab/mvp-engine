@@ -94,13 +94,18 @@ For codex/chatgpt/gemini/claude etc:
 - Name test files `test_<feature>.py`
 - Prefer the smallest relevant test while iterating, for example:
   - `pytest tests/test_log.py -q`
-- There are two recipe-level
-  cumulative tests: `tests/test_structure.py` and `tests/test_smoke.py`. They should be created when the recipe is created and
-  extended only when the baseline recipe test surface must change. If they are missing, you should use the test template files under `tests/templates` to create them.
-- Recipe-local skill tests may also include optional impact validation under
-  `tests/skills/<skill-id>/test_<impact>.py` when structure and smoke cannot
-  verify the skill's expected effect. Name these tests after the measured
-  invariant, such as `test_memory_impact.py` or `test_checkpoint_compatibility.py`.
+- Recipe-level tests are layered:
+  - `tests/test_structure.py`: layout/config/import/registry checks only.
+  - `tests/test_contract.py`: optional fast semantic skill contracts, such as AST/source/dataflow invariants.
+  - `tests/test_smoke.py`: real one-step runtime path checks.
+  - `tests/test_parity.py` or `tests/skills/<skill-id>/test_<impact>.py`: optional real metric/impact validation.
+- Create `tests/test_structure.py` and `tests/test_smoke.py` with new recipes when tests are requested. Add contract or parity/impact tests only when the task or skill needs those layers.
+- If tests are missing, use the current files under `tests/templates`.
+- Keep layer boundaries strict: structure must not prove runtime behavior, contract must not run training, smoke must not claim parity or performance impact, and blocked parity artifacts are not correctness passes.
+- Parity/impact metric collection should be non-invasive by default:
+  use recipe-local runners, smoke hooks, method wrappers, or generic observation
+  surfaces before changing production recipe engine/model code. Do not add
+  skill-specific metrics logic to production code solely for tests.
 
 ## Git Rules
 
