@@ -187,3 +187,5 @@ slurmlogs
 CUSTOM.md
 /references
 .codex
+.claude/
+.mvp-agent/

@@ -124,7 +124,7 @@ class MLLMDataKit:
             source.dataset_path,
             context=context,
             resample=source.resample,
-            shuffle_mode="fragment_aware",
+            shuffle_mode="chunk",
         )
         dataset = dataset.assemble(MLLMRawRowGuard)
         dataset = dataset.map(partial(MLLMSample.from_row, sample_spec=spec.sample))

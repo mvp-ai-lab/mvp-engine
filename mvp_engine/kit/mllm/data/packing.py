@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
+import json
 import random
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -9,10 +12,31 @@ from typing import Any
 
 import torch
 from mvp_dataset.core import Assembler
-from mvp_dataset.core.resume import stable_fingerprint
 
 from .sample import MLLMPack, MLLMSample
 from .spec import MLLMPackingSpec
+
+try:
+    from mvp_dataset.core.resume import stable_fingerprint
+except ImportError:
+
+    def stable_fingerprint(value: object) -> str:
+        """Return a stable JSON fingerprint when the installed mvp_dataset lacks one."""
+        encoded = json.dumps(_normalize_fingerprint_value(value), sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+
+def _normalize_fingerprint_value(value: object) -> object:
+    """Normalize common Python values into a deterministic JSON payload."""
+    if dataclasses.is_dataclass(value):
+        return _normalize_fingerprint_value(dataclasses.asdict(value))
+    if isinstance(value, dict):
+        return {str(key): _normalize_fingerprint_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_normalize_fingerprint_value(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return repr(value)
 
 
 @dataclass(slots=True)
